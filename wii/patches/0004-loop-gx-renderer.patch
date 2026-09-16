@@ -1,0 +1,38 @@
+diff --git a/src/loop.c b/src/loop.c
+index 7a365c5..e56258f 100644
+--- a/src/loop.c
++++ b/src/loop.c
+@@ -49,6 +49,9 @@
+ #ifdef ENABLE_NOOP_RENDERER
+ #include "noop_renderer.h"
+ #endif
++#ifdef PLATFORM_WII
++#include "gx_renderer.h"
++#endif
+ #include "overlay_file_system.h"
+ #if defined(USE_OPENAL)
+ #include "al_audio_system.h"
+@@ -829,11 +832,13 @@ int loop(CommandLineArgs args, const char *argv0) {
+         }
+ #endif
+ #ifndef ENABLE_NOOP_RENDERER
++#ifndef PLATFORM_WII
+         if (gfx == NOOP) {
+             logError("The noop renderer is not available in this build!\n");
+             return 0;
+         }
+ #endif
++#endif
+ 
+ #ifdef ENABLE_SCREENSHOTS
+         if (gfx != MODERN_GL && hmlen(args.screenshotSurfacesFrames)) {
+@@ -886,6 +891,9 @@ int loop(CommandLineArgs args, const char *argv0) {
+         // NOTE: headless mode keeps rendering active (hidden window + normal renderer).
+         // NOOP is a separate renderer that stubs all draw calls.
+         Renderer* renderer = nullptr;
++#ifdef PLATFORM_WII
++        renderer = GxRenderer_create();
++#endif
+ #ifdef ENABLE_SW_RENDERER
+         if (gfx == SOFTWARE)
+             renderer = SWRenderer_create();

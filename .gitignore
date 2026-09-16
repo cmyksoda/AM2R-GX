@@ -1,0 +1,15 @@
+project-notes/
+working/
+*.md
+meta.xml
+icon.png
+build/
+hello/build/
+dist/
+*.dol
+*.elf
+*.map
+__pycache__/
+*.o
+*.d
+.DS_Store

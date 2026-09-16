@@ -1,0 +1,22 @@
+--- a/src/loop.c
++++ b/src/loop.c
+@@ -1298,6 +1298,9 @@
+                 platformGetScaledWindowSize(&winW, &winH);
+ 
+                 Runner_beginFrame(runner, gameW, gameH, winW, winH, fbWidth, fbHeight);
++                /* s_map Create used to run after CopyDisp; GX CopyTex then captured an empty EFB. */
++                if (shouldStep)
++                    Runner_handlePendingRoomChange(runner);
+ 
+                 double mx, my;
+                 platformGetMousePos(&mx, &my);
+@@ -1371,9 +1374,6 @@
+             // pause overlay can be presented once, and all later paused frames stay frozen without re-swapping.
+             if (runner->pendingRoom == -1 && shouldRender)
+                 platformSwapBuffers();
+-            if (shouldStep) {
+-                Runner_handlePendingRoomChange(runner);
+-            }
+ 
+             if (RunnerKeyboard_checkPressed(runner->keyboard, VK_BACKSPACE)) {
+                 size_t bytes_used = get_used_memory();

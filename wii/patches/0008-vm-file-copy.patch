@@ -1,0 +1,35 @@
+diff --git a/src/vm_builtins.c b/src/vm_builtins.c
+index 6d2de37..c688763 100644
+--- a/src/vm_builtins.c
++++ b/src/vm_builtins.c
+@@ -7984,6 +7984,22 @@ static RValue builtin_file_text_eof(VMContext* ctx, RValue* args, int32_t argCou
+     return RValue_makeBool(file->readPos >= file->contentLen);
+ }
+ 
++// AM2R's save writes a temp file then file_copy()s it to the real slot; without
++// this builtin the copy silently no-ops and no save is ever written.
++static RValue builtin_file_copy(VMContext* ctx, RValue* args, int32_t argCount) {
++    REQUIRE_ARGC_AT_LEAST("file_copy", 2, RValue_makeUndefined());
++    const char* src = (args[0].type == RVALUE_STRING ? args[0].string : "");
++    const char* dst = (args[1].type == RVALUE_STRING ? args[1].string : "");
++    FileSystem* fs = ctx->runner->fileSystem;
++    uint8_t* data = nullptr;
++    int32_t size = 0;
++    if (fs->vtable->readFileBinary(fs, src, &data, &size)) {
++        fs->vtable->writeFileBinary(fs, dst, data, size);
++        free(data);
++    }
++    return RValue_makeUndefined();
++}
++
+ static RValue builtin_file_delete(VMContext* ctx, RValue* args, int32_t argCount) {
+     REQUIRE_ARGC_AT_LEAST("file_delete", 1, RValue_makeUndefined());
+     const char* path = (args[0].type == RVALUE_STRING ? args[0].string : "");
+@@ -21514,6 +21530,7 @@ void VMBuiltins_registerAll(VMContext* ctx) {
+     VM_registerBuiltin(ctx, "file_text_write_real", builtin_file_text_write_real);
+     VM_registerBuiltin(ctx, "file_text_eof", builtin_file_text_eof);
+     VM_registerBuiltin(ctx, "file_delete", builtin_file_delete);
++    VM_registerBuiltin(ctx, "file_copy", builtin_file_copy);
+     VM_registerBuiltin(ctx, "file_find_first", builtin_file_find_first);
+     VM_registerBuiltin(ctx, "file_find_next", builtin_file_find_next);
+     VM_registerBuiltin(ctx, "file_find_close", builtin_file_find_close);

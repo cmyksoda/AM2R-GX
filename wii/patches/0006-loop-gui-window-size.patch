@@ -1,0 +1,15 @@
+diff --git a/src/loop.c b/src/loop.c
+index 7a365c5..b1c9e0a 100644
+--- a/src/loop.c
++++ b/src/loop.c
+@@ -1307,7 +1307,9 @@ int loop(CommandLineArgs args, const char *argv0) {
+                 renderer->vtable->endFrameInit(renderer);
+                 Runner_drawPost(runner, fbWidth, fbHeight);
+                 renderer->vtable->endFrameEnd(renderer);
+-                Runner_drawGUI(runner, fbWidth, fbHeight, gameW, gameH);
++                /* GMS 1.4 Draw GUI is window/display pixels unless display_set_gui_size.
++                 * gameW (320) here made AM2R's scale-2 HUD blit clip the right half (minimap). */
++                Runner_drawGUI(runner, fbWidth, fbHeight, fbWidth, fbHeight);
+             }
+ 
+             if (runner->paused && enteringPause && !runner->debugMode) {

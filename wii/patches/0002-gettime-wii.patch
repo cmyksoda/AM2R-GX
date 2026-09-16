@@ -1,0 +1,22 @@
+diff --git a/src/gettime.c b/src/gettime.c
+index 15365b0..9bb0f55 100644
+--- a/src/gettime.c
++++ b/src/gettime.c
+@@ -4,6 +4,8 @@
+ #include <timer.h>
+ #elif defined(PLATFORM_PS3)
+ #include <sys/systime.h>
++#elif defined(PLATFORM_WII)
++#include <ogc/lwp_watchdog.h>
+ #elif defined(_WIN32)
+ #include <windows.h>
+ #elif defined(__APPLE__)
+@@ -26,6 +28,8 @@ uint64_t nowNanos(void) {
+     return sec * 1000000000 + (rem * 1000000000) / clk;
+ #elif defined(PLATFORM_PS3)
+     return ((double)__builtin_ppc_get_timebase()/(double)sysGetTimebaseFrequency());
++#elif defined(PLATFORM_WII)
++    return ticks_to_nanosecs(gettime());
+ #elif defined(_WIN32)
+     static uint64_t freq = 0;
+     if (freq == 0) {
