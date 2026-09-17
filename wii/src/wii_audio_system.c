@@ -24,6 +24,7 @@ typedef struct {
     int32_t instanceId;
     int32_t soundIndex;
     uint32_t baseFreq;      // source sample rate, for pitch scaling
+    float gain;             // per-instance gain from GML (audio_sound_gain)
     uint64_t freeAt;        // gettime() tick at which a one-shot's buffer may be freed; 0 while looping
 } WiiVoice;
 
@@ -105,6 +106,16 @@ static WiiVoice* findVoice(WiiAudioSystem* a, int32_t idOrSound) {
         if (v->playing && (v->instanceId == idOrSound || v->soundIndex == idOrSound)) return v;
     }
     return nullptr;
+}
+
+// libaesnd mixes (sample * volume) >> 8, so 256 == unity.
+static void applyVolume(WiiAudioSystem* a, WiiVoice* v) {
+    if (v->pb == nullptr) return;
+    float g = a->masterGain * v->gain;
+    if (g < 0.0f) g = 0.0f;
+    int vol = (int) (g * 256.0f + 0.5f);
+    if (vol > 65535) vol = 65535;
+    AESND_SetVoiceVolume(v->pb, (u16) vol, (u16) vol);
 }
 
 static void wiiInit(AudioSystem* audio, DataWin* dataWin, MAYBE_UNUSED FileSystem* fs) {
@@ -212,6 +223,7 @@ static int32_t wiiPlaySound(AudioSystem* audio, int32_t soundIndex, MAYBE_UNUSED
     v->soundIndex = soundIndex;
     v->instanceId = a->nextInstanceId++;
     v->baseFreq = rate;
+    v->gain = 1.0f;
     if (loop) {
         v->freeAt = 0;
     } else {
@@ -222,6 +234,7 @@ static int32_t wiiPlaySound(AudioSystem* audio, int32_t soundIndex, MAYBE_UNUSED
 
     u32 fmt = (chans == 2) ? VOICE_STEREO16 : VOICE_MONO16;
     AESND_PlayVoice(v->pb, fmt, buf, len, (f32) rate, 0, loop);
+    applyVolume(a, v);
     AESND_SetVoiceStop(v->pb, false);   // ensure a reused/previously-stopped voice actually runs
     if (dbg) logInfo("  PLAY ch=%u rate=%u len=%u voice=%d\n", chans, rate, len, (int) (v - a->voices));
     return v->instanceId;
@@ -259,9 +272,21 @@ static void wiiResumeAll(MAYBE_UNUSED AudioSystem* audio) { AESND_Pause(false); 
 static void wiiSuspend(MAYBE_UNUSED AudioSystem* audio) { AESND_Pause(true); }
 static void wiiResume(MAYBE_UNUSED AudioSystem* audio) { AESND_Pause(false); }
 
-// Volume/fades deferred (AESND volume scale unverified on hardware); sounds play at AESND's default unity.
-static void wiiSetSoundGain(MAYBE_UNUSED AudioSystem* audio, MAYBE_UNUSED int32_t idOrSound, MAYBE_UNUSED float gain, MAYBE_UNUSED uint32_t timeMs) {}
-static float wiiGetSoundGain(MAYBE_UNUSED AudioSystem* audio, MAYBE_UNUSED int32_t idOrSound) { return 1.0f; }
+// Fades (timeMs) are applied instantly for now; the gain value itself is honored.
+static void wiiSetSoundGain(AudioSystem* audio, int32_t idOrSound, float gain, MAYBE_UNUSED uint32_t timeMs) {
+    WiiAudioSystem* a = (WiiAudioSystem*) audio;
+    for (int i = 0; i < WII_VOICES; i++) {
+        WiiVoice* v = &a->voices[i];
+        if (v->playing && (v->instanceId == idOrSound || v->soundIndex == idOrSound)) {
+            v->gain = gain;
+            applyVolume(a, v);
+        }
+    }
+}
+static float wiiGetSoundGain(AudioSystem* audio, int32_t idOrSound) {
+    WiiVoice* v = findVoice((WiiAudioSystem*) audio, idOrSound);
+    return v ? v->gain : 1.0f;
+}
 
 static void wiiSetSoundPitch(AudioSystem* audio, int32_t idOrSound, float pitch) {
     WiiAudioSystem* a = (WiiAudioSystem*) audio;
@@ -275,7 +300,12 @@ static float wiiGetTrackPosition(MAYBE_UNUSED AudioSystem* audio, MAYBE_UNUSED i
 static void wiiSetTrackPosition(MAYBE_UNUSED AudioSystem* audio, MAYBE_UNUSED int32_t idOrSound, MAYBE_UNUSED float pos) {}
 static float wiiGetSoundLength(MAYBE_UNUSED AudioSystem* audio, MAYBE_UNUSED int32_t idOrSound) { return 0.0f; }
 
-static void wiiSetMasterGain(AudioSystem* audio, float gain) { ((WiiAudioSystem*) audio)->masterGain = gain; }
+static void wiiSetMasterGain(AudioSystem* audio, float gain) {
+    WiiAudioSystem* a = (WiiAudioSystem*) audio;
+    a->masterGain = gain;
+    for (int i = 0; i < WII_VOICES; i++)
+        if (a->voices[i].playing) applyVolume(a, &a->voices[i]);
+}
 static void wiiSetMasterGainForListener(MAYBE_UNUSED AudioSystem* audio, MAYBE_UNUSED float gain, MAYBE_UNUSED int32_t listenerId) {}
 static void wiiSetChannelCount(MAYBE_UNUSED AudioSystem* audio, MAYBE_UNUSED int32_t count) {}
 static void wiiGroupLoad(MAYBE_UNUSED AudioSystem* audio, MAYBE_UNUSED int32_t groupIndex) {}
