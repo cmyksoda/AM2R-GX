@@ -44,8 +44,8 @@ wii: $(BUTTER)/CMakeLists.txt
 	cd $(BUTTER) && git apply ../../wii/patches/0004-loop-gx-renderer.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0005-skip-bgscreenguide.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0006-loop-gui-window-size.patch
-	cd $(BUTTER) && git apply ../../wii/patches/0007-loop-room-change-after-beginframe.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0008-vm-file-copy.patch
+	cd $(BUTTER) && git apply ../../wii/patches/0009-loop-wii-audio.patch
 	cmake -B $(WII_BUILD) -S $(BUTTER) \
 		-DCMAKE_TOOLCHAIN_FILE="$(CURDIR)/wii/cmake/wii.cmake" \
 		-DPLATFORM=wii \

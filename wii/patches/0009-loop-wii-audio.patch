@@ -1,0 +1,30 @@
+--- a/src/loop.c
++++ b/src/loop.c
+@@ -58,6 +58,9 @@
+ #elif defined(USE_MINIAUDIO)
+ #include "ma_audio_system.h"
+ #endif
++#ifdef PLATFORM_WII
++#include "wii_audio_system.h"
++#endif
+ #include "noop_audio_system.h"
+ #include "stb_ds.h"
+ #include "stb_image_write.h"
+@@ -580,7 +583,7 @@
+             options.parseTxtr = false;
+         } while(0);
+ #endif
+-#if defined(USE_MINIAUDIO) || defined(USE_OPENAL)
++#if defined(USE_MINIAUDIO) || defined(USE_OPENAL) || defined(PLATFORM_WII)
+         if (!args.headless)
+             options.parseAudo = true;
+ #endif
+@@ -933,6 +936,8 @@
+             audioSystem = (AudioSystem*) AlAudioSystem_create();
+ #elif defined(USE_MINIAUDIO)
+             audioSystem = (AudioSystem*) MaAudioSystem_create(dataWin);
++#elif defined(PLATFORM_WII)
++            audioSystem = (AudioSystem*) WiiAudioSystem_create(dataWin);
+ #else
+             audioSystem = (AudioSystem*) NoopAudioSystem_create();
+ #endif
