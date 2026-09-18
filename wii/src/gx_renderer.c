@@ -903,8 +903,10 @@ static void gx_bind_tile(GxRenderer *gx, GxSurf *s, int col, int row, bool resto
 
 static void gx_bind_host(GxRenderer *gx)
 {
-	int w = gx->windowW > 0 ? gx->windowW : (int)WiiVideo_fbWidth();
-	int h = gx->windowH > 0 ? gx->windowH : (int)WiiVideo_efbHeight();
+	/* Physical output is always the full framebuffer; the game's logical window
+	 * size must not shrink the present into a corner (widescreen/death/settings). */
+	int w = (int)WiiVideo_fbWidth();
+	int h = (int)WiiVideo_efbHeight();
 
 	/* Don't recopy the app surface from an EFB that set_target/clear already stomped. */
 	if (gx->currentTarget != gx->appSurfId)
@@ -1289,12 +1291,18 @@ static void gxSetGuiProjection(Renderer *renderer, int32_t guiW, int32_t guiH, M
 
 static void gxEndGUI(MAYBE_UNUSED Renderer *renderer) {}
 
+static void gxClearScreen(Renderer *renderer, uint32_t color, float alpha);
+
 static void gxEndFrameInit(Renderer *renderer)
 {
 	GxRenderer *gx = (GxRenderer *)renderer;
 
-	if (renderer->runner->usingAppSurface && !renderer->runner->appSurfaceAutoDraw)
+	if (renderer->runner->usingAppSurface && !renderer->runner->appSurfaceAutoDraw) {
 		gx_bind_host(gx);
+		/* Wipe the stale EFB (the app surface renders into its top-left corner) before the
+		 * manual present, or that corner leaks through as a ¼-size ghost on menu screens. */
+		gxClearScreen(renderer, 0x000000, 1.0f);
+	}
 }
 
 static void gxEndFrameEnd(Renderer *renderer)
@@ -1315,17 +1323,18 @@ static void gxEndFrameEnd(Renderer *renderer)
 			gx_prep_surf_obj(s);
 			gx_bind_tex(gx, &s->obj);
 			GX_SetBlendMode(GX_BM_NONE, GX_BL_ONE, GX_BL_ZERO, GX_LO_CLEAR);
-			dw = (float)gx->windowW;
-			dh = (float)gx->windowH;
-			if ((gx->gameW * gx->windowH) / gx->gameH < gx->windowW) {
-				dw = (float)((gx->gameW * gx->windowH) / gx->gameH);
-				dh = (float)gx->windowH;
+			int fbw = (int)WiiVideo_fbWidth();
+			int fbh = (int)WiiVideo_efbHeight();
+			/* Aspect-fit the app surface into the physical screen, not the logical window. */
+			if ((gx->gameW * fbh) / gx->gameH < fbw) {
+				dw = (float)((gx->gameW * fbh) / gx->gameH);
+				dh = (float)fbh;
 			} else {
-				dw = (float)gx->windowW;
-				dh = (float)((gx->gameH * gx->windowW) / gx->gameW);
+				dw = (float)fbw;
+				dh = (float)((gx->gameH * fbw) / gx->gameW);
 			}
-			ox = ((float)gx->windowW - dw) * 0.5f;
-			oy = ((float)gx->windowH - dh) * 0.5f;
+			ox = ((float)fbw - dw) * 0.5f;
+			oy = ((float)fbh - dh) * 0.5f;
 			u1 = (float)s->w / (float)s->texW;
 			v1 = (float)s->h / (float)s->texH;
 			emit_quad(ox, oy, ox + dw, oy, ox + dw, oy + dh, ox, oy + dh,
