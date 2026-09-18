@@ -1,6 +1,7 @@
 #include "input.h"
 
 #include "input_recording.h"
+#include "overscan.h"
 #include "platformdefs.h"
 #include "runner.h"
 #include "runner_gamepad.h"
@@ -177,6 +178,49 @@ static void poll_gcpad(GamepadSlot *slot, u16 held)
 	set_btn(slot, 9, held & PAD_BUTTON_START);
 }
 
+/* L + D-pad Down + Y opens the overscan overlay; any face button (A/B/X/Y) closes it.
+ * While it's up the d-pad drives the H/V sliders and the game gets neutral input. */
+static void overscan_input(u32 wheld, u16 gcheld)
+{
+	static bool prev_combo;
+	static bool prev_face;
+	static bool guard;
+	static unsigned rate;
+	bool lheld = (wheld & (WPAD_CLASSIC_BUTTON_FULL_L | WPAD_CLASSIC_BUTTON_ZL)) ||
+		     (gcheld & PAD_TRIGGER_L) || PAD_TriggerL(0) > 64;
+	bool down = (wheld & WPAD_CLASSIC_BUTTON_DOWN) || (gcheld & PAD_BUTTON_DOWN);
+	bool combo = lheld && down &&
+		     ((wheld & WPAD_CLASSIC_BUTTON_Y) || (gcheld & PAD_BUTTON_Y));
+	bool face = (wheld & (WPAD_CLASSIC_BUTTON_A | WPAD_CLASSIC_BUTTON_B |
+			      WPAD_CLASSIC_BUTTON_X | WPAD_CLASSIC_BUTTON_Y)) ||
+		    (gcheld & (PAD_BUTTON_A | PAD_BUTTON_B | PAD_BUTTON_X | PAD_BUTTON_Y));
+
+	if (!Overscan_active()) {
+		if (combo && !prev_combo) {
+			Overscan_toggle();
+			guard = true; /* ignore the opening buttons until they're released */
+		}
+	} else if (guard) {
+		if (!face && !down)
+			guard = false;
+	} else if (face && !prev_face) {
+		Overscan_toggle();
+	}
+	prev_combo = combo;
+	prev_face = face;
+
+	if (!Overscan_active() || guard || (++rate & 1))
+		return;
+	if ((wheld & WPAD_CLASSIC_BUTTON_LEFT) || (gcheld & PAD_BUTTON_LEFT))
+		Overscan_adjustH(-1);
+	if ((wheld & WPAD_CLASSIC_BUTTON_RIGHT) || (gcheld & PAD_BUTTON_RIGHT))
+		Overscan_adjustH(1);
+	if ((wheld & WPAD_CLASSIC_BUTTON_UP) || (gcheld & PAD_BUTTON_UP))
+		Overscan_adjustV(-1);
+	if (down)
+		Overscan_adjustV(1);
+}
+
 void WiiInput_init(void)
 {
 	WPAD_Init();
@@ -218,7 +262,10 @@ void WiiInput_poll(Runner *runner)
 	slot->description[sizeof(slot->description) - 1] = '\0';
 	slot->guid[0] = '\0';
 
-	if (exp.type == WPAD_EXP_CLASSIC)
+	overscan_input(wheld, gcheld);
+	if (Overscan_active())
+		; /* overlay owns input; leave the slot neutral */
+	else if (exp.type == WPAD_EXP_CLASSIC)
 		poll_classic(slot, wheld, &exp);
 	else if (gcheld || PAD_StickX(0) || PAD_StickY(0))
 		poll_gcpad(slot, gcheld);

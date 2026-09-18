@@ -1,6 +1,7 @@
 #include "input.h"
 #include "log.h"
 #include "loop.h"
+#include "overscan.h"
 #include "wii_log.h"
 #include "wii_video.h"
 
@@ -63,6 +64,8 @@ int main(int argc, char **argv)
 
 	if (!WiiLog_open(LOG_PATH))
 		logWarn("could not open %s — console only\n", LOG_PATH);
+
+	Overscan_load();
 
 	logInfo("AM2R GX (live input)\n");
 	logInfo("mode %ux%u xfb=%u aspect=%s\n", WiiVideo_fbWidth(), WiiVideo_efbHeight(),

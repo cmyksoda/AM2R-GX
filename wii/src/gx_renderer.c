@@ -1,4 +1,5 @@
 #include "gx_renderer.h"
+#include "overscan.h"
 #include "warp.h"
 #include "wii_video.h"
 
@@ -919,12 +920,16 @@ static void gx_bind_host(GxRenderer *gx)
 	gx->tileCol = -1;
 	gx->tileRow = -1;
 	gx_cur = gx;
+	/* Overscan: squeeze everything into the safe area; the border stays black
+	 * (EFB clears full each present, and the scissor clips to the viewport). */
+	int oh = Overscan_h();
+	int ov = Overscan_v();
 	if (WII_WIDE_PILLARBOX && WiiVideo_isWide()) {
 		int pw = (w * 3) / 4;
 
-		gx_viewport((w - pw) / 2, 0, pw, h);
+		gx_viewport((w - pw) / 2 + oh, ov, pw - 2 * oh, h - 2 * ov);
 	} else {
-		gx_viewport(0, 0, w, h);
+		gx_viewport(oh, ov, w - 2 * oh, h - 2 * ov);
 	}
 	gx->base.CPortX = 0;
 	gx->base.CPortY = 0;
@@ -1190,8 +1195,10 @@ static void gxBeginFrame(Renderer *renderer, int32_t gameW, int32_t gameH, int32
 	gx_apply_alpha_test(gx);
 	GX_SetColorUpdate(GX_TRUE);
 	GX_SetAlphaUpdate(GX_TRUE);
-	if (renderer->runner)
+	if (renderer->runner) {
 		Wii_tryWarp(renderer->runner);
+		Wii_forceGamepadProfile(renderer->runner);
+	}
 	appId = renderer->runner->applicationSurfaceId;
 	if (appId >= 0)
 		gx_bind_surface(gx, appId, false);
@@ -1298,11 +1305,73 @@ static void gxEndFrameInit(Renderer *renderer)
 	GxRenderer *gx = (GxRenderer *)renderer;
 
 	if (renderer->runner->usingAppSurface && !renderer->runner->appSurfaceAutoDraw) {
+		/* Wipe the whole EFB (the app surface renders into its top-left corner) before the
+		 * manual present. Use the FULL framebuffer, not the overscan-inset viewport, or that
+		 * scratch corner peeks out in the black border once overscan shrinks the picture. */
 		gx_bind_host(gx);
-		/* Wipe the stale EFB (the app surface renders into its top-left corner) before the
-		 * manual present, or that corner leaks through as a ¼-size ghost on menu screens. */
+		gx_viewport(0, 0, (int)WiiVideo_fbWidth(), (int)WiiVideo_efbHeight());
 		gxClearScreen(renderer, 0x000000, 1.0f);
+		gx_bind_host(gx);
 	}
+}
+
+static void gx_ov_rect(float x, float y, float w, float h, u8 r, u8 g, u8 b, u8 a)
+{
+	emit_quad(x, y, x + w, y, x + w, y + h, x, y + h,
+		  0, 0, 1, 0, 1, 1, 0, 1,
+		  r, g, b, a, r, g, b, a, r, g, b, a, r, g, b, a);
+}
+
+/* Full-screen calibration overlay (L + Down + Y): grid + a bright safe-area border to
+ * line up against the CRT edge, plus H/V magnitude sliders. Drawn in the inset viewport. */
+static void gx_draw_overscan_overlay(GxRenderer *gx)
+{
+	const float LW = (float)WiiVideo_fbWidth();
+	const float LH = (float)WiiVideo_efbHeight();
+	float cx = LW * 0.5f, cy = LH * 0.5f;
+	float tlen = 220.0f, tthk = 14.0f;
+	/* Fill shows how big the picture stays: full slider = no inset, empty = max inset. */
+	float hf = 1.0f - (float)Overscan_h() / (float)OVERSCAN_MAX_H;
+	float vf = 1.0f - (float)Overscan_v() / (float)OVERSCAN_MAX_V;
+	float cl = 44.0f, ct = 7.0f;
+	int i;
+
+	gx_bind_host(gx);
+	gx_ortho(0, LH, 0, LW);
+	gx_unbind_tex(gx);
+	GX_SetColorUpdate(GX_TRUE);
+	GX_SetAlphaUpdate(GX_TRUE);
+	GX_SetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA, GX_LO_CLEAR);
+
+	gx_ov_rect(0, 0, LW, LH, 0, 0, 0, 160);
+	for (i = 0; i <= (int)LW; i += 32)
+		gx_ov_rect((float)i, 0, 1, LH, 90, 200, 220, 110);
+	for (i = 0; i <= (int)LH; i += 32)
+		gx_ov_rect(0, (float)i, LW, 1, 90, 200, 220, 110);
+
+	gx_ov_rect(0, 0, LW, 3, 70, 255, 130, 255);
+	gx_ov_rect(0, LH - 3, LW, 3, 70, 255, 130, 255);
+	gx_ov_rect(0, 0, 3, LH, 70, 255, 130, 255);
+	gx_ov_rect(LW - 3, 0, 3, LH, 70, 255, 130, 255);
+
+	gx_ov_rect(0, 0, cl, ct, 255, 225, 40, 255);
+	gx_ov_rect(0, 0, ct, cl, 255, 225, 40, 255);
+	gx_ov_rect(LW - cl, 0, cl, ct, 255, 225, 40, 255);
+	gx_ov_rect(LW - ct, 0, ct, cl, 255, 225, 40, 255);
+	gx_ov_rect(0, LH - ct, cl, ct, 255, 225, 40, 255);
+	gx_ov_rect(0, LH - cl, ct, cl, 255, 225, 40, 255);
+	gx_ov_rect(LW - cl, LH - ct, cl, ct, 255, 225, 40, 255);
+	gx_ov_rect(LW - ct, LH - cl, ct, cl, 255, 225, 40, 255);
+
+	/* H slider (Left/Right) above center, V slider (Up/Down) below */
+	gx_ov_rect(cx - tlen * 0.5f, cy - 40, tlen, tthk, 30, 30, 40, 230);
+	gx_ov_rect(cx - tlen * 0.5f, cy - 40, tlen * hf, tthk, 90, 200, 255, 255);
+	gx_ov_rect(cx - tthk * 0.5f, cy + 12, tthk, tlen * 0.55f, 30, 30, 40, 230);
+	gx_ov_rect(cx - tthk * 0.5f, cy + 12, tthk, tlen * 0.55f * vf, 255, 170, 90, 255);
+
+	gx_apply_blend(gx);
+	GX_SetColorUpdate(gx->colorWriteR || gx->colorWriteG || gx->colorWriteB);
+	GX_SetAlphaUpdate(gx->colorWriteA);
 }
 
 static void gxEndFrameEnd(Renderer *renderer)
@@ -1343,6 +1412,8 @@ static void gxEndFrameEnd(Renderer *renderer)
 			gx_apply_blend(gx);
 		}
 	}
+	if (Overscan_active())
+		gx_draw_overscan_overlay(gx);
 }
 
 static void gxDrawSprite(Renderer *renderer, int32_t tpagIndex, float x, float y, float originX, float originY,

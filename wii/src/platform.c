@@ -68,8 +68,20 @@ static void register_stubs(VMContext *ctx)
 	if (ctx->funcCallCache) {
 		repeat(ctx->funcCallCacheCount, fi) {
 			const char *name = ctx->dataWin->func.functions[fi].name;
+			ptrdiff_t sidx;
 			BuiltinFunc b;
 
+			if (name == NULL)
+				continue;
+			/* A GML script shadowing a builtin (AM2R's string_split is a GM:S 1.4 compat
+			 * script returning a substring, not the builtin's array) must win, or its
+			 * result draws as "<array:0x...>". Butterscotch's cache prefers the builtin. */
+			sidx = shgeti(ctx->codeIndexByName, (char *)name);
+			if (sidx >= 0) {
+				ctx->funcCallCache[fi].builtin = NULL;
+				ctx->funcCallCache[fi].scriptCodeIndex = ctx->codeIndexByName[sidx].value;
+				continue;
+			}
 			if (ctx->funcCallCache[fi].builtin != NULL)
 				continue;
 			b = VM_findBuiltin(ctx, name);
