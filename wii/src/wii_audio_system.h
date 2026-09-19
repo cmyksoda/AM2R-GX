@@ -4,7 +4,7 @@
 #include "audio_system.h"
 #include "data_win.h"
 
-/* AESND-backed audio: embedded WAV SFX from data.win. External OGG music is out of scope. */
+/* AESND-backed audio: embedded WAV SFX from data.win, external OGG music streamed via stb_vorbis. */
 AudioSystem* WiiAudioSystem_create(DataWin* dataWin);
 
 #endif
