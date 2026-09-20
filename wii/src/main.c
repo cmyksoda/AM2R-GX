@@ -97,6 +97,13 @@ int main(int argc, char **argv)
 	args.dataWinPath = DATA_WIN;
 	args.saveFolder = SAVE_DIR;
 
+	/* Dolphin-only tape replay: a PLAYBACK sentinel beside the game enables it.
+	 * Never present on real SD cards, so hardware keeps live controller input. */
+	if (access(GAME_DIR "/game/PLAYBACK", R_OK) == 0) {
+		args.playbackInputsPath = GAME_DIR "/game/am2r_inputs.json";
+		logInfo("PLAYBACK sentinel found -- replaying %s\n", args.playbackInputsPath);
+	}
+
 	rc = loop(args, argv[0] ? argv[0] : "boot.dol");
 	log_mallinfo("exit");
 	logInfo("loop returned %d\n", rc);
