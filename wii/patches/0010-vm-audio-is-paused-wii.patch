@@ -1,0 +1,17 @@
+--- a/src/vm_builtins.c
++++ b/src/vm_builtins.c
+@@ -7134,8 +7134,14 @@
+     AudioSystem* audio = ctx->runner->audioSystem;
+     if (audio == nullptr) return RValue_makeBool(false);
+     int32_t soundOrInstance = RValue_toInt32(args[0]);
++#ifdef PLATFORM_WII
++    // GM reports a paused sound as still playing, so "!isPlaying" can never see one. Ask the backend.
++    extern bool WiiAudio_isPaused(AudioSystem* audio, int32_t soundOrInstance);
++    return RValue_makeBool(WiiAudio_isPaused(audio, soundOrInstance));
++#else
+     bool playing = audio->vtable->isPlaying(audio, soundOrInstance);
+     return RValue_makeBool(!playing);
++#endif
+ }
+ 
+ 

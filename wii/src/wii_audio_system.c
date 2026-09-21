@@ -640,6 +640,16 @@ static bool wiiIsPlaying(AudioSystem* audio, int32_t idOrSound) {
     return v->loop || v->paused || gettime() < v->freeAt;
 }
 
+// Butterscotch derives audio_is_paused from !isPlaying, which can't work with GM's "paused still
+// counts as playing". AM2R's mus_resume gates on it, so patch 0010 routes the builtin here.
+bool WiiAudio_isPaused(AudioSystem* audio, int32_t idOrSound) {
+    WiiAudioSystem* a = (WiiAudioSystem*) audio;
+    WiiStream* s = findStream(a, idOrSound);
+    if (s != nullptr) return s->paused;
+    WiiVoice* v = findVoice(a, idOrSound);
+    return v != nullptr && v->paused;
+}
+
 static void wiiPauseSound(AudioSystem* audio, int32_t idOrSound) {
     WiiAudioSystem* a = (WiiAudioSystem*) audio;
     for (int i = 0; i < WII_VOICES; i++) {
