@@ -2,6 +2,7 @@
 """Repack a GameMaker: Studio 1.x data.win's texture pages onto pages the Wii's GPU can bind.
 
   tools/repack_textures.py IN.win OUT.win [--max 1024] [--gutter 1] [--groups groups.json]
+  tools/repack_textures.py IN.win --check          exit 0 if a page is over --max, 1 if none is
 
 Every graphic is moved whole, pixels untouched, together with the ring of pixels GameMaker left
 around it. TPAG entries are patched in place; TXTR is rebuilt; AUDO's pointers are shifted.
@@ -181,7 +182,8 @@ def encode_png(pixels):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('src')
-    ap.add_argument('dst')
+    ap.add_argument('dst', nargs='?')
+    ap.add_argument('--check', action='store_true', help='only report whether any page exceeds --max')
     ap.add_argument('--max', type=int, default=1024, help='largest page edge (default 1024)')
     ap.add_argument('--gutter', type=int, default=1, help='ring of source pixels kept around each item')
     ap.add_argument('--groups', help='JSON {"<page>,<x>,<y>,<w>,<h>": group} - items sharing a group share pages')
@@ -198,6 +200,11 @@ def main():
     blob_offs = [u32(data, e + 4) for e in entries]
     blob_ends = blob_offs[1:] + [txtr_off + txtr_size]
     flag = u32(data, entries[0])
+    if args.check:
+        sizes = [struct.unpack('>II', data[b + 16:b + 24]) for b in blob_offs]
+        sys.exit(0 if any(w > args.max or h > args.max for w, h in sizes) else 1)
+    if not args.dst:
+        ap.error('OUT.win is required unless --check is given')
     pages = []
     for start, end in zip(blob_offs, blob_ends):
         im = Image.open(io.BytesIO(data[start:end]))
