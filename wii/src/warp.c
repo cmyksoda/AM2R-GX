@@ -11,10 +11,14 @@
 #include <stdio.h>
 #include <string.h>
 
-static void set_global(VMContext *vm, const char *name, int value)
+void Wii_setGlobal(Runner *runner, const char *name, int value)
 {
-	ptrdiff_t slot = shgeti(vm->varNameMap, (char *)name);
+	VMContext *vm = runner->vmContext;
+	ptrdiff_t slot;
 
+	if (!vm)
+		return;
+	slot = shgeti(vm->varNameMap, (char *)name);
 	if (slot >= 0 && vm->globalScopeInstance)
 		Instance_setSelfVar(vm->globalScopeInstance, vm->varNameMap[slot].value, RValue_makeInt32(value));
 }
@@ -56,12 +60,12 @@ void Wii_warpTo(Runner *runner, int room, int x, int y, int camx, int camy)
 	ids = Wii_am2rIds(runner);
 	if (ids->character < 0)
 		return;
-	set_global(runner->vmContext, "targetx", x);
-	set_global(runner->vmContext, "targety", y);
-	set_global(runner->vmContext, "offsetx", 0);
-	set_global(runner->vmContext, "offsety", 0);
-	set_global(runner->vmContext, "camstartx", camx);
-	set_global(runner->vmContext, "camstarty", camy);
+	Wii_setGlobal(runner, "targetx", x);
+	Wii_setGlobal(runner, "targety", y);
+	Wii_setGlobal(runner, "offsetx", 0);
+	Wii_setGlobal(runner, "offsety", 0);
+	Wii_setGlobal(runner, "camstartx", camx);
+	Wii_setGlobal(runner, "camstarty", camy);
 	list = runner->instancesByExactObject[ids->character];
 	n = (int32_t)arrlen(list);
 	for (i = 0; i < n; i++) {

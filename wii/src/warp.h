@@ -14,6 +14,8 @@ typedef struct {
 } Am2rIds;
 const Am2rIds *Wii_am2rIds(struct Runner *runner);
 
+/* Sets global.<name> if the game has such a variable; silently does nothing otherwise. */
+void Wii_setGlobal(struct Runner *runner, const char *name, int value);
 void Wii_tryWarp(struct Runner *runner);
 void Wii_warpTo(struct Runner *runner, int room, int x, int y, int camx, int camy);
 

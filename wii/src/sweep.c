@@ -6,6 +6,7 @@
 #include "log.h"
 #include "profiler.h"
 #include "runner.h"
+#include "runner_keyboard.h"
 #include "stb_ds.h"
 #include "vm.h"
 #include "warp.h"
@@ -43,18 +44,44 @@ static uint32_t opsMax, arenaMin, soakOps; /* soakOps: worst frame since the las
 static bool shotDue, shotLast;
 static uint8_t *usage;
 static int tapeRoom = -1;
+static bool tour; /* "tour 1" in sweep.txt: late-game kit, and every room gets the action script */
+
+/* One short burst of ordinary play, the same in every room: run, jump, shoot, aim up, morph and
+ * bomb, then a held jump to the right (space jump + screw attack). `every` > 0 taps instead of holds. */
+typedef struct {
+	int from, to, vk, every;
+} TourKey;
+static const TourKey tourScript[] = {
+	{ 40, 160, VK_RIGHT, 0 },  { 80, 100, 'Z', 0 },       { 60, 160, 'X', 8 },
+	{ 170, 290, VK_LEFT, 0 },  { 210, 230, 'Z', 0 },      { 170, 290, 'X', 8 },
+	{ 300, 340, VK_UP, 0 },    { 300, 340, 'X', 6 },
+	{ 350, 354, VK_DOWN, 0 },  { 360, 364, VK_DOWN, 0 },  { 370, 420, 'X', 12 },
+	{ 370, 420, VK_RIGHT, 0 }, { 425, 429, VK_UP, 0 },    { 435, 439, VK_UP, 0 },
+	{ 450, 560, VK_RIGHT, 0 }, { 450, 560, 'Z', 22 },
+};
+static const char *const tourKit[] = {
+	"morphball", "jumpball", "powergrip", "spacejump", "screwattack", "hijump", "spiderball",
+	"speedbooster", "bomb", "ibeam", "wbeam", "pbeam", "sbeam", "cbeam",
+};
+static uint32_t usageBytes;
+static char shotLine[160];
 
 static bool sweep_load(void)
 {
 	FILE *f = fopen(SWEEP_FILE, "r");
 	char line[160];
 	SweepStop s;
+	int i;
 
 	if (!f)
 		return false;
 	while (fgets(line, sizeof line, f) && stopCount < SWEEP_MAX) {
 		if (sscanf(line, "dwell %d", &dwell) == 1)
 			continue;
+		if (sscanf(line, "tour %d", &i) == 1) {
+			tour = i != 0;
+			continue;
+		}
 		memset(&s, 0, sizeof s);
 		if (sscanf(line, "%d %d %d %d %d %d %d %d", &s.room, &s.x, &s.y, &s.camx, &s.camy,
 		           &s.dropX, &s.dropY, &s.dropEvery) >= 5)
@@ -63,7 +90,7 @@ static bool sweep_load(void)
 	fclose(f);
 	if (dwell < SETTLE_FRAMES * 2)
 		dwell = SETTLE_FRAMES * 2;
-	logInfo("SWEEP armed stops=%d dwell=%d\n", stopCount, dwell);
+	logInfo("SWEEP armed stops=%d dwell=%d tour=%d\n", stopCount, dwell, (int)tour);
 	return stopCount > 0;
 }
 
@@ -73,6 +100,47 @@ static Instance *sweep_samus(Runner *runner)
 	Instance **list = character >= 0 ? runner->instancesByExactObject[character] : NULL;
 
 	return arrlen(list) > 0 ? list[0] : NULL;
+}
+
+/* Topped up on every room so ten seconds of clumsy play cannot end in a game over. */
+static void tour_kit(Runner *runner)
+{
+	uint32_t i;
+
+	for (i = 0; i < sizeof tourKit / sizeof tourKit[0]; i++)
+		Wii_setGlobal(runner, tourKit[i], 1);
+	Wii_setGlobal(runner, "currentsuit", 2);
+	Wii_setGlobal(runner, "etanks", 10);
+	Wii_setGlobal(runner, "maxhealth", 1099);
+	Wii_setGlobal(runner, "playerhealth", 1099);
+	Wii_setGlobal(runner, "maxmissiles", 250);
+	Wii_setGlobal(runner, "missiles", 250);
+	Wii_setGlobal(runner, "maxsmissiles", 30);
+	Wii_setGlobal(runner, "smissiles", 30);
+	Wii_setGlobal(runner, "maxpbombs", 20);
+	Wii_setGlobal(runner, "pbombs", 20);
+}
+
+static void tour_keys(Runner *runner, int frame)
+{
+	static bool down[GML_KEY_COUNT];
+	bool want[GML_KEY_COUNT] = { false };
+	uint32_t i;
+	int vk;
+
+	for (i = 0; i < sizeof tourScript / sizeof tourScript[0]; i++) {
+		const TourKey *k = &tourScript[i];
+
+		if (frame >= k->from && frame < k->to && (k->every == 0 || (frame - k->from) % k->every < 3))
+			want[k->vk] = true;
+	}
+	for (vk = 0; vk < GML_KEY_COUNT; vk++) {
+		if (want[vk] && !down[vk])
+			RunnerKeyboard_onKeyDown(runner->keyboard, vk);
+		if (!want[vk] && down[vk])
+			RunnerKeyboard_onKeyUp(runner->keyboard, vk);
+		down[vk] = want[vk];
+	}
 }
 
 static uint64_t vm_ops(Runner *runner)
@@ -96,6 +164,8 @@ static void sweep_enter(Runner *runner)
 	usage = GxRenderer_tpagUsage(&usageBytes);
 	if (usage)
 		memset(usage, 0, usageBytes);
+	if (tour)
+		tour_kit(runner);
 }
 
 /* Which graphics this room drew, as hex: the host packs rooms' graphics onto shared pages from it. */
@@ -299,6 +369,8 @@ void Wii_sweepTick(Runner *runner)
 		opsSum += delta;
 	framesIn++;
 
+	if (tour && runner->keyboard)
+		tour_keys(runner, framesIn);
 	if (stops[cur].dropEvery > 0 && framesIn > SETTLE_FRAMES && (framesIn % stops[cur].dropEvery) == 0)
 		sweep_drop(runner);
 	if (framesIn == dwell / 2)
