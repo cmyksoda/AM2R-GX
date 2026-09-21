@@ -6,4 +6,7 @@
 bool WiiLog_open(const char *path);
 void WiiLog_close(void);
 
+/* Mirror the log to a USB Gecko in slot B if one answers (Dolphin emulates it over TCP). */
+void WiiLog_enableGecko(void);
+
 #endif

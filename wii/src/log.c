@@ -1,11 +1,13 @@
 #include "wii_log.h"
 #include "log.h"
 
+#include <gccore.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 
 static FILE *g_log;
+static bool g_gecko;
 
 bool WiiLog_open(const char *path)
 {
@@ -25,10 +27,17 @@ void WiiLog_close(void)
 	g_log = NULL;
 }
 
+void WiiLog_enableGecko(void)
+{
+	g_gecko = usb_isgeckoalive(1);
+}
+
 void platformLog(const logType type, const char *format, va_list va)
 {
 	const char *prefix = "";
-	va_list copy;
+	va_list copy, gecko;
+	char line[512];
+	int n;
 
 	switch (type) {
 	case LOG_TYPE_WARNING:
@@ -45,6 +54,7 @@ void platformLog(const logType type, const char *format, va_list va)
 	}
 
 	va_copy(copy, va);
+	va_copy(gecko, va);
 	fputs(prefix, stdout);
 	vfprintf(stdout, format, va);
 	fflush(stdout);
@@ -55,4 +65,14 @@ void platformLog(const logType type, const char *format, va_list va)
 		fflush(g_log);
 	}
 	va_end(copy);
+
+	if (g_gecko) {
+		n = vsnprintf(line, sizeof line, format, gecko);
+		if (n > (int)sizeof line - 1)
+			n = sizeof line - 1;
+		usb_sendbuffer_safe(1, prefix, strlen(prefix));
+		if (n > 0)
+			usb_sendbuffer_safe(1, line, n);
+	}
+	va_end(gecko);
 }

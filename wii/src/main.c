@@ -105,6 +105,7 @@ int main(int argc, char **argv)
 	 * Never present on real SD cards, so hardware keeps live controller input. */
 	if (access(GAME_DIR "/game/PLAYBACK", R_OK) == 0) {
 		args.playbackInputsPath = GAME_DIR "/game/am2r_inputs.json";
+		WiiLog_enableGecko();
 		logInfo("PLAYBACK sentinel found -- replaying %s\n", args.playbackInputsPath);
 	}
 
