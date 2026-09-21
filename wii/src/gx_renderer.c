@@ -27,6 +27,10 @@
 #define MEM_RESERVE (4u << 20)
 #define PAGE_LOAD_NEED (4u << 20)
 #define PAGE_RETRY_FRAMES 300
+/* AM2R orphans a surface on nearly every room change (water never frees; others free only in
+ * Destroy, which room end doesn't fire). GM surfaces are volatile, so idle ones are fair game. */
+#define SURF_IDLE_FRAMES 600
+#define SURF_RECLAIM_BELOW (12u << 20)
 #define HOST_TARGET (-1)
 #define EFB_MAX_W 640
 #define EFB_MAX_H 528
@@ -74,6 +78,8 @@ typedef struct {
 	bool objReady;
 	int32_t tilesX, tilesY;
 	GxTile *tiles;
+	u64 lastUsed;
+	bool retired; /* reclaimed by us: the id is never handed out again, a stale holder draws nothing */
 } GxSurf;
 
 typedef struct {
@@ -630,9 +636,15 @@ static bool gx_evict_page(GxRenderer *gx)
 	return true;
 }
 
-/* Pages idle since an earlier frame are safe to drop: every frame ends in GX_DrawDone. */
+static bool gx_reclaim_surface(GxRenderer *gx);
+
+/* Orphaned surfaces are pure garbage: drop them all, early. Dripping them out one at a time left
+ * the heap in 300 KB holes that a 4 MB page decode couldn't use. Cached pages go last. */
 static void gx_make_room(GxRenderer *gx, u32 want)
 {
+	if (WiiMem_room() < (want > SURF_RECLAIM_BELOW ? want : SURF_RECLAIM_BELOW))
+		while (gx_reclaim_surface(gx))
+			;
 	while (WiiMem_room() < want && gx_evict_page(gx))
 		;
 }
@@ -1011,6 +1023,7 @@ static bool gx_bind_surface(GxRenderer *gx, int32_t id, bool restore)
 	s = &gx->surfs[id];
 	if (!s->exists)
 		return false;
+	s->lastUsed = gx->frameCounter;
 	if (gx->currentTarget != id)
 		gx_flush_target(gx);
 	gx->currentTarget = id;
@@ -1060,6 +1073,33 @@ static void gx_surf_release(GxSurf *s)
 	s->tilesX = 0;
 	s->tilesY = 0;
 	s->objReady = false;
+}
+
+static bool gx_reclaim_surface(GxRenderer *gx)
+{
+	int32_t appId = gx->base.runner ? gx->base.runner->applicationSurfaceId : -1;
+	u64 oldest = UINT64_MAX;
+	uint32_t i, victim = 0;
+
+	for (i = 1; i < gx->surfCount; i++) {
+		GxSurf *s = &gx->surfs[i];
+
+		if (!s->exists || (int32_t)i == appId || (int32_t)i == gx->currentTarget)
+			continue;
+		if (gx->frameCounter - s->lastUsed < SURF_IDLE_FRAMES || s->lastUsed >= oldest)
+			continue;
+		oldest = s->lastUsed;
+		victim = i;
+	}
+	if (!victim)
+		return false;
+	logInfo("GX: reclaim idle surface %u (%dx%d, idle %u frames)\n", (unsigned)victim,
+	        (int)gx->surfs[victim].w, (int)gx->surfs[victim].h,
+	        (unsigned)(gx->frameCounter - gx->surfs[victim].lastUsed));
+	gx_surf_release(&gx->surfs[victim]);
+	memset(&gx->surfs[victim], 0, sizeof(GxSurf));
+	gx->surfs[victim].retired = true;
+	return true;
 }
 
 static bool gx_alloc_tiles(GxSurf *s, int32_t width, int32_t height)
@@ -1123,7 +1163,7 @@ static int32_t gx_alloc_surface(GxRenderer *gx, int32_t width, int32_t height)
 	tiled = (width > EFB_MAX_W || height > EFB_MAX_H);
 	/* Slot 0 is never a real surface — GML inits ids to 0 meaning "none". */
 	for (i = 1; i < gx->surfCount; i++) {
-		if (!gx->surfs[i].exists) {
+		if (!gx->surfs[i].exists && !gx->surfs[i].retired) {
 			id = (int32_t)i;
 			break;
 		}
@@ -1139,6 +1179,7 @@ static int32_t gx_alloc_surface(GxRenderer *gx, int32_t width, int32_t height)
 	}
 	gx_surf_release(&gx->surfs[id]);
 	gx->surfs[id].exists = true;
+	gx->surfs[id].lastUsed = gx->frameCounter;
 	gx->surfs[id].w = width;
 	gx->surfs[id].h = height;
 	gx->surfs[id].objReady = false;
@@ -2143,6 +2184,7 @@ static void gxDrawSurfaceColor(Renderer *renderer, int32_t surfaceID, int32_t sr
 	s = &gx->surfs[surfaceID];
 	if (!s->exists)
 		return;
+	s->lastUsed = gx->frameCounter;
 	if (gx->currentTarget == surfaceID)
 		gx_flush_target(gx);
 	if (srcWidth <= 0)
@@ -2304,6 +2346,7 @@ static void gxSurfaceCopy(Renderer *renderer, int32_t destSurfaceID, int32_t des
 	dest = &gx->surfs[destSurfaceID];
 	if (!src->exists || !dest->exists)
 		return;
+	src->lastUsed = dest->lastUsed = gx->frameCounter;
 	if ((!src->texels && !src->tiles) || (!dest->texels && !dest->tiles))
 		return;
 
