@@ -135,7 +135,7 @@ index 8de80db..07fedf8 100644
 +            target_include_directories(butterscotch PRIVATE $ENV{DEVKITPRO}/libogc/include)
 +            target_link_directories(butterscotch PRIVATE $ENV{DEVKITPRO}/libogc/lib/wii)
 +            target_compile_options(butterscotch PRIVATE -Wno-unused-parameter -Wno-unused-variable)
-+            target_link_libraries(butterscotch PRIVATE wiiuse bte fat aesnd ogc m)
++            target_link_libraries(butterscotch PRIVATE wiiuse bte fat aesnd z ogc m)
 +            add_custom_command(TARGET butterscotch POST_BUILD
 +                COMMAND $ENV{DEVKITPRO}/tools/bin/elf2dol
 +                    $<TARGET_FILE:butterscotch>

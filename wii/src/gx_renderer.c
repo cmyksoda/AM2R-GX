@@ -1,7 +1,9 @@
 #include "gx_renderer.h"
 #include "overscan.h"
+#include "png_stream.h"
 #include "sweep.h"
 #include "warp.h"
+#include "wii_mem.h"
 #include "wii_video.h"
 
 #include "common.h"
@@ -20,6 +22,11 @@
 #include <string.h>
 
 #define PAGE_LRU_MAX 20
+/* Headroom kept free for room loads, and what one page load needs: its PNG blob plus 2 MB of
+ * texels (the decode itself streams, so there is no full-size temporary any more). */
+#define MEM_RESERVE (4u << 20)
+#define PAGE_LOAD_NEED (4u << 20)
+#define PAGE_RETRY_FRAMES 300
 #define HOST_TARGET (-1)
 #define EFB_MAX_W 640
 #define EFB_MAX_H 528
@@ -42,6 +49,7 @@ typedef struct {
 typedef struct {
 	bool loaded;
 	bool failed;
+	u64 retryAt; /* a failed load is retried after a cooldown, not every frame */
 	int32_t w, h;
 	int32_t texW, texH;
 	u16 *texels;
@@ -596,7 +604,7 @@ static u8 unorm(float a)
 	return (u8)(a * 255.0f + 0.5f);
 }
 
-static void gx_evict_page(GxRenderer *gx)
+static bool gx_evict_page(GxRenderer *gx)
 {
 	uint32_t i;
 	uint32_t victim = UINT32_MAX;
@@ -613,43 +621,72 @@ static void gx_evict_page(GxRenderer *gx)
 		}
 	}
 	if (victim == UINT32_MAX)
-		return;
-	free(gx->pages[victim].texels);
+		return false;
+	WiiMem_texFree(gx->pages[victim].texels);
 	gx->pages[victim].texels = NULL;
 	gx->pages[victim].loaded = false;
 	gx->pagesResident--;
+	logInfo("GX: evict TXTR %u (resident %u)\n", victim, gx->pagesResident);
+	return true;
+}
+
+/* Pages idle since an earlier frame are safe to drop: every frame ends in GX_DrawDone. */
+static void gx_make_room(GxRenderer *gx, u32 want)
+{
+	while (WiiMem_room() < want && gx_evict_page(gx))
+		;
+}
+
+typedef struct {
+	u16 *dst;
+	int w, h, tw;
+} PageRows;
+
+static void gx_page_row(void *user, int y, const u8 *rgba, int width)
+{
+	PageRows *pr = (PageRows *)user;
+	int x, n = width < pr->w ? width : pr->w;
+
+	if (y >= pr->h)
+		return;
+	for (x = 0; x < n; x++) {
+		const u8 *p = rgba + x * 4;
+		int off = ((y >> 2) * (pr->tw >> 2) + (x >> 2)) * 16 + (y & 3) * 4 + (x & 3);
+
+		pr->dst[off] = pack_rgb5a3(p[0], p[1], p[2], p[3]);
+	}
 }
 
 static bool gx_load_page(GxRenderer *gx, uint32_t pageId)
 {
 	DataWin *dw = gx->base.dataWin;
+	GxPage *page;
 	Texture *txtr;
-	u8 *pixels;
-	int w, h;
-	int tw, th;
-	u16 *texels;
-	bool gm2022_5;
+	u8 *pixels = NULL;
+	u16 *texels = NULL;
+	int w, h, tw, th;
+	bool streamed;
 
 	if (pageId >= gx->pageCount)
 		return false;
-	if (gx->pages[pageId].loaded)
-		return gx->pages[pageId].texels != NULL;
-	if (gx->pages[pageId].failed)
+	page = &gx->pages[pageId];
+	if (page->loaded)
+		return page->texels != NULL;
+	if (page->failed && gx->frameCounter < page->retryAt)
 		return false;
 
-	gx->pages[pageId].loaded = true;
+	page->failed = false;
+	gx_make_room(gx, PAGE_LOAD_NEED);
 	DataWin_loadTxtrIfNeeded(dw, pageId);
 	txtr = &dw->txtr.textures[pageId];
-	gm2022_5 = DataWin_isVersionAtLeast(dw, 2022, 5, 0, 0);
-	pixels = ImageDecoder_decodeToRgba(txtr->blobData, (size_t)txtr->blobSize, gm2022_5, &w, &h);
-	if (!pixels) {
-		logWarn("GX: decode TXTR %u failed\n", pageId);
-		gx->pages[pageId].failed = true;
-		return false;
-	}
-	if (!txtr->mapped) {
-		free(txtr->blobData);
-		txtr->blobData = NULL;
+	if (!txtr->blobData)
+		goto fail;
+	streamed = WiiPng_size(txtr->blobData, (size_t)txtr->blobSize, &w, &h);
+	if (!streamed) {
+		pixels = ImageDecoder_decodeToRgba(txtr->blobData, (size_t)txtr->blobSize,
+		                                   DataWin_isVersionAtLeast(dw, 2022, 5, 0, 0), &w, &h);
+		if (!pixels)
+			goto fail;
 	}
 	if (w > 1024)
 		w = 1024;
@@ -657,28 +694,53 @@ static bool gx_load_page(GxRenderer *gx, uint32_t pageId)
 		h = 1024;
 	tw = pad4(w);
 	th = pad4(h);
-	while (gx->pagesResident >= PAGE_LRU_MAX)
-		gx_evict_page(gx);
-	texels = memalign(32, tex_bytes(tw, th));
-	if (!texels) {
+	while (gx->pagesResident >= PAGE_LRU_MAX && gx_evict_page(gx))
+		;
+	texels = WiiMem_texAlloc(tex_bytes(tw, th));
+	if (!texels && gx_evict_page(gx))
+		texels = WiiMem_texAlloc(tex_bytes(tw, th));
+	if (!texels)
+		goto fail;
+	if (streamed) {
+		PageRows pr = { texels, w, h, tw };
+
+		memset(texels, 0, tex_bytes(tw, th));
+		if (!WiiPng_decodeRows(txtr->blobData, (size_t)txtr->blobSize, gx_page_row, &pr))
+			goto fail;
+	} else {
+		swizzle_rgb5a3(texels, pixels, w, h, tw);
 		free(pixels);
-		gx->pages[pageId].failed = true;
-		return false;
+		pixels = NULL;
 	}
-	swizzle_rgb5a3(texels, pixels, w, h, tw);
-	free(pixels);
+	if (!txtr->mapped) {
+		free(txtr->blobData);
+		txtr->blobData = NULL;
+	}
 	DCFlushRange(texels, tex_bytes(tw, th));
-	GX_InitTexObj(&gx->pages[pageId].obj, texels, (u16)tw, (u16)th, GX_TF_RGB5A3, GX_CLAMP, GX_CLAMP, GX_FALSE);
-	GX_InitTexObjFilterMode(&gx->pages[pageId].obj, GX_NEAR, GX_NEAR);
-	gx->pages[pageId].texels = texels;
-	gx->pages[pageId].w = w;
-	gx->pages[pageId].h = h;
-	gx->pages[pageId].texW = tw;
-	gx->pages[pageId].texH = th;
+	GX_InitTexObj(&page->obj, texels, (u16)tw, (u16)th, GX_TF_RGB5A3, GX_CLAMP, GX_CLAMP, GX_FALSE);
+	GX_InitTexObjFilterMode(&page->obj, GX_NEAR, GX_NEAR);
+	page->texels = texels;
+	page->w = w;
+	page->h = h;
+	page->texW = tw;
+	page->texH = th;
+	page->loaded = true;
 	gx->pagesResident++;
 	GX_InvalidateTexAll();
 	logInfo("GX: TXTR %u %dx%d (padded %dx%d, resident %u)\n", pageId, w, h, tw, th, gx->pagesResident);
 	return true;
+
+fail:
+	logWarn("GX: TXTR %u load failed, retry in %d frames\n", pageId, PAGE_RETRY_FRAMES);
+	free(pixels);
+	WiiMem_texFree(texels);
+	if (txtr->blobData && !txtr->mapped) {
+		free(txtr->blobData);
+		txtr->blobData = NULL;
+	}
+	page->failed = true;
+	page->retryAt = gx->frameCounter + PAGE_RETRY_FRAMES;
+	return false;
 }
 
 static GxPage *gx_page(GxRenderer *gx, int16_t pageId)
@@ -1168,7 +1230,7 @@ static void gxDestroy(Renderer *renderer)
 	uint32_t i;
 
 	for (i = 0; i < gx->pageCount; i++)
-		free(gx->pages[i].texels);
+		WiiMem_texFree(gx->pages[i].texels);
 	for (i = 0; i < gx->surfCount; i++)
 		gx_surf_release(&gx->surfs[i]);
 	free(gx->pages);
@@ -1196,6 +1258,8 @@ static void gxBeginFrame(Renderer *renderer, int32_t gameW, int32_t gameH, int32
 	gx_apply_alpha_test(gx);
 	GX_SetColorUpdate(GX_TRUE);
 	GX_SetAlphaUpdate(GX_TRUE);
+	if ((gx->frameCounter % 60) == 0)
+		gx_make_room(gx, MEM_RESERVE);
 	if (renderer->runner) {
 		Wii_tryWarp(renderer->runner);
 		Wii_sweepTick(renderer->runner);
@@ -1639,6 +1703,7 @@ static void gxDrawTextColor(Renderer *renderer, const char *text, float x, float
 	int32_t textLen, lineCount, lineStart, lineIdx;
 	float lineStride, totalHeight, valignOffset, angleRad;
 	Matrix4f transform;
+	bool snap;
 	float cursorY;
 	u8 a = unorm(alpha);
 
@@ -1668,7 +1733,6 @@ static void gxDrawTextColor(Renderer *renderer, const char *text, float x, float
 	lineStride = (0.0f > lineSeparation) ? TextUtils_lineStride(font)
 					     : (lineSeparation / (font->scaleY != 0.0f ? font->scaleY : 1.0f));
 	totalHeight = (float)lineCount * lineStride;
-	bool snap;
 	valignOffset = 0;
 	if (renderer->drawValign == 1)
 		valignOffset = -totalHeight / 2.0f;
@@ -1676,6 +1740,9 @@ static void gxDrawTextColor(Renderer *renderer, const char *text, float x, float
 		valignOffset = -totalHeight;
 	angleRad = -angleDeg * ((float)M_PI / 180.0f);
 	Matrix4f_setTransform2D(&transform, x, y, xscale * font->scaleX, yscale * font->scaleY, angleRad);
+	/* Centred odd-width lines start on a half pixel, where GX_NEAR samples sit exactly on texel
+	 * seams and real hardware garbles thin glyphs. Keep unrotated 1:1 text on the pixel grid. */
+	snap = angleDeg == 0.0f && xscale * font->scaleX == 1.0f && yscale * font->scaleY == 1.0f;
 	cursorY = valignOffset - (float)font->ascenderOffset;
 	lineStart = 0;
 	for (lineIdx = 0; lineIdx < lineCount; lineIdx++) {
@@ -1705,9 +1772,6 @@ static void gxDrawTextColor(Renderer *renderer, const char *text, float x, float
 			bool hasNext = lineLen > pos;
 
 			if (hasNext)
-	/* Centred odd-width lines start on a half pixel, where GX_NEAR samples sit exactly on texel
-	 * seams and real hardware garbles thin glyphs. Keep unrotated 1:1 text on the pixel grid. */
-	snap = angleDeg == 0.0f && xscale * font->scaleX == 1.0f && yscale * font->scaleY == 1.0f;
 				nextCh = TextUtils_decodeUtf8(text + lineStart, lineLen, &pos);
 			if (glyph && glyph->sourceWidth && glyph->sourceHeight) {
 				TexturePageItem *gtpag = tpag;
@@ -1763,6 +1827,12 @@ static void gxDrawTextColor(Renderer *renderer, const char *text, float x, float
 					Matrix4f_transformPoint(&transform, lx1, ly0, &px1, &py1);
 					Matrix4f_transformPoint(&transform, lx1, ly1, &px2, &py2);
 					Matrix4f_transformPoint(&transform, lx0, ly1, &px3, &py3);
+					if (snap) {
+						px0 = px3 = floorf(px0 + 0.5f);
+						px1 = px2 = floorf(px1 + 0.5f);
+						py0 = py1 = floorf(py0 + 0.5f);
+						py2 = py3 = floorf(py2 + 0.5f);
+					}
 					emit_quad(px0, py0, px1, py1, px2, py2, px3, py3,
 						  u0, v0, u1, v0, u1, v1, u0, v1,
 						  (u8)BGR_R(tc1), (u8)BGR_G(tc1), (u8)BGR_B(tc1), a,
@@ -1792,12 +1862,6 @@ static void gxDrawText(Renderer *renderer, const char *text, float x, float y, f
 	gxDrawTextColor(renderer, text, x, y, xscale, yscale, angleDeg, c, c, c, c, renderer->drawAlpha, lineSeparation);
 }
 
-					if (snap) {
-						px0 = px3 = floorf(px0 + 0.5f);
-						px1 = px2 = floorf(px1 + 0.5f);
-						py0 = py1 = floorf(py0 + 0.5f);
-						py2 = py3 = floorf(py2 + 0.5f);
-					}
 static void gxFlush(MAYBE_UNUSED Renderer *renderer) {}
 
 static void gxClearScreen(Renderer *renderer, uint32_t color, float alpha)

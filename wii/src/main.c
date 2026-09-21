@@ -3,6 +3,7 @@
 #include "loop.h"
 #include "overscan.h"
 #include "wii_log.h"
+#include "wii_mem.h"
 #include "wii_video.h"
 
 #include <fat.h>
@@ -48,6 +49,7 @@ int main(int argc, char **argv)
 
 	(void)argc;
 
+	WiiMem_init();
 	WiiInput_init();
 	if (!WiiVideo_init()) {
 		wait_home("WiiVideo_init failed");
