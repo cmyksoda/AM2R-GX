@@ -35,6 +35,10 @@ static void log_mallinfo(const char *when)
 
 	logInfo("mallinfo %s: arena=%d ordblks=%d uordblks=%d fordblks=%d keepcost=%d\n",
 	        when, mi.arena, mi.ordblks, mi.uordblks, mi.fordblks, mi.keepcost);
+	/* Once sbrk crosses into MEM2, mallinfo counts the ~240 MB address hole as in-use.
+	 * The arenas are the trustworthy figure. */
+	logInfo("arena %s: mem1_free=%u mem2_free=%u\n",
+	        when, (unsigned)SYS_GetArena1Size(), (unsigned)SYS_GetArena2Size());
 }
 
 int main(int argc, char **argv)
