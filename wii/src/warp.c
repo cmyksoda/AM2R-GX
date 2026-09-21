@@ -10,6 +10,58 @@
 #include <stdio.h>
 #include <string.h>
 
+static void set_global(VMContext *vm, const char *name, int value)
+{
+	ptrdiff_t slot = shgeti(vm->varNameMap, (char *)name);
+
+	if (slot >= 0 && vm->globalScopeInstance)
+		Instance_setSelfVar(vm->globalScopeInstance, vm->varNameMap[slot].value, RValue_makeInt32(value));
+}
+
+/* The move a door makes. oCharacter's Room Start re-places Samus from global.target*+offset*,
+ * so the globals are what actually position her; the direct x/y only covers the first frame. */
+void Wii_warpTo(Runner *runner, int room, int x, int y, int camx, int camy)
+{
+	Instance **list;
+	Instance *inst;
+	int32_t n, i, nobj;
+
+	if (!runner->instancesByExactObject || !runner->dataWin || !runner->vmContext)
+		return;
+	nobj = (int32_t)runner->dataWin->objt.count;
+	if (nobj <= 266)
+		return;
+	set_global(runner->vmContext, "targetx", x);
+	set_global(runner->vmContext, "targety", y);
+	set_global(runner->vmContext, "offsetx", 0);
+	set_global(runner->vmContext, "offsety", 0);
+	set_global(runner->vmContext, "camstartx", camx);
+	set_global(runner->vmContext, "camstarty", camy);
+	list = runner->instancesByExactObject[266];
+	n = (int32_t)arrlen(list);
+	for (i = 0; i < n; i++) {
+		inst = list[i];
+		if (!inst || inst->destroyed)
+			continue;
+		inst->x = inst->xprevious = inst->xstart = (float)x;
+		inst->y = inst->yprevious = inst->ystart = (float)y;
+		inst->spatialGridDirty = true;
+	}
+	if (nobj > 426) {
+		list = runner->instancesByExactObject[426];
+		n = (int32_t)arrlen(list);
+		for (i = 0; i < n; i++) {
+			inst = list[i];
+			if (!inst || inst->destroyed)
+				continue;
+			inst->x = (float)camx;
+			inst->y = (float)camy;
+		}
+	}
+	runner->pendingRoom = room;
+	logInfo("Wii: warp to room %d at %d,%d\n", room, x, y);
+}
+
 /* Optional sd:/apps/am2r/game/warp.txt: "room x y". Used to reach water without a 4k-px walk. */
 void Wii_tryWarp(Runner *runner)
 {
@@ -18,9 +70,6 @@ void Wii_tryWarp(Runner *runner)
 	static int room, x, y;
 	FILE *f;
 	char line[128];
-	Instance **list;
-	Instance *inst;
-	int32_t n, i, nobj;
 
 	if (armed < 0)
 		return;
@@ -49,38 +98,9 @@ void Wii_tryWarp(Runner *runner)
 	}
 	if (runner->currentRoomIndex != 21)
 		return;
-	if (++landed < 40)
+	if (++landed != 40)
 		return;
-	if (landed != 40)
-		return;
-	if (!runner->instancesByExactObject || !runner->dataWin)
-		return;
-	nobj = (int32_t)runner->dataWin->objt.count;
-	if (nobj <= 266)
-		return;
-	list = runner->instancesByExactObject[266];
-	n = (int32_t)arrlen(list);
-	for (i = 0; i < n; i++) {
-		inst = list[i];
-		if (!inst || inst->destroyed)
-			continue;
-		inst->x = inst->xprevious = inst->xstart = (float)x;
-		inst->y = inst->yprevious = inst->ystart = (float)y;
-		inst->spatialGridDirty = true;
-	}
-	if (nobj > 426) {
-		list = runner->instancesByExactObject[426];
-		n = (int32_t)arrlen(list);
-		for (i = 0; i < n; i++) {
-			inst = list[i];
-			if (!inst || inst->destroyed)
-				continue;
-			inst->x = (float)x;
-			inst->y = (float)y;
-		}
-	}
-	runner->pendingRoom = room;
-	logInfo("Wii: warp to room %d at %d,%d\n", room, x, y);
+	Wii_warpTo(runner, room, x, y, x, y);
 }
 
 /* global.controltype picks the prompt glyph set: 0 keyboard, 1 numbered pad, 2 named A/B pad.
