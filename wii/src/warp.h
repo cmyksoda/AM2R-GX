@@ -1,13 +1,19 @@
 #ifndef AM2R_WII_WARP_H
 #define AM2R_WII_WARP_H
 
-/* AM2R 1.1 data.win indices. 1.5.5 numbers them differently: look them up by name there. */
-#define AM2R_OBJ_CHARACTER 266
-#define AM2R_OBJ_CAMERA 426
-#define AM2R_ROOM_LANDING 21
+#include <stdint.h>
+
 #define WARP_SETTLE_FRAMES 40 /* let the landing room finish its first frames before leaving it */
 
 struct Runner;
+
+/* 1.1 and 1.5.5 number objects and rooms differently, so these come from the data by name. */
+typedef struct {
+	int32_t character, camera; /* oCharacter, oCamera; -1 if the data has no such object */
+	int32_t landingRoom;       /* rm_a0h01 */
+} Am2rIds;
+const Am2rIds *Wii_am2rIds(struct Runner *runner);
+
 void Wii_tryWarp(struct Runner *runner);
 void Wii_warpTo(struct Runner *runner, int room, int x, int y, int camx, int camy);
 

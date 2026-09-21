@@ -9,6 +9,7 @@
 #include "wii_paths.h"
 
 #include <stdio.h>
+#include <string.h>
 
 static void set_global(VMContext *vm, const char *name, int value)
 {
@@ -18,18 +19,42 @@ static void set_global(VMContext *vm, const char *name, int value)
 		Instance_setSelfVar(vm->globalScopeInstance, vm->varNameMap[slot].value, RValue_makeInt32(value));
 }
 
+const Am2rIds *Wii_am2rIds(Runner *runner)
+{
+	static Am2rIds ids = { -1, -1, -1 };
+	static bool resolved;
+	DataWin *dw = runner->dataWin;
+	uint32_t i;
+
+	if (resolved || !dw)
+		return &ids;
+	for (i = 0; i < dw->objt.count; i++) {
+		if (strcmp(dw->objt.objects[i].name, "oCharacter") == 0)
+			ids.character = (int32_t)i;
+		else if (strcmp(dw->objt.objects[i].name, "oCamera") == 0)
+			ids.camera = (int32_t)i;
+	}
+	for (i = 0; i < dw->room.count; i++)
+		if (strcmp(dw->room.rooms[i].name, "rm_a0h01") == 0)
+			ids.landingRoom = (int32_t)i;
+	resolved = true;
+	logInfo("Wii: oCharacter=%d oCamera=%d rm_a0h01=%d\n", (int)ids.character, (int)ids.camera, (int)ids.landingRoom);
+	return &ids;
+}
+
 /* The move a door makes. oCharacter's Room Start re-places Samus from global.target*+offset*,
  * so the globals are what actually position her; the direct x/y only covers the first frame. */
 void Wii_warpTo(Runner *runner, int room, int x, int y, int camx, int camy)
 {
+	const Am2rIds *ids;
 	Instance **list;
 	Instance *inst;
-	int32_t n, i, nobj;
+	int32_t n, i;
 
 	if (!runner->instancesByExactObject || !runner->dataWin || !runner->vmContext)
 		return;
-	nobj = (int32_t)runner->dataWin->objt.count;
-	if (nobj <= AM2R_OBJ_CHARACTER)
+	ids = Wii_am2rIds(runner);
+	if (ids->character < 0)
 		return;
 	set_global(runner->vmContext, "targetx", x);
 	set_global(runner->vmContext, "targety", y);
@@ -37,7 +62,7 @@ void Wii_warpTo(Runner *runner, int room, int x, int y, int camx, int camy)
 	set_global(runner->vmContext, "offsety", 0);
 	set_global(runner->vmContext, "camstartx", camx);
 	set_global(runner->vmContext, "camstarty", camy);
-	list = runner->instancesByExactObject[AM2R_OBJ_CHARACTER];
+	list = runner->instancesByExactObject[ids->character];
 	n = (int32_t)arrlen(list);
 	for (i = 0; i < n; i++) {
 		inst = list[i];
@@ -47,8 +72,8 @@ void Wii_warpTo(Runner *runner, int room, int x, int y, int camx, int camy)
 		inst->y = inst->yprevious = inst->ystart = (float)y;
 		inst->spatialGridDirty = true;
 	}
-	if (nobj > AM2R_OBJ_CAMERA) {
-		list = runner->instancesByExactObject[AM2R_OBJ_CAMERA];
+	if (ids->camera >= 0) {
+		list = runner->instancesByExactObject[ids->camera];
 		n = (int32_t)arrlen(list);
 		for (i = 0; i < n; i++) {
 			inst = list[i];
@@ -94,7 +119,7 @@ void Wii_tryWarp(Runner *runner)
 		armed = 1;
 		logInfo("Wii: warp.txt room=%d (%d,%d)\n", room, x, y);
 	}
-	if (runner->currentRoomIndex != AM2R_ROOM_LANDING)
+	if (runner->currentRoomIndex != Wii_am2rIds(runner)->landingRoom)
 		return;
 	if (++landed != WARP_SETTLE_FRAMES)
 		return;

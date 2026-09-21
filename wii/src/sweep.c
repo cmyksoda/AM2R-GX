@@ -67,7 +67,8 @@ static bool sweep_load(void)
 
 static Instance *sweep_samus(Runner *runner)
 {
-	Instance **list = runner->instancesByExactObject[AM2R_OBJ_CHARACTER];
+	int32_t character = Wii_am2rIds(runner)->character;
+	Instance **list = character >= 0 ? runner->instancesByExactObject[character] : NULL;
 
 	return arrlen(list) > 0 ? list[0] : NULL;
 }
@@ -235,7 +236,7 @@ void Wii_sweepTick(Runner *runner)
 		return;
 	}
 	if (state == 1) {
-		if (runner->currentRoomIndex != AM2R_ROOM_LANDING || ++landed < WARP_SETTLE_FRAMES)
+		if (runner->currentRoomIndex != Wii_am2rIds(runner)->landingRoom || ++landed < WARP_SETTLE_FRAMES)
 			return;
 		state = 2;
 		cur = 0;
