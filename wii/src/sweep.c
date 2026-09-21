@@ -9,19 +9,21 @@
 #include "stb_ds.h"
 #include "vm.h"
 #include "warp.h"
+#include "wii_paths.h"
 
 #include <gccore.h>
 #include <malloc.h>
 #include <stdio.h>
 #include <string.h>
 
-#define SWEEP_FILE "sd:/apps/am2r/game/sweep.txt"
-#define SHOTS_FILE "sd:/apps/am2r/game/shots.txt"
+#define SWEEP_FILE WII_GAME_DIR "/sweep.txt"
+#define SHOTS_FILE WII_GAME_DIR "/shots.txt"
 #define SHOTS_MAX 64
 #define SWEEP_MAX 400
 #define SETTLE_FRAMES 30
 #define SOAK_TICK_FRAMES 600
 #define SOAK_TOP 6
+#define SOAK_MAX_OBJECTS 2048
 
 typedef struct {
 	int room, x, y, camx, camy;
@@ -60,6 +62,13 @@ static bool sweep_load(void)
 	return stopCount > 0;
 }
 
+static Instance *sweep_samus(Runner *runner)
+{
+	Instance **list = runner->instancesByExactObject[AM2R_OBJ_CHARACTER];
+
+	return arrlen(list) > 0 ? list[0] : NULL;
+}
+
 static uint64_t vm_ops(Runner *runner)
 {
 	VMContext *vm = runner->vmContext;
@@ -83,14 +92,14 @@ static void sweep_enter(Runner *runner)
 /* Long dwells (soaks) want a time series: whatever keeps growing is the leak. */
 static void sweep_soak_tick(Runner *runner)
 {
-	static uint16_t counts[2048];
+	static uint16_t counts[SOAK_MAX_OBJECTS];
 	int32_t i, n = (int32_t)arrlen(runner->instances), live = 0, t, best;
 	uint32_t nobj = runner->dataWin->objt.count;
 	char line[256];
 	int len;
 
-	if (nobj > 2048)
-		nobj = 2048;
+	if (nobj > SOAK_MAX_OBJECTS)
+		nobj = SOAK_MAX_OBJECTS;
 	memset(counts, 0, sizeof counts);
 	for (i = 0; i < n; i++) {
 		Instance *inst = runner->instances[i];
@@ -102,8 +111,7 @@ static void sweep_soak_tick(Runner *runner)
 			counts[inst->objectIndex]++;
 	}
 	{
-		Instance **sl = runner->instancesByExactObject[266];
-		Instance *samus = arrlen(sl) > 0 ? sl[0] : NULL;
+		Instance *samus = sweep_samus(runner);
 
 		len = snprintf(line, sizeof line, "SWEEP soak room=%d f=%d inst=%d ops=%u sy=%d room_mem=%u top=",
 		               stops[cur].room, framesIn, live, (unsigned)soakOps, samus ? (int)samus->y : -1,
@@ -127,8 +135,7 @@ static void sweep_soak_tick(Runner *runner)
 /* In-room move only: no room change, so oCharacter's Room Start doesn't re-place her. */
 static void sweep_drop(Runner *runner)
 {
-	Instance **list = runner->instancesByExactObject[266];
-	Instance *samus = arrlen(list) > 0 ? list[0] : NULL;
+	Instance *samus = sweep_samus(runner);
 
 	if (!samus || samus->destroyed)
 		return;
@@ -139,8 +146,7 @@ static void sweep_drop(Runner *runner)
 
 static void sweep_shot(Runner *runner)
 {
-	Instance **list = runner->instancesByExactObject[266];
-	Instance *samus = arrlen(list) > 0 ? list[0] : NULL;
+	Instance *samus = sweep_samus(runner);
 	GMLCamera *cam = Runner_getCameraForView(runner, 0);
 
 	logInfo("SWEEP shot room=%d actual=%d sx=%d sy=%d vis=%d vx=%d vy=%d\n",
@@ -208,7 +214,7 @@ void Wii_sweepTick(Runner *runner)
 		return;
 	}
 	if (state == 1) {
-		if (runner->currentRoomIndex != 21 || ++landed < 40)
+		if (runner->currentRoomIndex != AM2R_ROOM_LANDING || ++landed < WARP_SETTLE_FRAMES)
 			return;
 		state = 2;
 		cur = 0;

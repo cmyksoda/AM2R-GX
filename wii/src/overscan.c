@@ -1,10 +1,12 @@
 #include "overscan.h"
 
+#include "wii_paths.h"
+
 #include "log.h"
 
 #include <stdio.h>
 
-#define OVERSCAN_PATH "sd:/apps/am2r/overscan.txt"
+#define OVERSCAN_PATH WII_APP_DIR "/overscan.txt"
 
 static int g_h;
 static int g_v;
@@ -30,7 +32,7 @@ void Overscan_load(void)
 	logInfo("Overscan: h=%d v=%d\n", g_h, g_v);
 }
 
-void Overscan_save(void)
+static void Overscan_save(void)
 {
 	FILE *f = fopen(OVERSCAN_PATH, "w");
 

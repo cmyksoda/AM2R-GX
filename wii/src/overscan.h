@@ -9,7 +9,6 @@
 #define OVERSCAN_MAX_V 120
 
 void Overscan_load(void);
-void Overscan_save(void);
 
 bool Overscan_active(void);
 void Overscan_toggle(void);

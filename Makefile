@@ -1,4 +1,4 @@
-# AM2R-Wii — Stage 2 hello + Stage 4 Butterscotch GX. No git from make.
+# AM2R-Wii build. The wii target resets and re-patches the pinned Butterscotch submodule.
 
 BUTTER := third_party/butterscotch
 WII_BUILD := build/wii

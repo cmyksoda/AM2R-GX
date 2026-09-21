@@ -96,7 +96,6 @@ typedef struct {
     WiiStream streams[WII_STREAMS];
     int32_t nextInstanceId;
     float masterGain;
-    int32_t dbg;            // throttle for first-N playSound diagnostics
     uint32_t statFrames;
     uint64_t statTicks, statMaxTicks;
     uint32_t* blobUsed;     // per AUDO entry: tick of last play, for LRU
@@ -144,7 +143,6 @@ static void setVoiceVolume(AESNDPB* pb, float g) {
 
 // ===[ Embedded SFX ]===
 
-// Walk RIFF chunks to the 'data' payload. Returns its start, or nullptr.
 static const uint8_t* findWavDataChunk(const uint8_t* data, uint32_t dataSize, uint32_t* lenOut) {
     if (data == nullptr || dataSize < 12) return nullptr;
     if (data[0] != 'R' || data[1] != 'I' || data[2] != 'F' || data[3] != 'F') return nullptr;
@@ -211,7 +209,6 @@ static void voiceStop(WiiVoice* v) {
     v->freeAt = 0;
 }
 
-// Free one-shot buffers whose playback time (plus tail margin) has elapsed.
 static void reap(WiiAudioSystem* a) {
     uint64_t now = gettime();
     for (int i = 0; i < WII_VOICES; i++) {
@@ -243,7 +240,7 @@ static void applyVolume(WiiAudioSystem* a, WiiVoice* v) {
 
 // ===[ OGG streams ]===
 
-// DSP interrupt context: hand over the next decoded chunk, or silence when the decoder fell behind.
+// DSP interrupt context: pointer swaps only, no decoding or logging.
 static void streamVoiceCallback(AESNDPB* pb, u32 state, void* arg) {
     WiiStream* s = (WiiStream*) arg;
     if (state != VOICE_STATE_STREAM) return;
@@ -308,7 +305,6 @@ static WiiStream* findFreeStream(WiiAudioSystem* a) {
     return nullptr;
 }
 
-// Decode one chunk into the ring; a non-looping track's last chunk is zero-padded and flags EOF.
 static void streamDecodeChunk(WiiStream* s) {
     int16_t* dst = (int16_t*) (s->ring + (s->writeChunk % STREAM_RING_CHUNKS) * STREAM_CHUNK_BYTES);
     int want = STREAM_CHUNK_BYTES / (s->channels * 2);
@@ -404,7 +400,6 @@ static float streamPosition(WiiStream* s) {
     return (float) s->played * (float) framesPerChunk / (float) s->rate;
 }
 
-// Per-frame: run fades, keep rings topped up, retire finished tracks.
 static void streamsUpdate(WiiAudioSystem* a, float dt) {
     uint64_t t0 = gettime();
     for (int i = 0; i < WII_STREAMS; i++) {
@@ -433,10 +428,15 @@ static void streamsUpdate(WiiAudioSystem* a, float dt) {
         uint32_t starved = 0;
         int active = 0;
         for (int i = 0; i < WII_STREAMS; i++) { starved += a->streams[i].starved; active += a->streams[i].active; }
+#if WII_AUDIO_DECODE_THREAD
+        // The worker does the decoding, so a main-thread timing here would only measure the fade loop.
+        if (active > 0) logInfo("WiiAudio: %d streams, starved=%u\n", active, starved);
+#else
         if (active > 0)
             logInfo("WiiAudio: decode avg %u us/frame max %u us, %d streams, starved=%u\n",
                     (unsigned) (ticks_to_microsecs(a->statTicks) / STREAM_STATS_FRAMES),
                     (unsigned) ticks_to_microsecs(a->statMaxTicks), active, starved);
+#endif
         a->statFrames = 0;
         a->statTicks = a->statMaxTicks = 0;
     }
@@ -469,7 +469,7 @@ static void wiiInit(AudioSystem* audio, DataWin* dataWin, FileSystem* fs) {
     AESND_Init();
     AESND_Pause(false);
     for (int i = 0; i < WII_VOICES; i++) {
-        a->voices[i].pb = AESND_AllocateVoice(nullptr);   // left un-stopped; hello never stopped a voice and was audible
+        a->voices[i].pb = AESND_AllocateVoice(nullptr);   // never stopped at allocation; wiiPlaySound un-stops a voice on reuse
         a->voices[i].instanceId = -1;
         a->voices[i].soundIndex = -1;
     }
@@ -536,30 +536,19 @@ static void wiiUpdate(AudioSystem* audio, float dt) {
 static int32_t wiiPlaySound(AudioSystem* audio, int32_t soundIndex, MAYBE_UNUSED int32_t priority, bool loop) {
     WiiAudioSystem* a = (WiiAudioSystem*) audio;
     DataWin* dw = a->dw;
-    bool dbg = (a->dbg < 24);
-    if (dbg) a->dbg++;
 
     reap(a);
-    if (dw == nullptr || soundIndex < 0 || (uint32_t) soundIndex >= dw->sond.count) {
-        if (dbg) logInfo("WiiAudio: snd %d out of range\n", soundIndex);
-        return -1;
-    }
+    if (dw == nullptr || soundIndex < 0 || (uint32_t) soundIndex >= dw->sond.count) return -1;
     Sound* sound = &dw->sond.sounds[soundIndex];
-    if (dbg) logInfo("WiiAudio: play? snd %d '%s' flags=0x%x grp=%d file=%d\n",
-                     soundIndex, sound->name ? sound->name : "?", (unsigned) sound->flags,
-                     sound->audioGroup, sound->audioFile);
 
     bool embedded = (sound->flags & AUDIO_ENTRY_FLAG_IS_EMBEDDED) != 0
                  || (sound->flags & AUDIO_ENTRY_FLAG_IS_COMPRESSED) != 0
                  || (sound->flags & AUDIO_ENTRY_FLAG_REGULAR) != AUDIO_ENTRY_FLAG_REGULAR;
     if (!embedded) return streamPlay(a, soundIndex, sound, loop);
-    if (sound->audioGroup != 0) { if (dbg) logInfo("  skip: group %d\n", sound->audioGroup); return -1; }
+    if (sound->audioGroup != 0) return -1;
 
     DataWin* group = dw;        // group 0 is data.win; AM2R 1.1 keeps SFX there
-    if (sound->audioFile < 0 || (uint32_t) sound->audioFile >= group->audo.count) {
-        if (dbg) logInfo("  skip: bad audioFile\n");
-        return -1;
-    }
+    if (sound->audioFile < 0 || (uint32_t) sound->audioFile >= group->audo.count) return -1;
     AudioEntry* entry = &group->audo.entries[sound->audioFile];
     bool fresh = entry->data == nullptr;
     DataWin_loadAudoIfNeeded(group, (uint32_t) sound->audioFile);
@@ -568,17 +557,14 @@ static int32_t wiiPlaySound(AudioSystem* audio, int32_t soundIndex, MAYBE_UNUSED
         a->blobUsed[sound->audioFile] = ++a->blobTick;
         blobTrim(a, (uint32_t) sound->audioFile);
     }
-    if (entry->data == nullptr || entry->dataSize == 0) { if (dbg) logInfo("  skip: no AUDO data\n"); return -1; }
+    if (entry->data == nullptr || entry->dataSize == 0) return -1;
 
     uint32_t chans = 0, rate = 0, bits = 0, audioLen = 0;
     const uint8_t* audioData = nullptr;
     bool parsed = parseWavHeader(entry->data, entry->dataSize, &chans, &rate, &bits, &audioData, &audioLen);
-    if (dbg) logInfo("  audo size=%u first=%02x%02x%02x%02x parsed=%d ch=%u rate=%u bits=%u dlen=%u\n",
-                     entry->dataSize, entry->data[0], entry->data[1], entry->data[2], entry->data[3],
-                     parsed, chans, rate, bits, audioLen);
     if (!parsed) return -1;
-    if (bits != 16 || chans < 1 || chans > 2 || audioData == nullptr) { if (dbg) logInfo("  skip: fmt\n"); return -1; }
-    if (audioLen == 0 || audioLen > MAX_SFX_BYTES) { if (dbg) logInfo("  skip: len %u\n", audioLen); return -1; }
+    if (bits != 16 || chans < 1 || chans > 2 || audioData == nullptr) return -1;
+    if (audioLen == 0 || audioLen > MAX_SFX_BYTES) return -1;
 
     uint32_t frame = chans * 2;
     uint32_t len = audioLen - (audioLen % frame);
@@ -618,7 +604,6 @@ static int32_t wiiPlaySound(AudioSystem* audio, int32_t soundIndex, MAYBE_UNUSED
     AESND_PlayVoice(v->pb, fmt, buf, len, (f32) rate, 0, loop);
     applyVolume(a, v);
     AESND_SetVoiceStop(v->pb, false);   // ensure a reused/previously-stopped voice actually runs
-    if (dbg) logInfo("  PLAY ch=%u rate=%u len=%u voice=%d\n", chans, rate, len, (int) (v - a->voices));
     return v->instanceId;
 }
 

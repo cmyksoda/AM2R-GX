@@ -6,9 +6,9 @@
 #include "rvalue.h"
 #include "stb_ds.h"
 #include "vm.h"
+#include "wii_paths.h"
 
 #include <stdio.h>
-#include <string.h>
 
 static void set_global(VMContext *vm, const char *name, int value)
 {
@@ -29,7 +29,7 @@ void Wii_warpTo(Runner *runner, int room, int x, int y, int camx, int camy)
 	if (!runner->instancesByExactObject || !runner->dataWin || !runner->vmContext)
 		return;
 	nobj = (int32_t)runner->dataWin->objt.count;
-	if (nobj <= 266)
+	if (nobj <= AM2R_OBJ_CHARACTER)
 		return;
 	set_global(runner->vmContext, "targetx", x);
 	set_global(runner->vmContext, "targety", y);
@@ -37,7 +37,7 @@ void Wii_warpTo(Runner *runner, int room, int x, int y, int camx, int camy)
 	set_global(runner->vmContext, "offsety", 0);
 	set_global(runner->vmContext, "camstartx", camx);
 	set_global(runner->vmContext, "camstarty", camy);
-	list = runner->instancesByExactObject[266];
+	list = runner->instancesByExactObject[AM2R_OBJ_CHARACTER];
 	n = (int32_t)arrlen(list);
 	for (i = 0; i < n; i++) {
 		inst = list[i];
@@ -47,8 +47,8 @@ void Wii_warpTo(Runner *runner, int room, int x, int y, int camx, int camy)
 		inst->y = inst->yprevious = inst->ystart = (float)y;
 		inst->spatialGridDirty = true;
 	}
-	if (nobj > 426) {
-		list = runner->instancesByExactObject[426];
+	if (nobj > AM2R_OBJ_CAMERA) {
+		list = runner->instancesByExactObject[AM2R_OBJ_CAMERA];
 		n = (int32_t)arrlen(list);
 		for (i = 0; i < n; i++) {
 			inst = list[i];
@@ -62,7 +62,7 @@ void Wii_warpTo(Runner *runner, int room, int x, int y, int camx, int camy)
 	logInfo("Wii: warp to room %d at %d,%d\n", room, x, y);
 }
 
-/* Optional sd:/apps/am2r/game/warp.txt: "room x y". Used to reach water without a 4k-px walk. */
+/* Optional debug warp: warp.txt beside the game holds "room x y". */
 void Wii_tryWarp(Runner *runner)
 {
 	static int armed;
@@ -74,9 +74,7 @@ void Wii_tryWarp(Runner *runner)
 	if (armed < 0)
 		return;
 	if (armed == 0) {
-		f = fopen("sd:/apps/am2r/game/warp.txt", "r");
-		if (!f)
-			f = fopen("game/warp.txt", "r");
+		f = fopen(WII_GAME_DIR "/warp.txt", "r");
 		if (!f) {
 			armed = -1;
 			return;
@@ -96,9 +94,9 @@ void Wii_tryWarp(Runner *runner)
 		armed = 1;
 		logInfo("Wii: warp.txt room=%d (%d,%d)\n", room, x, y);
 	}
-	if (runner->currentRoomIndex != 21)
+	if (runner->currentRoomIndex != AM2R_ROOM_LANDING)
 		return;
-	if (++landed != 40)
+	if (++landed != WARP_SETTLE_FRAMES)
 		return;
 	Wii_warpTo(runner, room, x, y, x, y);
 }

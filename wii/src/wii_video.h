@@ -9,8 +9,6 @@
 
 bool WiiVideo_init(void);
 void WiiVideo_present(void);
-/* CopyDisp without clear/swap so a later CopyTex sees the EFB. */
-void WiiVideo_touchEfb(void);
 GXRModeObj *WiiVideo_rmode(void);
 u32 WiiVideo_fbWidth(void);
 u32 WiiVideo_efbHeight(void);

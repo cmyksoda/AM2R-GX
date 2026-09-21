@@ -15,7 +15,7 @@ bool WiiLog_open(const char *path)
 	if (!g_log)
 		return false;
 	setvbuf(g_log, NULL, _IONBF, 0);
-	fprintf(g_log, "=== AM2R GX Stage 5 log ===\n");
+	fprintf(g_log, "=== AM2R GX log ===\n");
 	return true;
 }
 

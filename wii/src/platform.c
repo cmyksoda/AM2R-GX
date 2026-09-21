@@ -11,7 +11,6 @@
 #include "vm.h"
 #include "wii_video.h"
 
-#include <string.h>
 #include <time.h>
 
 static Runner *g_runner;
@@ -24,11 +23,6 @@ static RValue stub_zero(MAYBE_UNUSED VMContext *ctx, MAYBE_UNUSED RValue *args, 
 	return RValue_makeReal(0.0);
 }
 
-static RValue stub_undef(MAYBE_UNUSED VMContext *ctx, MAYBE_UNUSED RValue *args, MAYBE_UNUSED int32_t argCount)
-{
-	return RValue_makeUndefined();
-}
-
 static void register_stubs(VMContext *ctx)
 {
 	static const char *zeros[] = {
@@ -37,7 +31,6 @@ static void register_stubs(VMContext *ctx)
 		"joystick_rpos",
 		"joystick_upos",
 		"joystick_vpos",
-		"file_copy",
 		"show_message_async",
 		"get_integer",
 		"show_message",
@@ -64,7 +57,6 @@ static void register_stubs(VMContext *ctx)
 		if (VM_findBuiltin(ctx, zeros[i]) == NULL)
 			VM_registerBuiltin(ctx, zeros[i], stub_zero);
 	}
-	(void)stub_undef;
 
 	if (ctx->funcCallCache) {
 		repeat(ctx->funcCallCacheCount, fi) {

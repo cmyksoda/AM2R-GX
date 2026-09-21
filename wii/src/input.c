@@ -14,6 +14,9 @@
 #include <wiiuse/wiiuse.h>
 #include <wiiuse/wpad.h>
 
+#define STICK_DEADZONE 0.2f
+#define STICK_DIGITAL 0.4f /* stick deflection that counts as a d-pad press */
+
 #define HOME_HOLD_FRAMES 60
 
 static int home_held;
@@ -39,7 +42,7 @@ static void joy_xy(const joystick_t *js, float *lx, float *ly)
 {
 	float rad;
 
-	if (!js || js->mag < 0.2f) {
+	if (!js || js->mag < STICK_DEADZONE) {
 		*lx = 0.0f;
 		*ly = 0.0f;
 		return;
@@ -57,7 +60,7 @@ static float gc_axis(s8 pos)
 		v = 1.0f;
 	if (v < -1.0f)
 		v = -1.0f;
-	if (v > -0.2f && v < 0.2f)
+	if (v > -STICK_DEADZONE && v < STICK_DEADZONE)
 		return 0.0f;
 	return v;
 }
@@ -66,17 +69,17 @@ static void apply_move(GamepadSlot *slot, float lx, float ly, bool up, bool down
 {
 	slot->axisValue[0] = lx;
 	slot->axisValue[1] = ly;
-	set_btn(slot, 12, up || ly < -0.4f);
-	set_btn(slot, 13, down || ly > 0.4f);
-	set_btn(slot, 14, left || lx < -0.4f);
-	set_btn(slot, 15, right || lx > 0.4f);
-	if (up || ly < -0.4f)
+	set_btn(slot, 12, up || ly < -STICK_DIGITAL);
+	set_btn(slot, 13, down || ly > STICK_DIGITAL);
+	set_btn(slot, 14, left || lx < -STICK_DIGITAL);
+	set_btn(slot, 15, right || lx > STICK_DIGITAL);
+	if (up || ly < -STICK_DIGITAL)
 		want(VK_UP);
-	if (down || ly > 0.4f)
+	if (down || ly > STICK_DIGITAL)
 		want(VK_DOWN);
-	if (left || lx < -0.4f)
+	if (left || lx < -STICK_DIGITAL)
 		want(VK_LEFT);
-	if (right || lx > 0.4f)
+	if (right || lx > STICK_DIGITAL)
 		want(VK_RIGHT);
 }
 
@@ -89,17 +92,17 @@ static void poll_classic(GamepadSlot *slot, u32 held, const expansion_t *exp)
 	apply_move(slot, lx, ly, held & WPAD_CLASSIC_BUTTON_UP, held & WPAD_CLASSIC_BUTTON_DOWN,
 		   held & WPAD_CLASSIC_BUTTON_LEFT, held & WPAD_CLASSIC_BUTTON_RIGHT);
 	if (held & WPAD_CLASSIC_BUTTON_B)
-		want(90);
+		want('Z');
 	if (held & WPAD_CLASSIC_BUTTON_Y)
-		want(88);
+		want('X');
 	if (held & WPAD_CLASSIC_BUTTON_A)
 		want(VK_CONTROL);
 	if (held & WPAD_CLASSIC_BUTTON_X)
-		want(83);
+		want('S');
 	if (held & (WPAD_CLASSIC_BUTTON_FULL_R | WPAD_CLASSIC_BUTTON_ZR))
 		want(VK_SHIFT);
 	if (held & (WPAD_CLASSIC_BUTTON_FULL_L | WPAD_CLASSIC_BUTTON_ZL))
-		want(65);
+		want('A');
 	if (held & WPAD_CLASSIC_BUTTON_PLUS)
 		want(VK_ENTER);
 	if (held & WPAD_CLASSIC_BUTTON_MINUS)
@@ -124,17 +127,17 @@ static void poll_nunchuk(GamepadSlot *slot, u32 held, const expansion_t *exp)
 	apply_move(slot, lx, ly, held & WPAD_BUTTON_UP, held & WPAD_BUTTON_DOWN,
 		   held & WPAD_BUTTON_LEFT, held & WPAD_BUTTON_RIGHT);
 	if (held & WPAD_BUTTON_A)
-		want(90);
+		want('Z');
 	if (held & WPAD_BUTTON_B)
-		want(88);
+		want('X');
 	if (held & WPAD_NUNCHUK_BUTTON_C)
 		want(VK_CONTROL);
 	if (held & WPAD_BUTTON_1)
 		want(VK_SHIFT);
 	if (held & WPAD_NUNCHUK_BUTTON_Z)
-		want(65);
+		want('A');
 	if (held & WPAD_BUTTON_2)
-		want(83);
+		want('S');
 	if (held & WPAD_BUTTON_PLUS)
 		want(VK_ENTER);
 	if (held & WPAD_BUTTON_MINUS)
@@ -153,17 +156,17 @@ static void poll_gcpad(GamepadSlot *slot, u16 held)
 	apply_move(slot, lx, ly, held & PAD_BUTTON_UP, held & PAD_BUTTON_DOWN,
 		   held & PAD_BUTTON_LEFT, held & PAD_BUTTON_RIGHT);
 	if (held & PAD_BUTTON_A)
-		want(90);
+		want('Z');
 	if (held & PAD_BUTTON_B)
-		want(88);
+		want('X');
 	if (held & PAD_BUTTON_Y)
 		want(VK_CONTROL);
 	if (held & PAD_TRIGGER_R)
 		want(VK_SHIFT);
 	if (held & PAD_TRIGGER_L)
-		want(65);
+		want('A');
 	if (held & PAD_BUTTON_X)
-		want(83);
+		want('S');
 	if (held & PAD_BUTTON_START)
 		want(VK_ENTER);
 	if (held & PAD_TRIGGER_Z)
@@ -279,8 +282,6 @@ void WiiInput_poll(Runner *runner)
 			slot->buttonPressed[i] = true;
 		if (!slot->buttonDown[i] && was)
 			slot->buttonReleased[i] = true;
-		if (i != 6 && i != 7 && slot->buttonDown[i])
-			slot->buttonValue[i] = 1.0f;
 	}
 	runner->gamepads->connectedCount = 1;
 

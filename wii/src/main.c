@@ -4,20 +4,20 @@
 #include "overscan.h"
 #include "wii_log.h"
 #include "wii_mem.h"
+#include "wii_paths.h"
 #include "wii_video.h"
 
 #include <fat.h>
 #include <gccore.h>
 #include <malloc.h>
-#include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
-#define GAME_DIR "sd:/apps/am2r"
-#define DATA_WIN "sd:/apps/am2r/game/data.win"
-#define SAVE_DIR "sd:/apps/am2r/save"
-#define LOG_PATH "sd:/apps/am2r/profile.txt"
+#define GAME_DIR WII_APP_DIR
+#define DATA_WIN WII_GAME_DIR "/data.win"
+#define SAVE_DIR WII_APP_DIR "/save"
+#define LOG_PATH WII_LOG_PATH
 
 static void wait_home(const char *why)
 {
@@ -82,14 +82,14 @@ int main(int argc, char **argv)
 
 	Overscan_load();
 
-	logInfo("AM2R GX (live input)\n");
+	logInfo("AM2R GX\n");
 	logInfo("mode %ux%u xfb=%u aspect=%s\n", WiiVideo_fbWidth(), WiiVideo_efbHeight(),
 		WiiVideo_rmode() ? WiiVideo_rmode()->xfbHeight : 0,
 		WiiVideo_isWide() ? "16:9 stretch" : "4:3 fill");
 	log_mallinfo("boot");
 
 	if (access(DATA_WIN, R_OK) != 0) {
-		wait_home("data.win not found at sd:/apps/am2r/game/ -- run 'make sd-pack' and copy apps/ onto the SD card");
+		wait_home("data.win not found at " WII_GAME_DIR "/ -- run 'make sd-pack' and copy apps/ onto the SD card");
 		WiiLog_close();
 		return 1;
 	}

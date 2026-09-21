@@ -1,5 +1,7 @@
 #include "wii_video.h"
 
+#include "wii_paths.h"
+
 #include <malloc.h>
 #include <ogc/conf.h>
 #include <stdio.h>
@@ -39,7 +41,7 @@ bool WiiVideo_init(void)
 
 	VIDEO_Init();
 	rmode = pick_mode();
-	/* 4:3 TV: fill. 16:9 TV: same fill = horizontal stretch. Pillarbox later. */
+	/* 16:9 TVs get the same fill (a horizontal stretch) unless WII_WIDE_PILLARBOX is built in. */
 	wide = (CONF_GetAspectRatio() == CONF_ASPECT_16_9);
 
 	fb = 0;
@@ -87,13 +89,6 @@ bool WiiVideo_init(void)
 
 	inited = true;
 	return true;
-}
-
-void WiiVideo_touchEfb(void)
-{
-	GX_DrawDone();
-	GX_CopyDisp(xfb[fb], GX_FALSE);
-	GX_Flush();
 }
 
 void WiiVideo_present(void)
@@ -155,6 +150,6 @@ void WiiVideo_panic(const char *title, const char *body)
 	printf("\x1b[2J\n\n  AM2R GX -- %s\n\n", title ? title : "fatal error");
 	if (body && *body)
 		printf("  %s\n\n", body);
-	printf("  Log: sd:/apps/am2r/profile.txt\n");
+	printf("  Log: " WII_LOG_PATH "\n");
 	printf("  Hold HOME to return to the loader.\n");
 }

@@ -23,10 +23,11 @@
 
 #define PAGE_LRU_MAX 20
 /* Headroom kept free for room loads, and what one page load needs: its PNG blob plus 2 MB of
- * texels (the decode itself streams, so there is no full-size temporary any more). */
+ * texels (the PNG decode streams row by row, so no full-size temporary). */
 #define MEM_RESERVE (4u << 20)
 #define PAGE_LOAD_NEED (4u << 20)
 #define PAGE_RETRY_FRAMES 300
+#define GX_MAX_TEX_DIM 1024
 /* AM2R orphans a surface on nearly every room change (water never frees; others free only in
  * Destroy, which room end doesn't fire). GM surfaces are volatile, so idle ones are fair game. */
 #define SURF_IDLE_FRAMES 600
@@ -37,10 +38,10 @@
 /* EFB is 640×480 (not 528). 512×512 CopyTex is taller than the EFB, so s_map is 4×4 of 512×256. */
 #define SURF_TILE_W 512
 #define SURF_TILE_H 256
-/* RGB565 has no alpha: draw_clear_alpha(0,0) on gui_surface covered the room. */
+/* RGB565 has no alpha; gui_surface needs draw_clear_alpha(0,0) to stay transparent. */
 #define SURF_TEX_FMT GX_TF_RGBA8
 #define SURF_BPP 4
-/* 1 = pillarbox 4:3 in a 16:9 XFB (480×480 centered). 0 = stretch (now). */
+/* 1 = pillarbox 4:3 on a 16:9 TV (480 wide, centred); 0 = stretch. */
 #ifndef WII_WIDE_PILLARBOX
 #define WII_WIDE_PILLARBOX 0
 #endif
@@ -54,7 +55,6 @@ typedef struct {
 	bool loaded;
 	bool failed;
 	u64 retryAt; /* a failed load is retried after a cooldown, not every frame */
-	int32_t w, h;
 	int32_t texW, texH;
 	u16 *texels;
 	GXTexObj obj;
@@ -85,7 +85,6 @@ typedef struct {
 typedef struct {
 	Renderer base;
 	int32_t gameW, gameH;
-	int32_t windowW, windowH;
 
 	GxPage *pages;
 	uint32_t pageCount;
@@ -499,7 +498,7 @@ static void emit_quad(float x0, float y0, float x1, float y1, float x2, float y2
 		tr1 = s->tilesY - 1;
 	if (c1 < c0 || tr1 < tr0)
 		return;
-	/* GX CopyTex of tiled EFB never wrote texels (320×240 magenta probe stayed 0xAA). */
+	/* Tiled surfaces are rasterized on the CPU: GX CopyTex of a tiled EFB never wrote texels. */
 	for (tr = tr0; tr <= tr1; tr++) {
 		for (c = c0; c <= c1; c++) {
 			int ox = c * SURF_TILE_W;
@@ -700,10 +699,10 @@ static bool gx_load_page(GxRenderer *gx, uint32_t pageId)
 		if (!pixels)
 			goto fail;
 	}
-	if (w > 1024)
-		w = 1024;
-	if (h > 1024)
-		h = 1024;
+	if (w > GX_MAX_TEX_DIM)
+		w = GX_MAX_TEX_DIM;
+	if (h > GX_MAX_TEX_DIM)
+		h = GX_MAX_TEX_DIM;
 	tw = pad4(w);
 	th = pad4(h);
 	while (gx->pagesResident >= PAGE_LRU_MAX && gx_evict_page(gx))
@@ -732,8 +731,6 @@ static bool gx_load_page(GxRenderer *gx, uint32_t pageId)
 	GX_InitTexObj(&page->obj, texels, (u16)tw, (u16)th, GX_TF_RGB5A3, GX_CLAMP, GX_CLAMP, GX_FALSE);
 	GX_InitTexObjFilterMode(&page->obj, GX_NEAR, GX_NEAR);
 	page->texels = texels;
-	page->w = w;
-	page->h = h;
 	page->texW = tw;
 	page->texH = th;
 	page->loaded = true;
@@ -818,21 +815,6 @@ static void gx_flush_target(GxRenderer *gx)
 				continue;
 			DCFlushRange(t->texels, surf_bytes(t->texW, t->texH));
 			t->objReady = false;
-		}
-		{
-			static int cpuFlushLog;
-			u32 i, sum = 0, nbytes;
-			u8 *p;
-
-			t = &s->tiles[0];
-			nbytes = t->texels ? surf_bytes(t->texW, t->texH) : 0;
-			p = (u8 *)t->texels;
-			for (i = 0; i < nbytes; i++)
-				sum += p[i];
-			if (cpuFlushLog < 4) {
-				logInfo("GX: cpu-flush tiled %dx%d tile00 sum=%u\n", s->tilesX, s->tilesY, sum);
-				cpuFlushLog++;
-			}
 		}
 		GX_InvalidateTexAll();
 		gx->targetDirty = false;
@@ -987,8 +969,6 @@ static void gx_bind_host(GxRenderer *gx)
 	/* Don't recopy the app surface from an EFB that set_target/clear already stomped. */
 	if (gx->currentTarget != gx->appSurfId)
 		gx_flush_target(gx);
-	else
-		gx->currentTarget = HOST_TARGET;
 	gx->currentTarget = HOST_TARGET;
 	gx->targetBound = true;
 	gx->targetDirty = false;
@@ -1174,8 +1154,6 @@ static int32_t gx_alloc_surface(GxRenderer *gx, int32_t width, int32_t height)
 		memset(gx->surfs + gx->surfCount, 0, (n - gx->surfCount) * sizeof(GxSurf));
 		id = gx->surfCount < 1 ? 1 : (int32_t)gx->surfCount;
 		gx->surfCount = n;
-		if (id == 0)
-			id = 1;
 	}
 	gx_surf_release(&gx->surfs[id]);
 	gx->surfs[id].exists = true;
@@ -1205,8 +1183,6 @@ static int32_t gx_alloc_surface(GxRenderer *gx, int32_t width, int32_t height)
 	gx->surfs[id].texW = tw;
 	gx->surfs[id].texH = th;
 	gx->surfs[id].texels = texels;
-	if (id < 8)
-		logInfo("GX: surface %d %dx%d\n", id, width, height);
 	return id;
 }
 
@@ -1287,8 +1263,6 @@ static void gxBeginFrame(Renderer *renderer, int32_t gameW, int32_t gameH, int32
 
 	gx->gameW = gameW;
 	gx->gameH = gameH;
-	gx->windowW = windowW;
-	gx->windowH = windowH;
 	gx->frameCounter++;
 	gx->viewActive = false;
 	gx->viewSnapped = false;
@@ -1301,11 +1275,9 @@ static void gxBeginFrame(Renderer *renderer, int32_t gameW, int32_t gameH, int32
 	GX_SetAlphaUpdate(GX_TRUE);
 	if ((gx->frameCounter % 60) == 0)
 		gx_make_room(gx, MEM_RESERVE);
-	if (renderer->runner) {
-		Wii_tryWarp(renderer->runner);
-		Wii_sweepTick(renderer->runner);
-		Wii_forceGamepadProfile(renderer->runner);
-	}
+	Wii_tryWarp(renderer->runner);
+	Wii_sweepTick(renderer->runner);
+	Wii_forceGamepadProfile(renderer->runner);
 	appId = renderer->runner->applicationSurfaceId;
 	if (appId >= 0)
 		gx_bind_surface(gx, appId, false);
@@ -1342,7 +1314,6 @@ static void gxBeginView(Renderer *renderer, int32_t viewX, int32_t viewY, int32_
 	gx->viewPortW = portW;
 	gx->viewPortH = portH;
 	gx_ortho((float)viewY, (float)(viewY + viewH), (float)viewX, (float)(viewX + viewW));
-	(void)viewW;
 	if (renderer->runner->viewsEnabled)
 		viewCurrent = renderer->runner->viewCurrent;
 	view = &renderer->runner->views[viewCurrent];
@@ -1412,9 +1383,8 @@ static void gxEndFrameInit(Renderer *renderer)
 	GxRenderer *gx = (GxRenderer *)renderer;
 
 	if (renderer->runner->usingAppSurface && !renderer->runner->appSurfaceAutoDraw) {
-		/* Wipe the whole EFB (the app surface renders into its top-left corner) before the
-		 * manual present. Use the FULL framebuffer, not the overscan-inset viewport, or that
-		 * scratch corner peeks out in the black border once overscan shrinks the picture. */
+		/* Clear the full EFB, not the overscan-inset viewport: the app surface renders into the
+		 * top-left corner and would peek out of the black border once overscan shrinks the picture. */
 		gx_bind_host(gx);
 		gx_viewport(0, 0, (int)WiiVideo_fbWidth(), (int)WiiVideo_efbHeight());
 		gxClearScreen(renderer, 0x000000, 1.0f);
@@ -1958,8 +1928,6 @@ static void gxGpuSetBlendMode(Renderer *renderer, int32_t mode)
 	GxRenderer *gx = (GxRenderer *)renderer;
 
 	gx->blendMode = mode;
-	if (mode == bm_max)
-		logInfo("GX: bm_max (approx SRCALPHA, INVSRCCLR)\n");
 	gx_apply_blend(gx);
 }
 
@@ -2119,9 +2087,6 @@ static bool gxSetRenderTarget(Renderer *renderer, int32_t surfaceID, bool implic
 			gx_viewport(0, 0, gx->gameW, gx->gameH);
 			gx_ortho(0, (float)gx->gameH, 0, (float)gx->gameW);
 		}
-		if (camera)
-			gxApplyProjection(renderer, &camera->viewMatrix, &camera->projectionMatrix);
-		return true;
 	}
 	if (camera)
 		gxApplyProjection(renderer, &camera->viewMatrix, &camera->projectionMatrix);
@@ -2195,13 +2160,7 @@ static void gxDrawSurfaceColor(Renderer *renderer, int32_t surfaceID, int32_t sr
 	Matrix4f_setTransform2D(&transform, x, y, xscale, yscale, angleRad);
 	if (s->tiles) {
 		int col, row;
-		static int atlasBlitLog;
 
-		if (atlasBlitLog < 4) {
-			logInfo("GX: draw tiled surface %d %dx%d (%dx%d tiles) at %.0f,%.0f\n",
-				surfaceID, s->w, s->h, s->tilesX, s->tilesY, x, y);
-			atlasBlitLog++;
-		}
 		for (row = 0; row < s->tilesY; row++) {
 			for (col = 0; col < s->tilesX; col++) {
 				GxTile *t = gx_tile_at(s, col, row);
@@ -2361,7 +2320,6 @@ static void gxSurfaceCopy(Renderer *renderer, int32_t destSurfaceID, int32_t des
 	GxSurf *src, *dest;
 	int32_t saved = gx->currentTarget;
 	u32 nbytes;
-	static int copyLog;
 
 	if (srcSurfaceID < 0 || destSurfaceID < 0)
 		return;
@@ -2387,10 +2345,6 @@ static void gxSurfaceCopy(Renderer *renderer, int32_t destSurfaceID, int32_t des
 		DCFlushRange(dest->texels, nbytes);
 		dest->objReady = false;
 		GX_InvalidateTexAll();
-		if (copyLog < 8) {
-			logInfo("GX: surface_copy memcpy %d->%d %dx%d\n", srcSurfaceID, destSurfaceID, src->w, src->h);
-			copyLog++;
-		}
 		return;
 	}
 
@@ -2401,10 +2355,6 @@ static void gxSurfaceCopy(Renderer *renderer, int32_t destSurfaceID, int32_t des
 		      part ? srcH : src->h, (float)destX, (float)destY, 1.0f, 1.0f, 0, 0xFFFFFF, 1.0f);
 	gx_apply_blend(gx);
 	gx_flush_target(gx);
-	if (copyLog < 8) {
-		logInfo("GX: surface_copy efb %d->%d\n", srcSurfaceID, destSurfaceID);
-		copyLog++;
-	}
 	if (saved == HOST_TARGET)
 		gx_bind_host(gx);
 	else if (saved >= 0)
