@@ -1,5 +1,6 @@
 #include "common.h"
 #include "gettime.h"
+#include "gx_renderer.h"
 #include "input.h"
 #include "log.h"
 #include "platformdefs.h"
@@ -11,6 +12,7 @@
 #include "vm.h"
 #include "wii_video.h"
 
+#include <string.h>
 #include <time.h>
 
 static Runner *g_runner;
@@ -35,6 +37,12 @@ static RValue stub_application_get_position(VMContext *ctx, MAYBE_UNUSED RValue 
 	return RValue_makeArray(pos);
 }
 
+static RValue wii_display_reset(MAYBE_UNUSED VMContext *ctx, MAYBE_UNUSED RValue *args, MAYBE_UNUSED int32_t argCount)
+{
+	GxRenderer_loseSurfaces();
+	return RValue_makeReal(0.0);
+}
+
 static void register_stubs(VMContext *ctx)
 {
 	static const char *zeros[] = {
@@ -49,7 +57,6 @@ static void register_stubs(VMContext *ctx)
 		"file_text_open_append",
 		"date_current_datetime",
 		"date_datetime_string",
-		"display_reset",
 		"get_integer_async",
 		"show_debug_overlay",
 		"screen_save",
@@ -69,6 +76,8 @@ static void register_stubs(VMContext *ctx)
 		if (VM_findBuiltin(ctx, zeros[i]) == NULL)
 			VM_registerBuiltin(ctx, zeros[i], stub_zero);
 	}
+	if (VM_findBuiltin(ctx, "display_reset") == NULL)
+		VM_registerBuiltin(ctx, "display_reset", wii_display_reset);
 	if (VM_findBuiltin(ctx, "application_get_position") == NULL)
 		VM_registerBuiltin(ctx, "application_get_position", stub_application_get_position);
 

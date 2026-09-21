@@ -24,6 +24,7 @@
 /* Headroom kept free for room loads, and what one page load needs: its PNG blob plus 2 MB of
  * texels (the PNG decode streams row by row, so no full-size temporary). */
 #define MEM_RESERVE (4u << 20)
+#define LOSE_SURFACES_FRAMES 5 /* comfortably past the game's 2-frame init */
 #define HEAP_RESERVE (14u << 20) /* what malloc keeps of MEM2 once the game data is loaded */
 #define PAGE_LOAD_NEED (4u << 20)
 #define PAGE_RETRY_FRAMES 300
@@ -115,6 +116,7 @@ typedef struct {
 	bool primTextured;
 	int32_t appSurfId;
 	bool viewActive;
+	int32_t viewSurf; /* surface the current view draws into (1.5.5 widescreen), -1 = the usual target */
 	bool viewSnapped;
 	int32_t viewX, viewY, viewW, viewH;
 	int32_t viewPortX, viewPortY, viewPortW, viewPortH;
@@ -1272,6 +1274,31 @@ static void gxDestroy(Renderer *renderer)
 	free(gx);
 }
 
+/* On the real runner display_reset is a device reset: every surface dies, a few frames later.
+ * 1.5.5 depends on it - its wide surface is born 320 wide during oControl's 2-frame init, and is
+ * only ever recreated at 426 because that reset wipes it. */
+/* Not a renderer field: the game's first display_reset comes before the renderer's first frame. */
+static int gx_lose_in;
+
+static void gx_lose_surfaces(GxRenderer *gx)
+{
+	int32_t appId = gx->base.runner ? gx->base.runner->applicationSurfaceId : -1;
+	uint32_t i;
+
+	for (i = 1; i < gx->surfCount; i++) {
+		if (!gx->surfs[i].exists || (int32_t)i == appId)
+			continue;
+		gx_surf_release(&gx->surfs[i]);
+		memset(&gx->surfs[i], 0, sizeof(GxSurf));
+		gx->surfs[i].retired = true;
+	}
+}
+
+void GxRenderer_loseSurfaces(void)
+{
+	gx_lose_in = LOSE_SURFACES_FRAMES;
+}
+
 static void gxBeginFrame(Renderer *renderer, int32_t gameW, int32_t gameH, int32_t windowW, int32_t windowH)
 {
 	GxRenderer *gx = (GxRenderer *)renderer;
@@ -1289,6 +1316,8 @@ static void gxBeginFrame(Renderer *renderer, int32_t gameW, int32_t gameH, int32
 	gx_apply_alpha_test(gx);
 	GX_SetColorUpdate(GX_TRUE);
 	GX_SetAlphaUpdate(GX_TRUE);
+	if (gx_lose_in > 0 && --gx_lose_in == 0)
+		gx_lose_surfaces(gx);
 	if ((gx->frameCounter % 60) == 0)
 		gx_make_room(gx, MEM_RESERVE);
 	Wii_tryWarp(renderer->runner);
@@ -1321,6 +1350,7 @@ static void gxBeginView(Renderer *renderer, int32_t viewX, int32_t viewY, int32_
 	gx->base.CPortW = portW;
 	gx->base.CPortH = portH;
 	gx->viewActive = true;
+	gx->viewSurf = -1;
 	gx->viewX = viewX;
 	gx->viewY = viewY;
 	gx->viewW = viewW;
@@ -1355,6 +1385,30 @@ static void gxApplyProjection(Renderer *renderer, const Matrix4f *viewMatrix, co
 {
 	renderer->gmlMatrices[MATRIX_VIEW] = *viewMatrix;
 	renderer->gmlMatrices[MATRIX_PROJECTION] = *projectionMatrix;
+}
+
+static void gx_view_ortho(GxRenderer *gx)
+{
+	gx_ortho((float)gx->viewY, (float)(gx->viewY + gx->viewH), (float)gx->viewX, (float)(gx->viewX + gx->viewW));
+}
+
+/* A view with its own surface (1.5.5's 426-wide view) never goes through beginView: the engine binds
+ * the surface and hands us the camera. Without this the room was drawn from its top-left corner. */
+static void gxApplyViewProjection(Renderer *renderer, const Matrix4f *viewMatrix, const Matrix4f *projectionMatrix)
+{
+	GxRenderer *gx = (GxRenderer *)renderer;
+	GMLCamera *camera = Runner_getCameraById(renderer->runner, renderer->cameraCurrent);
+
+	gxApplyProjection(renderer, viewMatrix, projectionMatrix);
+	if (!camera || gx->currentTarget < 0)
+		return;
+	gx->viewActive = true;
+	gx->viewSurf = gx->currentTarget;
+	gx->viewX = (int32_t)camera->viewX;
+	gx->viewY = (int32_t)camera->viewY;
+	gx->viewW = camera->viewWidth;
+	gx->viewH = camera->viewHeight;
+	gx_view_ortho(gx);
 }
 
 static void gxBeginGUI(Renderer *renderer, int32_t guiW, int32_t guiH, int32_t portX, int32_t portY,
@@ -2104,6 +2158,8 @@ static bool gxSetRenderTarget(Renderer *renderer, int32_t surfaceID, bool implic
 			gx_ortho(0, (float)gx->gameH, 0, (float)gx->gameW);
 		}
 	}
+	if (gx->viewActive && surfaceID == gx->viewSurf)
+		gx_view_ortho(gx);
 	if (camera)
 		gxApplyProjection(renderer, &camera->viewMatrix, &camera->projectionMatrix);
 	return true;
@@ -2612,7 +2668,7 @@ Renderer *GxRenderer_create(void)
 	gxVtable.endFrameEnd = gxEndFrameEnd;
 	gxVtable.beginView = gxBeginView;
 	gxVtable.endView = gxEndView;
-	gxVtable.applyProjection = gxApplyProjection;
+	gxVtable.applyProjection = gxApplyViewProjection;
 	gxVtable.beginGUI = gxBeginGUI;
 	gxVtable.setGuiProjection = gxSetGuiProjection;
 	gxVtable.endGUI = gxEndGUI;
