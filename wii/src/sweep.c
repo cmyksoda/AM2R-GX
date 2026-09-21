@@ -42,8 +42,7 @@ static uint64_t lastOps, opsSum;
 static uint32_t opsMax, arenaMin, soakOps; /* soakOps: worst frame since the last soak line */
 static bool shotDue, shotLast;
 static uint8_t *usage;
-static uint32_t usageBytes;
-static char shotLine[160];
+static int tapeRoom = -1;
 
 static bool sweep_load(void)
 {
@@ -206,6 +205,17 @@ static void sweep_leave(Runner *runner)
 	sweep_usage();
 }
 
+/* A replay's fingerprint: two runs are in sync iff these lines match. The RNG word moves on every
+ * random() call, so it catches a desync long before Samus ends up in a different room. */
+static void tape_mark(Runner *runner, const char *what)
+{
+	Instance *samus = sweep_samus(runner);
+
+	logInfo("TAPE %s frame=%d room=%d sx=%d sy=%d rng=%08x.%u\n", what, runner->frameCount,
+	        runner->currentRoomIndex, samus ? (int)samus->x : -1, samus ? (int)samus->y : -1,
+	        (unsigned)runner->random.state[runner->random.index & 15], (unsigned)runner->random.index);
+}
+
 /* shots.txt: frame numbers at which to announce "TAPE shot", so the host can screenshot a
  * tape run at exact frames however slowly the emulator is going. */
 static void shots_tick(Runner *runner)
@@ -224,8 +234,13 @@ static void shots_tick(Runner *runner)
 		fclose(f);
 		logInfo("TAPE armed shots=%d\n", shotCount);
 	}
+	if (shotCount > 0 && runner->currentRoomIndex != tapeRoom) {
+		tapeRoom = runner->currentRoomIndex;
+		tape_mark(runner, "room");
+	}
 	if (next >= shotCount || runner->frameCount < shotFrames[next])
 		return;
+	tape_mark(runner, "mark");
 	snprintf(shotLine, sizeof shotLine, "TAPE shot frame=%d room=%d\n", runner->frameCount, runner->currentRoomIndex);
 	shotLast = ++next == shotCount;
 	shotDue = true;
