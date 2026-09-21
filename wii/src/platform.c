@@ -37,6 +37,35 @@ static RValue stub_application_get_position(VMContext *ctx, MAYBE_UNUSED RValue 
 	return RValue_makeArray(pos);
 }
 
+static BuiltinFunc engineIniReadReal, engineIniWriteReal;
+
+static RValue ini_screen(VMContext *ctx, BuiltinFunc fn, const char *key, double value)
+{
+	RValue args[3] = { RValue_makeString("Screen"), RValue_makeString(key), RValue_makeReal(value) };
+
+	return fn(ctx, args, 3);
+}
+
+/* 1.5.5 asks its ini for [Screen] Widescreen (default on). The console's own 4:3 / 16:9 setting
+ * picks it instead, once: after that the player's in-game toggle is what the ini holds and it wins,
+ * until the console setting changes (or the card moves to another console) and we detect afresh. */
+static RValue wii_ini_read_real(VMContext *ctx, RValue *args, int32_t argCount)
+{
+	double console = WiiVideo_isWide() ? 1.0 : 0.0;
+
+	if (argCount < 3 || args[0].type != RVALUE_STRING || args[1].type != RVALUE_STRING ||
+	    strcmp(args[0].string, "Screen") != 0 || strcmp(args[1].string, "Widescreen") != 0)
+		return engineIniReadReal(ctx, args, argCount);
+	if (RValue_toReal(ini_screen(ctx, engineIniReadReal, "WiiAspect", -1.0)) == console)
+		return engineIniReadReal(ctx, args, argCount);
+	if (engineIniWriteReal) {
+		ini_screen(ctx, engineIniWriteReal, "WiiAspect", console);
+		ini_screen(ctx, engineIniWriteReal, "Widescreen", console);
+	}
+	logInfo("Wii: console aspect %s -> widescreen %s\n", console ? "16:9" : "4:3", console ? "on" : "off");
+	return RValue_makeReal(console);
+}
+
 static RValue wii_display_reset(MAYBE_UNUSED VMContext *ctx, MAYBE_UNUSED RValue *args, MAYBE_UNUSED int32_t argCount)
 {
 	GxRenderer_loseSurfaces();
@@ -80,6 +109,9 @@ static void register_stubs(VMContext *ctx)
 		VM_registerBuiltin(ctx, "display_reset", wii_display_reset);
 	if (VM_findBuiltin(ctx, "application_get_position") == NULL)
 		VM_registerBuiltin(ctx, "application_get_position", stub_application_get_position);
+	/* A name can only be registered once; the call cache below is what routes calls to the wrapper. */
+	engineIniReadReal = VM_findBuiltin(ctx, "ini_read_real");
+	engineIniWriteReal = VM_findBuiltin(ctx, "ini_write_real");
 
 	if (ctx->funcCallCache) {
 		repeat(ctx->funcCallCacheCount, fi) {
@@ -98,6 +130,8 @@ static void register_stubs(VMContext *ctx)
 				ctx->funcCallCache[fi].scriptCodeIndex = ctx->codeIndexByName[sidx].value;
 				continue;
 			}
+			if (engineIniReadReal && ctx->funcCallCache[fi].builtin == (void *)engineIniReadReal)
+				ctx->funcCallCache[fi].builtin = (void *)wii_ini_read_real;
 			if (ctx->funcCallCache[fi].builtin != NULL)
 				continue;
 			b = VM_findBuiltin(ctx, name);
