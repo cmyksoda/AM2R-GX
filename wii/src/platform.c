@@ -6,6 +6,7 @@
 #include "runner.h"
 #include "runner_mouse.h"
 #include "rvalue.h"
+#include "sweep.h"
 #include "utils.h"
 #include "vm.h"
 #include "wii_video.h"
@@ -172,7 +173,7 @@ void *platformGetProcAddress(const char *name)
 bool platformHandleEvents(void)
 {
 	WiiInput_poll(g_runner);
-	return WiiInput_shouldQuit();
+	return WiiInput_shouldQuit() || Wii_sweepFinished();
 }
 
 void platformSleepUntil(uint64_t time)

@@ -36,7 +36,7 @@ void platformLog(const logType type, const char *format, va_list va)
 {
 	const char *prefix = "";
 	va_list copy, gecko;
-	char line[512];
+	static char line[8192];
 	int n;
 
 	switch (type) {
@@ -68,8 +68,11 @@ void platformLog(const logType type, const char *format, va_list va)
 
 	if (g_gecko) {
 		n = vsnprintf(line, sizeof line, format, gecko);
-		if (n > (int)sizeof line - 1)
+		/* Keep a truncated message line-terminated so the next one isn't glued onto it. */
+		if (n > (int)sizeof line - 1) {
 			n = sizeof line - 1;
+			line[n - 1] = '\n';
+		}
 		usb_sendbuffer_safe(1, prefix, strlen(prefix));
 		if (n > 0)
 			usb_sendbuffer_safe(1, line, n);

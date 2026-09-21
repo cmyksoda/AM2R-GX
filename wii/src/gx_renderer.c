@@ -1,5 +1,6 @@
 #include "gx_renderer.h"
 #include "overscan.h"
+#include "sweep.h"
 #include "warp.h"
 #include "wii_video.h"
 
@@ -1197,6 +1198,7 @@ static void gxBeginFrame(Renderer *renderer, int32_t gameW, int32_t gameH, int32
 	GX_SetAlphaUpdate(GX_TRUE);
 	if (renderer->runner) {
 		Wii_tryWarp(renderer->runner);
+		Wii_sweepTick(renderer->runner);
 		Wii_forceGamepadProfile(renderer->runner);
 	}
 	appId = renderer->runner->applicationSurfaceId;
