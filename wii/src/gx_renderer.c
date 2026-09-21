@@ -21,7 +21,6 @@
 #include <math.h>
 #include <string.h>
 
-#define PAGE_LRU_MAX 20
 /* Headroom kept free for room loads, and what one page load needs: its PNG blob plus 2 MB of
  * texels (the PNG decode streams row by row, so no full-size temporary). */
 #define MEM_RESERVE (4u << 20)
@@ -34,8 +33,8 @@
 #define SURF_RECLAIM_BELOW (12u << 20)
 #define HOST_TARGET (-1)
 #define EFB_MAX_W 640
-#define EFB_MAX_H 528
-/* EFB is 640×480 (not 528). 512×512 CopyTex is taller than the EFB, so s_map is 4×4 of 512×256. */
+#define EFB_MAX_H 480
+/* A 512×512 tile would be taller than the 480-line EFB, so tiles are 512×256 (s_map: 4×4). */
 #define SURF_TILE_W 512
 #define SURF_TILE_H 256
 /* RGB565 has no alpha; gui_surface needs draw_clear_alpha(0,0) to stay transparent. */
@@ -705,8 +704,6 @@ static bool gx_load_page(GxRenderer *gx, uint32_t pageId)
 		h = GX_MAX_TEX_DIM;
 	tw = pad4(w);
 	th = pad4(h);
-	while (gx->pagesResident >= PAGE_LRU_MAX && gx_evict_page(gx))
-		;
 	texels = WiiMem_texAlloc(tex_bytes(tw, th));
 	if (!texels && gx_evict_page(gx))
 		texels = WiiMem_texAlloc(tex_bytes(tw, th));

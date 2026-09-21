@@ -9,7 +9,7 @@ SD_GAME := dist/apps/am2r/game
 DOLPHIN_USER := project-notes/research/evidence-I/dolphin-user
 WII_SD := $(DOLPHIN_USER)/Load/WiiSDSync
 
-.PHONY: all hello run run-wii dist clean wii wii-sd sd-pack host-smoke
+.PHONY: all hello run run-wii clean wii wii-sd sd-pack host-smoke
 
 all: hello
 
@@ -25,13 +25,6 @@ run-wii:
 	@test -f $(WII_BUILD)/boot.dol || { echo "no $(WII_BUILD)/boot.dol — run 'make wii' first"; exit 1; }
 	@test -n "$(WIILOAD)" || { echo "set WIILOAD=tcp:<wii-ip> (HBC at its main menu)"; exit 1; }
 	wiiload $(WII_BUILD)/boot.dol
-
-dist: hello
-	mkdir -p dist/apps/am2r
-	cp -f hello/boot.dol dist/apps/am2r/boot.dol
-	cp -f wii/hbc/meta.xml dist/apps/am2r/meta.xml
-	cp -f wii/hbc/icon.png dist/apps/am2r/icon.png
-	@echo "dist/apps/am2r/"
 
 # Overlay our wii/ onto the pinned clone, apply patches, cross-compile.
 wii: $(BUTTER)/CMakeLists.txt
