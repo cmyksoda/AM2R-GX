@@ -641,7 +641,10 @@ static bool gx_reclaim_surface(GxRenderer *gx);
  * the heap in 300 KB holes that a 4 MB page decode couldn't use. Cached pages go last. */
 static void gx_make_room(GxRenderer *gx, u32 want)
 {
-	if (WiiMem_room() < (want > SURF_RECLAIM_BELOW ? want : SURF_RECLAIM_BELOW))
+	/* Surfaces live wherever textures do, so that is the pool whose pressure says "collect now". */
+	u32 room = WiiMem_texturesInHeap() ? WiiMem_room() : WiiMem_texFreeBytes();
+
+	if (room < (want > SURF_RECLAIM_BELOW ? want : SURF_RECLAIM_BELOW))
 		while (gx_reclaim_surface(gx))
 			;
 	while (WiiMem_texturesInHeap() && WiiMem_room() < want && gx_evict_page(gx))
