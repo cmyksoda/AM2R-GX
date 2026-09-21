@@ -1,0 +1,20 @@
+--- a/src/runner.c
++++ b/src/runner.c
+@@ -3331,6 +3331,9 @@
+                 FlattenedCollisionEvent* evt = &eventList->events[evtIdx];
+                 int32_t targetObjIndex = (int32_t) evt->targetObjectIndex;
+ 
++                // A handler that destroyed self must not run again for whatever else it still overlaps.
++                if (!self->active) break;
++
+                 if (0 > evt->codeId)
+                     continue;
+ 
+@@ -3414,6 +3417,7 @@
+                     if (traceThisPair) logInfo("  fire self->other: subtype=%d (%s) owner=%d (%s) codeId=%d codeName=%s\n", targetObjIndex, dataWin->objt.objects[targetObjIndex].name, evt->ownerObjectIndex, dataWin->objt.objects[evt->ownerObjectIndex].name, evt->codeId, dataWin->code.entries[evt->codeId].name);
+ #endif
+                     executeCollisionEvent(runner, self, other, targetObjIndex, evt->codeId, evt->ownerObjectIndex);
++                    if (!self->active) break;
+ 
+                     // When both objects are colliding, we'll execute the SELF collision (which we already did) and THEN execute the OTHER collision too
+                     // Because if we don't, the OTHER collision may never happen again because

@@ -47,6 +47,7 @@ wii: $(BUTTER)/CMakeLists.txt
 	cd $(BUTTER) && git apply ../../wii/patches/0008-vm-file-copy.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0009-loop-wii-audio.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0010-vm-audio-is-paused-wii.patch
+	cd $(BUTTER) && git apply ../../wii/patches/0011-runner-no-collision-events-after-destroy.patch
 	cmake -B $(WII_BUILD) -S $(BUTTER) \
 		-DCMAKE_TOOLCHAIN_FILE="$(CURDIR)/wii/cmake/wii.cmake" \
 		-DPLATFORM=wii \
