@@ -1668,6 +1668,7 @@ static void gxDrawTextColor(Renderer *renderer, const char *text, float x, float
 	lineStride = (0.0f > lineSeparation) ? TextUtils_lineStride(font)
 					     : (lineSeparation / (font->scaleY != 0.0f ? font->scaleY : 1.0f));
 	totalHeight = (float)lineCount * lineStride;
+	bool snap;
 	valignOffset = 0;
 	if (renderer->drawValign == 1)
 		valignOffset = -totalHeight / 2.0f;
@@ -1704,6 +1705,9 @@ static void gxDrawTextColor(Renderer *renderer, const char *text, float x, float
 			bool hasNext = lineLen > pos;
 
 			if (hasNext)
+	/* Centred odd-width lines start on a half pixel, where GX_NEAR samples sit exactly on texel
+	 * seams and real hardware garbles thin glyphs. Keep unrotated 1:1 text on the pixel grid. */
+	snap = angleDeg == 0.0f && xscale * font->scaleX == 1.0f && yscale * font->scaleY == 1.0f;
 				nextCh = TextUtils_decodeUtf8(text + lineStart, lineLen, &pos);
 			if (glyph && glyph->sourceWidth && glyph->sourceHeight) {
 				TexturePageItem *gtpag = tpag;
@@ -1788,6 +1792,12 @@ static void gxDrawText(Renderer *renderer, const char *text, float x, float y, f
 	gxDrawTextColor(renderer, text, x, y, xscale, yscale, angleDeg, c, c, c, c, renderer->drawAlpha, lineSeparation);
 }
 
+					if (snap) {
+						px0 = px3 = floorf(px0 + 0.5f);
+						px1 = px2 = floorf(px1 + 0.5f);
+						py0 = py1 = floorf(py0 + 0.5f);
+						py2 = py3 = floorf(py2 + 0.5f);
+					}
 static void gxFlush(MAYBE_UNUSED Renderer *renderer) {}
 
 static void gxClearScreen(Renderer *renderer, uint32_t color, float alpha)
