@@ -20,6 +20,7 @@
 #define SHOTS_FILE WII_GAME_DIR "/shots.txt"
 #define SHOTS_MAX 64
 #define SHOT_HOLD_VSYNCS 60
+#define USAGE_LINE_BYTES 96
 #define SWEEP_MAX 400
 #define SETTLE_FRAMES 30
 #define SOAK_TICK_FRAMES 600
@@ -40,6 +41,8 @@ static int landed, framesIn;
 static uint64_t lastOps, opsSum;
 static uint32_t opsMax, arenaMin, soakOps; /* soakOps: worst frame since the last soak line */
 static bool shotDue, shotLast;
+static uint8_t *usage;
+static uint32_t usageBytes;
 static char shotLine[160];
 
 static bool sweep_load(void)
@@ -91,6 +94,27 @@ static void sweep_enter(Runner *runner)
 	opsMax = 0;
 	arenaMin = 0xFFFFFFFFu;
 	lastOps = vm_ops(runner);
+	usage = GxRenderer_tpagUsage(&usageBytes);
+	if (usage)
+		memset(usage, 0, usageBytes);
+}
+
+/* Which graphics this room drew, as hex: the host packs rooms' graphics onto shared pages from it. */
+static void sweep_usage(void)
+{
+	char hex[USAGE_LINE_BYTES * 2 + 1];
+	uint32_t off, i, n;
+	bool any;
+
+	for (off = 0; usage && off < usageBytes; off += USAGE_LINE_BYTES) {
+		n = usageBytes - off < USAGE_LINE_BYTES ? usageBytes - off : USAGE_LINE_BYTES;
+		for (i = 0, any = false; i < n; i++) {
+			any = any || usage[off + i];
+			snprintf(hex + i * 2, 3, "%02x", usage[off + i]);
+		}
+		if (any)
+			logInfo("SWEEP tpag room=%d off=%u %s\n", stops[cur].room, (unsigned)off, hex);
+	}
 }
 
 /* Long dwells (soaks) want a time series: whatever keeps growing is the leak. */
@@ -179,6 +203,7 @@ static void sweep_leave(Runner *runner)
 	        (unsigned)(opsSum / (uint64_t)(dwell - SETTLE_FRAMES)), (unsigned)opsMax,
 	        (unsigned)arenaMin, mi.fordblks, (unsigned)audoBytes, (unsigned)mi.uordblks,
 	        (unsigned)surfN, (unsigned)surfBytes, (unsigned)pageBytes);
+	sweep_usage();
 }
 
 /* shots.txt: frame numbers at which to announce "TAPE shot", so the host can screenshot a

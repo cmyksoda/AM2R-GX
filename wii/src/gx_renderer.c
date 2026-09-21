@@ -1183,6 +1183,8 @@ static int32_t gx_alloc_surface(GxRenderer *gx, int32_t width, int32_t height)
 	return id;
 }
 
+static u8 *gx_usage; /* one bit per TPAG item drawn; NULL until a sweep asks for it */
+
 static void gx_draw_tpag(GxRenderer *gx, int32_t tpagIndex, float x0, float y0, float x1, float y1,
 			 float x2, float y2, float x3, float y3, float srcX, float srcY, float srcW, float srcH,
 			 u8 r0, u8 g0, u8 b0, u8 a0, u8 r1, u8 g1, u8 b1, u8 a1,
@@ -1195,6 +1197,8 @@ static void gx_draw_tpag(GxRenderer *gx, int32_t tpagIndex, float x0, float y0, 
 
 	if (tpagIndex < 0 || (uint32_t)tpagIndex >= dw->tpag.count)
 		return;
+	if (gx_usage)
+		gx_usage[tpagIndex >> 3] |= (u8)(1 << (tpagIndex & 7));
 	tpag = &dw->tpag.items[tpagIndex];
 	page = gx_page(gx, tpag->texturePageId);
 	if (!page)
@@ -2271,6 +2275,15 @@ static void gxSurfaceResize(Renderer *renderer, int32_t surfaceID, int32_t width
 		s->texH = th;
 		s->texels = texels;
 	}
+}
+
+/* Sweep-only. The first call starts the recording, so nothing is tracked on a real card. */
+uint8_t *GxRenderer_tpagUsage(uint32_t *bytes)
+{
+	*bytes = gx_cur ? (gx_cur->base.dataWin->tpag.count + 7) / 8 : 0;
+	if (!gx_usage && *bytes)
+		gx_usage = calloc(*bytes, 1);
+	return gx_usage;
 }
 
 void GxRenderer_memStats(uint32_t *surfCount, uint32_t *surfBytes, uint32_t *pageBytes)
