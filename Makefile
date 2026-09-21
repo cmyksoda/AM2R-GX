@@ -30,7 +30,7 @@ run-wii:
 wii: $(BUTTER)/CMakeLists.txt
 	mkdir -p $(BUTTER)/src/wii
 	rsync -a wii/src/ $(BUTTER)/src/wii/
-	cd $(BUTTER) && git checkout -- CMakeLists.txt src/gettime.c src/loop.c src/runner.c src/vm_builtins.c
+	cd $(BUTTER) && git checkout -- CMakeLists.txt src/gettime.c src/loop.c src/runner.c src/vm_builtins.c src/vm_builtins.h
 	cd $(BUTTER) && git apply ../../wii/patches/0001-cmake-add-PLATFORM-wii.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0002-gettime-wii.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0003-loop-no-sigaction-on-wii.patch
@@ -41,6 +41,7 @@ wii: $(BUTTER)/CMakeLists.txt
 	cd $(BUTTER) && git apply ../../wii/patches/0009-loop-wii-audio.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0010-vm-audio-is-paused-wii.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0011-runner-no-collision-events-after-destroy.patch
+	cd $(BUTTER) && git apply ../../wii/patches/0012-vm-game-id.patch
 	cmake -B $(WII_BUILD) -S $(BUTTER) \
 		-DCMAKE_TOOLCHAIN_FILE="$(CURDIR)/wii/cmake/wii.cmake" \
 		-DPLATFORM=wii \

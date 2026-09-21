@@ -1,0 +1,29 @@
+--- a/src/vm_builtins.c
++++ b/src/vm_builtins.c
+@@ -328,6 +328,7 @@
+     { "fps", BUILTIN_VAR_FPS },
+     { "fps_real", BUILTIN_VAR_FPS_REAL },
+     { "friction", BUILTIN_VAR_FRICTION },
++    { "game_id", BUILTIN_VAR_GAME_ID },
+     { "gp_axislh", BUILTIN_VAR_GP_AXIS_LH },
+     { "gp_axislv", BUILTIN_VAR_GP_AXIS_LV },
+     { "gp_axisrh", BUILTIN_VAR_GP_AXIS_RH },
+@@ -1286,6 +1287,8 @@
+             return RValue_makeReal(runner->fpsReal);
+         case BUILTIN_VAR_DEBUG_MODE:
+             return RValue_makeBool(false);
++        case BUILTIN_VAR_GAME_ID:
++            return RValue_makeReal((GMLReal) ctx->dataWin->gen8.gameID);
+         case BUILTIN_VAR_DELTA_TIME:
+             return RValue_makeReal(runner->deltaTime);
+ 
+--- a/src/vm_builtins.h
++++ b/src/vm_builtins.h
+@@ -241,6 +241,7 @@
+     BUILTIN_VAR_FPS,
+     BUILTIN_VAR_FPS_REAL,
+     BUILTIN_VAR_DEBUG_MODE,
++    BUILTIN_VAR_GAME_ID,
+     BUILTIN_VAR_DELTA_TIME,
+ 
+     // Legacy GMS 1.x globals

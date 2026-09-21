@@ -23,6 +23,18 @@ static RValue stub_zero(MAYBE_UNUSED VMContext *ctx, MAYBE_UNUSED RValue *args, 
 	return RValue_makeReal(0.0);
 }
 
+/* 1.5.5 places its HUD surface relative to this; ours always sits at the window origin. */
+static RValue stub_application_get_position(VMContext *ctx, MAYBE_UNUSED RValue *args, MAYBE_UNUSED int32_t argCount)
+{
+	GMLArray *pos = GMLArray_create(ctx->dataWin, 4);
+
+	GMLArray_set(pos, 0, RValue_makeReal(0.0));
+	GMLArray_set(pos, 1, RValue_makeReal(0.0));
+	GMLArray_set(pos, 2, RValue_makeReal((GMLReal)g_width));
+	GMLArray_set(pos, 3, RValue_makeReal((GMLReal)g_height));
+	return RValue_makeArray(pos);
+}
+
 static void register_stubs(VMContext *ctx)
 {
 	static const char *zeros[] = {
@@ -57,6 +69,8 @@ static void register_stubs(VMContext *ctx)
 		if (VM_findBuiltin(ctx, zeros[i]) == NULL)
 			VM_registerBuiltin(ctx, zeros[i], stub_zero);
 	}
+	if (VM_findBuiltin(ctx, "application_get_position") == NULL)
+		VM_registerBuiltin(ctx, "application_get_position", stub_application_get_position);
 
 	if (ctx->funcCallCache) {
 		repeat(ctx->funcCallCacheCount, fi) {
