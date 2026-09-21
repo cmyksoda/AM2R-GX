@@ -43,6 +43,8 @@
 #define DECODE_STACK_BYTES (64 * 1024)
 #define DECODE_THREAD_PRIO 80
 #define DECODE_NAP_US 4000
+#define BLOB_CACHE_BYTES (6u << 20)       // raw WAVs kept for replay; a playing voice owns its own swapped copy
+#define BLOB_BIG_BYTES (256u << 10)       // ambience-sized: cheap to re-read once, expensive to keep resident
 
 typedef struct {
     float gain, target, from;
@@ -97,6 +99,9 @@ typedef struct {
     int32_t dbg;            // throttle for first-N playSound diagnostics
     uint32_t statFrames;
     uint64_t statTicks, statMaxTicks;
+    uint32_t* blobUsed;     // per AUDO entry: tick of last play, for LRU
+    uint32_t blobTick;
+    uint32_t blobBytes;
 } WiiAudioSystem;
 
 static AudioSystemVtable wiiAudioVtable;
@@ -171,6 +176,24 @@ static bool parseWavHeader(const uint8_t* data, uint32_t dataSize, uint32_t* cha
     *audio = found;
     *audioLen = len;
     return found != nullptr && len > 0 && *chans > 0 && *rate > 0 && *bits > 0;
+}
+
+// Lazy AUDO loading never frees, so without this every sound ever heard stays in RAM.
+static void blobTrim(WiiAudioSystem* a, uint32_t keep) {
+    Audo* audo = &a->dw->audo;
+    for (;;) {
+        uint32_t victim = UINT32_MAX, oldest = UINT32_MAX;
+        bool over = a->blobBytes > BLOB_CACHE_BYTES;
+        for (uint32_t i = 0; i < audo->count; i++) {
+            if (audo->entries[i].data == nullptr || i == keep) continue;
+            if (audo->entries[i].dataSize > BLOB_BIG_BYTES) { victim = i; break; }
+            if (over && a->blobUsed[i] < oldest) { oldest = a->blobUsed[i]; victim = i; }
+        }
+        if (victim == UINT32_MAX) return;
+        free(audo->entries[victim].data);
+        audo->entries[victim].data = nullptr;
+        a->blobBytes -= audo->entries[victim].dataSize;
+    }
 }
 
 static void releaseBuf(WiiVoice* v) {
@@ -442,6 +465,7 @@ static void wiiInit(AudioSystem* audio, DataWin* dataWin, FileSystem* fs) {
     a->dw = dataWin;
     a->fs = fs;
     a->base.dw = dataWin;
+    a->blobUsed = (uint32_t*) calloc(dataWin->audo.count ? dataWin->audo.count : 1, sizeof(uint32_t));
     AESND_Init();
     AESND_Pause(false);
     for (int i = 0; i < WII_VOICES; i++) {
@@ -495,6 +519,7 @@ static void wiiDestroy(AudioSystem* audio) {
         free(a->streams[i].ring);
         free(a->streams[i].vorbisMem);
     }
+    free(a->blobUsed);
     free(a);
 }
 
@@ -535,8 +560,14 @@ static int32_t wiiPlaySound(AudioSystem* audio, int32_t soundIndex, MAYBE_UNUSED
         if (dbg) logInfo("  skip: bad audioFile\n");
         return -1;
     }
-    DataWin_loadAudoIfNeeded(group, (uint32_t) sound->audioFile);
     AudioEntry* entry = &group->audo.entries[sound->audioFile];
+    bool fresh = entry->data == nullptr;
+    DataWin_loadAudoIfNeeded(group, (uint32_t) sound->audioFile);
+    if (a->blobUsed != nullptr) {
+        if (fresh && entry->data != nullptr) a->blobBytes += entry->dataSize;
+        a->blobUsed[sound->audioFile] = ++a->blobTick;
+        blobTrim(a, (uint32_t) sound->audioFile);
+    }
     if (entry->data == nullptr || entry->dataSize == 0) { if (dbg) logInfo("  skip: no AUDO data\n"); return -1; }
 
     uint32_t chans = 0, rate = 0, bits = 0, audioLen = 0;
