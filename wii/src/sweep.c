@@ -23,6 +23,8 @@
 #define SHOTS_MAX 64
 #define SHOT_HOLD_VSYNCS 60
 #define USAGE_LINE_BYTES 96
+#define SCREEN_WAIT_FRAMES 1200 /* longest an item or cutscene screen may hold the tour up */
+#define LOST_SAMUS_FRAMES 180
 #define SWEEP_MAX 400
 #define SETTLE_FRAMES 30
 #define SOAK_TICK_FRAMES 600
@@ -45,6 +47,7 @@ static uint32_t opsMax, arenaMin, soakOps; /* soakOps: worst frame since the las
 static bool shotDue, shotLast;
 static uint8_t *usage;
 static int tapeRoom = -1;
+static int lostFrames;
 static bool tour; /* "tour 1" in sweep.txt: late-game kit, and every room gets the action script */
 
 /* One short burst of ordinary play, the same in every room: run, jump, shoot, aim up, morph and
@@ -122,14 +125,23 @@ static void tour_kit(Runner *runner)
 	Wii_setGlobal(runner, "pbombs", 20);
 }
 
-static void tour_keys(Runner *runner, int frame)
+/* The script can walk Samus into an item or a cutscene. Warping out of one of the game's own
+ * screens leaves her uncreated for good, so the tour lets it finish before moving on. */
+static bool tour_in_game_screen(Runner *runner)
+{
+	return strncmp(runner->dataWin->room.rooms[runner->currentRoomIndex].name, "rm_a", 4) != 0;
+}
+
+static void tour_keys(Runner *runner, int frame, bool dismissing)
 {
 	static bool down[GML_KEY_COUNT];
 	bool want[GML_KEY_COUNT] = { false };
 	uint32_t i;
 	int vk;
 
-	for (i = 0; i < sizeof tourScript / sizeof tourScript[0]; i++) {
+	if (dismissing)
+		want['Z'] = frame % 30 < 3;
+	for (i = 0; !dismissing && i < sizeof tourScript / sizeof tourScript[0]; i++) {
 		const TourKey *k = &tourScript[i];
 
 		if (frame >= k->from && frame < k->to && (k->every == 0 || (frame - k->from) % k->every < 3))
@@ -366,12 +378,19 @@ void Wii_sweepTick(Runner *runner)
 	if (delta > soakOps)
 		soakOps = delta;
 	/* The first frames carry room-start cost; they count toward max but not the average. */
-	if (framesIn >= SETTLE_FRAMES)
+	if (framesIn >= SETTLE_FRAMES && framesIn < dwell)
 		opsSum += delta;
 	framesIn++;
 
 	if (tour && runner->keyboard)
-		tour_keys(runner, framesIn);
+		tour_keys(runner, framesIn, framesIn >= dwell);
+	/* Hours of empty rooms and a 300 MB log taught this: without Samus the numbers mean nothing. */
+	lostFrames = tour && !tour_in_game_screen(runner) && !sweep_samus(runner) ? lostFrames + 1 : 0;
+	if (lostFrames > LOST_SAMUS_FRAMES) {
+		logInfo("SWEEP abort room=%d reason=no_samus\nSWEEP done\n", stops[cur].room);
+		state = 3;
+		return;
+	}
 	if (stops[cur].dropEvery > 0 && framesIn > SETTLE_FRAMES && (framesIn % stops[cur].dropEvery) == 0)
 		sweep_drop(runner);
 	if (framesIn == dwell / 2)
@@ -379,6 +398,8 @@ void Wii_sweepTick(Runner *runner)
 	if (dwell > SOAK_TICK_FRAMES && (framesIn % SOAK_TICK_FRAMES) == 0)
 		sweep_soak_tick(runner);
 	if (framesIn < dwell)
+		return;
+	if (tour && tour_in_game_screen(runner) && framesIn < dwell + SCREEN_WAIT_FRAMES)
 		return;
 
 	sweep_leave(runner);
