@@ -42,6 +42,15 @@ static void log_mallinfo(const char *when)
 	        when, (unsigned)SYS_GetArena1Size(), (unsigned)SYS_GetArena2Size());
 }
 
+/* Dolphin hands out zeroed RAM; a real Wii doesn't. Dirtying the unused arenas makes
+ * uninitialised reads misbehave in the emulator the way they would on hardware. */
+static void poison_arenas(void)
+{
+	memset(SYS_GetArena1Lo(), 0xA5, SYS_GetArena1Size());
+	memset(SYS_GetArena2Lo(), 0xA5, SYS_GetArena2Size());
+	logInfo("POISON sentinel found -- unused arenas filled with 0xA5\n");
+}
+
 int main(int argc, char **argv)
 {
 	CommandLineArgs args;
@@ -110,6 +119,8 @@ int main(int argc, char **argv)
 		WiiLog_enableGecko();
 		logInfo("PLAYBACK sentinel found -- replaying %s\n", args.playbackInputsPath);
 	}
+	if (access(GAME_DIR "/game/POISON", R_OK) == 0)
+		poison_arenas();
 
 	rc = loop(args, argv[0] ? argv[0] : "boot.dol");
 	log_mallinfo("exit");

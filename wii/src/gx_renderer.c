@@ -2317,6 +2317,31 @@ static void gxSurfaceResize(Renderer *renderer, int32_t surfaceID, int32_t width
 	}
 }
 
+void GxRenderer_memStats(uint32_t *surfCount, uint32_t *surfBytes, uint32_t *pageBytes)
+{
+	GxRenderer *gx = gx_cur;
+	uint32_t i;
+	int32_t t;
+
+	*surfCount = *surfBytes = *pageBytes = 0;
+	if (!gx)
+		return;
+	for (i = 0; i < gx->surfCount; i++) {
+		GxSurf *sf = &gx->surfs[i];
+
+		if (!sf->exists)
+			continue;
+		(*surfCount)++;
+		if (sf->texels)
+			*surfBytes += surf_bytes(sf->texW, sf->texH);
+		for (t = 0; sf->tiles && t < sf->tilesX * sf->tilesY; t++)
+			*surfBytes += surf_bytes(sf->tiles[t].texW, sf->tiles[t].texH);
+	}
+	for (i = 0; i < gx->pageCount; i++)
+		if (gx->pages[i].texels)
+			*pageBytes += tex_bytes(gx->pages[i].texW, gx->pages[i].texH);
+}
+
 static void gxSurfaceFree(Renderer *renderer, int32_t surfaceID)
 {
 	GxRenderer *gx = (GxRenderer *)renderer;
