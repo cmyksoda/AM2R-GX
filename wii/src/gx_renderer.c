@@ -704,9 +704,9 @@ static bool gx_load_page(GxRenderer *gx, uint32_t pageId)
 		h = GX_MAX_TEX_DIM;
 	tw = pad4(w);
 	th = pad4(h);
-	texels = WiiMem_texAlloc(tex_bytes(tw, th));
-	if (!texels && gx_evict_page(gx))
-		texels = WiiMem_texAlloc(tex_bytes(tw, th));
+	/* One eviction is not always enough: 1.5.5's title frames are half the size of a full page. */
+	while (!(texels = WiiMem_texAlloc(tex_bytes(tw, th))) && gx_evict_page(gx))
+		;
 	if (!texels)
 		goto fail;
 	if (streamed) {
@@ -1079,7 +1079,18 @@ static bool gx_reclaim_surface(GxRenderer *gx)
 	return true;
 }
 
-static bool gx_alloc_tiles(GxSurf *s, int32_t width, int32_t height)
+/* Surfaces share the heap with cached texture pages, and the pages are the ones that can go. */
+static void *gx_surf_memalign(GxRenderer *gx, u32 bytes)
+{
+	void *p;
+
+	gx_make_room(gx, bytes + MEM_RESERVE);
+	while (!(p = memalign(32, bytes)) && gx_evict_page(gx))
+		;
+	return p;
+}
+
+static bool gx_alloc_tiles(GxRenderer *gx, GxSurf *s, int32_t width, int32_t height)
 {
 	int col, row, n, i;
 	int tilesX = (width + SURF_TILE_W - 1) / SURF_TILE_W;
@@ -1104,7 +1115,7 @@ static bool gx_alloc_tiles(GxSurf *s, int32_t width, int32_t height)
 			t->pixelH = ph;
 			t->texW = pad4(pw);
 			t->texH = pad4(ph);
-			t->texels = memalign(32, surf_bytes(t->texW, t->texH));
+			t->texels = gx_surf_memalign(gx, surf_bytes(t->texW, t->texH));
 			if (!t->texels) {
 				n = tilesX * tilesY;
 				for (i = 0; i < n; i++)
@@ -1159,7 +1170,7 @@ static int32_t gx_alloc_surface(GxRenderer *gx, int32_t width, int32_t height)
 	gx->surfs[id].h = height;
 	gx->surfs[id].objReady = false;
 	if (tiled) {
-		if (!gx_alloc_tiles(&gx->surfs[id], width, height)) {
+		if (!gx_alloc_tiles(gx, &gx->surfs[id], width, height)) {
 			gx->surfs[id].exists = false;
 			logWarn("GX: tiled surface %dx%d alloc failed\n", width, height);
 			return -1;
@@ -1170,7 +1181,7 @@ static int32_t gx_alloc_surface(GxRenderer *gx, int32_t width, int32_t height)
 	}
 	tw = pad4(width);
 	th = pad4(height);
-	texels = memalign(32, surf_bytes(tw, th));
+	texels = gx_surf_memalign(gx, surf_bytes(tw, th));
 	if (!texels) {
 		gx->surfs[id].exists = false;
 		return -1;
@@ -2256,14 +2267,14 @@ static void gxSurfaceResize(Renderer *renderer, int32_t surfaceID, int32_t width
 	s->objReady = false;
 	tiled = (width > EFB_MAX_W || height > EFB_MAX_H);
 	if (tiled) {
-		if (!gx_alloc_tiles(s, width, height))
+		if (!gx_alloc_tiles(gx, s, width, height))
 			s->exists = false;
 		return;
 	}
 	{
 		int tw = pad4(width);
 		int th = pad4(height);
-		u16 *texels = memalign(32, surf_bytes(tw, th));
+		u16 *texels = gx_surf_memalign(gx, surf_bytes(tw, th));
 
 		if (!texels) {
 			s->exists = false;
