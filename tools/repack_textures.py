@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Repack a GameMaker: Studio 1.x data.win's texture pages onto pages the Wii's GPU can bind.
 
-  tools/repack_textures.py IN.win OUT.win [--max 1024] [--gutter 1] [--groups groups.json]
+  tools/repack_textures.py IN.win OUT.win [--max 1024] [--gutter 1] [--groups groups.json] [--pow2]
   tools/repack_textures.py IN.win --check          exit 0 if a page is over --max, 1 if none is
 
 Every graphic is moved whole, pixels untouched, together with the ring of pixels GameMaker left
@@ -187,6 +187,7 @@ def main():
     ap.add_argument('--max', type=int, default=1024, help='largest page edge (default 1024)')
     ap.add_argument('--gutter', type=int, default=1, help='ring of source pixels kept around each item')
     ap.add_argument('--groups', help='JSON {"<page>,<x>,<y>,<w>,<h>": group} - items sharing a group share pages')
+    ap.add_argument('--pow2', action='store_true', help='round page sizes up to powers of two (costs memory; a fallback if trimmed pages misbehave on hardware)')
     ap.add_argument('--report', help='write the old->new placement map here as JSON')
     args = ap.parse_args()
 
@@ -233,6 +234,8 @@ def main():
         cells = [(r, r[3] + 2 * g, r[4] + 2 * g) for r in by_group[name]]
         for b in pack_group(cells, args.max):
             pw, ph = trimmed(b)
+            if args.pow2:
+                pw, ph = 1 << (pw - 1).bit_length(), 1 << (ph - 1).bit_length()
             canvas = np.zeros((ph, pw, 4), np.uint8)
             for r, cx, cy, cw, ch in b.placed:
                 canvas[cy:cy + ch, cx:cx + cw] = cut_cell(pages[r[0]], r[1], r[2], r[3], r[4], g)
