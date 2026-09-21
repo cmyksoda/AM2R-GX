@@ -19,6 +19,7 @@
 #define SWEEP_FILE WII_GAME_DIR "/sweep.txt"
 #define SHOTS_FILE WII_GAME_DIR "/shots.txt"
 #define SHOTS_MAX 64
+#define SHOT_HOLD_VSYNCS 60
 #define SWEEP_MAX 400
 #define SETTLE_FRAMES 30
 #define SOAK_TICK_FRAMES 600
@@ -38,6 +39,8 @@ static int dwell = 300;
 static int landed, framesIn;
 static uint64_t lastOps, opsSum;
 static uint32_t opsMax, arenaMin, soakOps; /* soakOps: worst frame since the last soak line */
+static bool shotDue, shotLast;
+static char shotLine[160];
 
 static bool sweep_load(void)
 {
@@ -149,10 +152,11 @@ static void sweep_shot(Runner *runner)
 	Instance *samus = sweep_samus(runner);
 	GMLCamera *cam = Runner_getCameraForView(runner, 0);
 
-	logInfo("SWEEP shot room=%d actual=%d sx=%d sy=%d vis=%d vx=%d vy=%d\n",
+	snprintf(shotLine, sizeof shotLine, "SWEEP shot room=%d actual=%d sx=%d sy=%d vis=%d vx=%d vy=%d\n",
 	        stops[cur].room, runner->currentRoomIndex,
 	        samus ? (int)samus->x : -1, samus ? (int)samus->y : -1, samus ? (int)samus->visible : -1,
 	        cam ? (int)cam->viewX : -1, cam ? (int)cam->viewY : -1);
+	shotDue = true;
 }
 
 static void sweep_leave(Runner *runner)
@@ -196,9 +200,26 @@ static void shots_tick(Runner *runner)
 	}
 	if (next >= shotCount || runner->frameCount < shotFrames[next])
 		return;
-	logInfo("TAPE shot frame=%d room=%d\n", runner->frameCount, runner->currentRoomIndex);
-	if (++next == shotCount)
+	snprintf(shotLine, sizeof shotLine, "TAPE shot frame=%d room=%d\n", runner->frameCount, runner->currentRoomIndex);
+	shotLast = ++next == shotCount;
+	shotDue = true;
+}
+
+/* Announce only once the frame is on screen, then freeze it: the host's grab lands up to half a
+ * second late, and a scrolling backdrop made identical builds look 79,000 pixels apart. */
+void Wii_shotHold(void)
+{
+	int i;
+
+	if (!shotDue)
+		return;
+	shotDue = false;
+	logInfo("%s", shotLine);
+	for (i = 0; i < SHOT_HOLD_VSYNCS; i++)
+		VIDEO_WaitVSync();
+	if (shotLast)
 		logInfo("TAPE done\n");
+	shotLast = false;
 }
 
 void Wii_sweepTick(Runner *runner)

@@ -154,6 +154,7 @@ void platformGetMousePos(double *xPos, double *yPos)
 void platformSwapBuffers(void)
 {
 	WiiVideo_present();
+	Wii_shotHold();
 }
 
 void *platformGetProcAddress(const char *name)

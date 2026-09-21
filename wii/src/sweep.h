@@ -9,5 +9,7 @@ struct Runner;
  * Absent on real SD cards, so hardware never enters this path. */
 void Wii_sweepTick(struct Runner *runner);
 bool Wii_sweepFinished(void);
+/* Call right after presenting: holds a frame listed in shots.txt on screen for the host to grab. */
+void Wii_shotHold(void);
 
 #endif
