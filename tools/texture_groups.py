@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Turn a room sweep's drawing record into packing groups for repack_textures.py.
 
-  tools/texture_groups.py ORIGINAL.win sweep-gecko.log groups.json [--score REPACKED.win ...]
+  tools/texture_groups.py ORIGINAL.win sweep-gecko.log groups.json [--also more-gecko.log ...] [--score REPACKED.win ...]
 
 The sweep logs, per room, which texture page items were drawn ("SWEEP tpag room=R off=N <hex>").
 Graphics seen in most rooms go together ("common": Samus, HUD, fonts, shots); graphics seen in one
@@ -93,6 +93,7 @@ def score(path, usage, label):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('win'); ap.add_argument('log'); ap.add_argument('out')
+    ap.add_argument('--also', nargs='*', default=[], help='more sweep logs of the same data file; their records are merged room by room')
     ap.add_argument('--score', nargs='*', default=[])
     args = ap.parse_args()
     d = open(args.win, 'rb').read()
@@ -102,6 +103,9 @@ def main():
     own = owners(d, ch)
     room_names = [cstr(d, u32(d, p)) for p in plist(d, ch[b'ROOM'])]
     usage = read_usage(args.log)
+    for extra in args.also:
+        for room, items in read_usage(extra).items():
+            usage[room] |= items
     if not usage:
         sys.exit('no "SWEEP tpag" lines in the log')
 
