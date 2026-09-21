@@ -10,6 +10,7 @@
 #include "stb_ds.h"
 #include "vm.h"
 #include "warp.h"
+#include "wii_mem.h"
 #include "wii_paths.h"
 
 #include <gccore.h>
@@ -267,11 +268,11 @@ static void sweep_leave(Runner *runner)
 	for (k = 0; k < audo->count; k++)
 		if (audo->entries[k].data)
 			audoBytes += audo->entries[k].dataSize;
-	logInfo("SWEEP leave room=%d actual=%d inst=%d ops_avg=%u ops_max=%u arena_min=%u heapfree=%d audo=%u used=%u surfs=%u surfbytes=%u pagebytes=%u\n",
+	logInfo("SWEEP leave room=%d actual=%d inst=%d ops_avg=%u ops_max=%u arena_min=%u heapfree=%d audo=%u used=%u surfs=%u surfbytes=%u pagebytes=%u texfree=%u\n",
 	        stops[cur].room, runner->currentRoomIndex, live,
 	        (unsigned)(opsSum / (uint64_t)(dwell - SETTLE_FRAMES)), (unsigned)opsMax,
 	        (unsigned)arenaMin, mi.fordblks, (unsigned)audoBytes, (unsigned)mi.uordblks,
-	        (unsigned)surfN, (unsigned)surfBytes, (unsigned)pageBytes);
+	        (unsigned)surfN, (unsigned)surfBytes, (unsigned)pageBytes, (unsigned)WiiMem_texFreeBytes());
 	sweep_usage();
 }
 

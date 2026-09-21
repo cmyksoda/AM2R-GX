@@ -24,6 +24,7 @@
 /* Headroom kept free for room loads, and what one page load needs: its PNG blob plus 2 MB of
  * texels (the PNG decode streams row by row, so no full-size temporary). */
 #define MEM_RESERVE (4u << 20)
+#define HEAP_RESERVE (14u << 20) /* what malloc keeps of MEM2 once the game data is loaded */
 #define PAGE_LOAD_NEED (4u << 20)
 #define PAGE_RETRY_FRAMES 300
 #define GX_MAX_TEX_DIM 1024
@@ -643,7 +644,7 @@ static void gx_make_room(GxRenderer *gx, u32 want)
 	if (WiiMem_room() < (want > SURF_RECLAIM_BELOW ? want : SURF_RECLAIM_BELOW))
 		while (gx_reclaim_surface(gx))
 			;
-	while (WiiMem_room() < want && gx_evict_page(gx))
+	while (WiiMem_texturesInHeap() && WiiMem_room() < want && gx_evict_page(gx))
 		;
 }
 
@@ -1041,10 +1042,10 @@ static void gx_surf_release(GxSurf *s)
 	if (s->tiles) {
 		n = s->tilesX * s->tilesY;
 		for (i = 0; i < n; i++)
-			free(s->tiles[i].texels);
+			WiiMem_texFree(s->tiles[i].texels);
 		free(s->tiles);
 	}
-	free(s->texels);
+	WiiMem_texFree(s->texels);
 	s->tiles = NULL;
 	s->texels = NULL;
 	s->tilesX = 0;
@@ -1079,13 +1080,12 @@ static bool gx_reclaim_surface(GxRenderer *gx)
 	return true;
 }
 
-/* Surfaces share the heap with cached texture pages, and the pages are the ones that can go. */
+/* Surfaces share the texture arena with cached pages, and the pages are the ones that can go. */
 static void *gx_surf_memalign(GxRenderer *gx, u32 bytes)
 {
 	void *p;
 
-	gx_make_room(gx, bytes + MEM_RESERVE);
-	while (!(p = memalign(32, bytes)) && gx_evict_page(gx))
+	while (!(p = WiiMem_texAlloc(bytes)) && (gx_reclaim_surface(gx) || gx_evict_page(gx)))
 		;
 	return p;
 }
@@ -1119,7 +1119,7 @@ static bool gx_alloc_tiles(GxRenderer *gx, GxSurf *s, int32_t width, int32_t hei
 			if (!t->texels) {
 				n = tilesX * tilesY;
 				for (i = 0; i < n; i++)
-					free(tiles[i].texels);
+					WiiMem_texFree(tiles[i].texels);
 				free(tiles);
 				return false;
 			}
@@ -1232,6 +1232,7 @@ static void gxInit(Renderer *renderer, DataWin *dataWin)
 	renderer->dataWin = dataWin;
 	Matrix4f_identity(&world);
 	renderer->gmlMatrices[MATRIX_WORLD] = world;
+	WiiMem_reserveTextures(HEAP_RESERVE);
 	gx->pageCount = dataWin->txtr.count;
 	gx->pages = (GxPage *)safeCalloc(gx->pageCount, sizeof(GxPage));
 	gx->currentTarget = HOST_TARGET;
