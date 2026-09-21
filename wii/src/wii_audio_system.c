@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 // stb_vorbis leaks a few short macros; keep it last and clean up after it.
 #define STB_VORBIS_NO_PUSHDATA_API
@@ -34,6 +35,14 @@
 #define STREAM_FILL_PER_UPDATE 4
 #define VORBIS_ALLOC_BYTES (192 * 1024)   // AM2R's encodes need ~185 KB of stb_vorbis setup+temp memory
 #define STREAM_STATS_FRAMES 1800
+// Top the rings up from a worker thread: a long main-thread frame (a room load) otherwise
+// starves them, audibly cutting the music out right after a track starts.
+#ifndef WII_AUDIO_DECODE_THREAD
+#define WII_AUDIO_DECODE_THREAD 1
+#endif
+#define DECODE_STACK_BYTES (64 * 1024)
+#define DECODE_THREAD_PRIO 80
+#define DECODE_NAP_US 4000
 
 typedef struct {
     float gain, target, from;
@@ -62,7 +71,8 @@ typedef struct {
     volatile uint32_t readChunk;    // advanced by the DSP callback
     volatile uint32_t writeChunk;   // advanced by the decoder
     volatile uint32_t played;       // chunks handed to the DSP
-    volatile uint32_t starved;      // callbacks that had to serve silence mid-track
+    volatile uint32_t starved;      // callbacks that had to serve silence mid-track; never reset, so reuse can't hide it
+    uint32_t starvedLogged;
     volatile uint32_t drained;      // callbacks after EOF with nothing left
     bool active;
     bool loop;
@@ -238,10 +248,23 @@ static void applyStreamVolume(WiiAudioSystem* a, WiiStream* s) {
     setVoiceVolume(s->pb, a->masterGain * s->fade.gain);
 }
 
+#if WII_AUDIO_DECODE_THREAD
+static mutex_t g_decodeMutex;   // recursive: streamPlay can evict (streamStop) while holding it
+static lwp_t g_decodeThread = LWP_THREAD_NULL;
+static volatile bool g_decodeQuit;
+#define DECODE_LOCK()   LWP_MutexLock(g_decodeMutex)
+#define DECODE_UNLOCK() LWP_MutexUnlock(g_decodeMutex)
+#else
+#define DECODE_LOCK()   ((void) 0)
+#define DECODE_UNLOCK() ((void) 0)
+#endif
+
 static void streamStop(WiiStream* s) {
     if (s->pb != nullptr) AESND_SetVoiceStop(s->pb, true);
-    if (s->vorbis != nullptr) { stb_vorbis_close(s->vorbis); s->vorbis = nullptr; }   // also closes the FILE
+    DECODE_LOCK();
     s->active = false;
+    if (s->vorbis != nullptr) { stb_vorbis_close(s->vorbis); s->vorbis = nullptr; }   // also closes the FILE
+    DECODE_UNLOCK();
     s->paused = false;
     s->instanceId = -1;
     s->soundIndex = -1;
@@ -294,28 +317,37 @@ static char* resolveOggPath(WiiAudioSystem* a, Sound* sound) {
     return a->fs->vtable->resolvePath(a->fs, name);
 }
 
+static int32_t streamPlayLocked(WiiAudioSystem* a, int32_t soundIndex, Sound* sound, bool loop, const char* path);
+
 static int32_t streamPlay(WiiAudioSystem* a, int32_t soundIndex, Sound* sound, bool loop) {
     char* path = resolveOggPath(a, sound);
     if (path == nullptr) { logWarn("WiiAudio: no path for '%s'\n", sound->name); return -1; }
 
+    DECODE_LOCK();
+    int32_t id = streamPlayLocked(a, soundIndex, sound, loop, path);
+    DECODE_UNLOCK();
+    free(path);
+    return id;
+}
+
+static int32_t streamPlayLocked(WiiAudioSystem* a, int32_t soundIndex, Sound* sound, bool loop, const char* path) {
     WiiStream* s = findFreeStream(a);
-    if (s == nullptr) { logWarn("WiiAudio: no stream slot for '%s'\n", sound->name); free(path); return -1; }
+    if (s == nullptr) { logWarn("WiiAudio: no stream slot for '%s'\n", sound->name); return -1; }
 
     FILE* f = fopen(path, "rb");
-    if (f == nullptr) { logWarn("WiiAudio: cannot open %s\n", path); free(path); return -1; }
+    if (f == nullptr) { logWarn("WiiAudio: cannot open %s\n", path); return -1; }
     setvbuf(f, nullptr, _IOFBF, 16384);   // fewer SD hits per packet
 
     int err = 0;
     stb_vorbis_alloc alloc = { s->vorbisMem, VORBIS_ALLOC_BYTES };
     s->vorbis = stb_vorbis_open_file(f, 1, &err, &alloc);   // closes f itself on failure
-    if (s->vorbis == nullptr) { logWarn("WiiAudio: stb_vorbis err %d on %s\n", err, path); free(path); return -1; }
+    if (s->vorbis == nullptr) { logWarn("WiiAudio: stb_vorbis err %d on %s\n", err, path); return -1; }
 
     stb_vorbis_info info = stb_vorbis_get_info(s->vorbis);
     if (info.channels < 1 || info.channels > 2 || info.sample_rate == 0) {
         logWarn("WiiAudio: unsupported ogg ch=%d rate=%u %s\n", info.channels, info.sample_rate, path);
         stb_vorbis_close(s->vorbis);
         s->vorbis = nullptr;
-        free(path);
         return -1;
     }
     s->channels = info.channels;
@@ -324,7 +356,7 @@ static int32_t streamPlay(WiiAudioSystem* a, int32_t soundIndex, Sound* sound, b
     s->paused = false;
     s->eof = false;
     s->readChunk = s->writeChunk = 0;
-    s->played = s->starved = s->drained = 0;
+    s->played = s->drained = 0;
     s->lengthSeconds = -1.0f;
     s->soundIndex = soundIndex;
     s->instanceId = a->nextInstanceId++;
@@ -341,7 +373,6 @@ static int32_t streamPlay(WiiAudioSystem* a, int32_t soundIndex, Sound* sound, b
     logInfo("WiiAudio: stream snd %d '%s' ch=%d rate=%u loop=%d slot=%d prime=%u ms\n",
             soundIndex, sound->name, s->channels, s->rate, loop, (int) (s - a->streams),
             (unsigned) ticks_to_millisecs(gettime() - t0));
-    free(path);
     return s->instanceId;
 }
 
@@ -357,8 +388,16 @@ static void streamsUpdate(WiiAudioSystem* a, float dt) {
         WiiStream* s = &a->streams[i];
         if (!s->active) continue;
         if (fadeStep(&s->fade, dt)) applyStreamVolume(a, s);
+        if (s->starved != s->starvedLogged) {
+            uint32_t n = s->starved - s->starvedLogged;
+            s->starvedLogged = s->starved;
+            logWarn("WiiAudio: stream snd %d starved %u chunks (~%u ms of silence)\n", s->soundIndex, (unsigned) n,
+                    (unsigned) (n * (STREAM_CHUNK_BYTES / (s->channels * 2)) * 1000 / s->rate));
+        }
         if (s->paused) continue;
+#if !WII_AUDIO_DECODE_THREAD
         streamFill(s, STREAM_FILL_PER_UPDATE);
+#endif
         if (s->eof && s->drained > 0) {
             logInfo("WiiAudio: stream snd %d finished\n", s->soundIndex);
             streamStop(s);
@@ -379,6 +418,22 @@ static void streamsUpdate(WiiAudioSystem* a, float dt) {
         a->statTicks = a->statMaxTicks = 0;
     }
 }
+
+#if WII_AUDIO_DECODE_THREAD
+static void* decodeThreadMain(void* arg) {
+    WiiAudioSystem* a = (WiiAudioSystem*) arg;
+    while (!g_decodeQuit) {
+        DECODE_LOCK();
+        for (int i = 0; i < WII_STREAMS; i++) {
+            WiiStream* s = &a->streams[i];
+            if (s->active && !s->paused) streamFill(s, STREAM_FILL_PER_UPDATE);
+        }
+        DECODE_UNLOCK();
+        usleep(DECODE_NAP_US);
+    }
+    return nullptr;
+}
+#endif
 
 // ===[ Vtable ]===
 
@@ -407,7 +462,13 @@ static void wiiInit(AudioSystem* audio, DataWin* dataWin, FileSystem* fs) {
         s->soundIndex = -1;
         streams++;
     }
-    logInfo("WiiAudio: AESND up, %d voices, %d streams\n", WII_VOICES, streams);
+#if WII_AUDIO_DECODE_THREAD
+    LWP_MutexInit(&g_decodeMutex, true);
+    g_decodeQuit = false;
+    LWP_CreateThread(&g_decodeThread, decodeThreadMain, a, nullptr, DECODE_STACK_BYTES, DECODE_THREAD_PRIO);
+#endif
+    logInfo("WiiAudio: AESND up, %d voices, %d streams%s\n", WII_VOICES, streams,
+            WII_AUDIO_DECODE_THREAD ? ", decode thread" : "");
 }
 
 static void wiiStopAll(AudioSystem* audio) {
@@ -418,7 +479,15 @@ static void wiiStopAll(AudioSystem* audio) {
 
 static void wiiDestroy(AudioSystem* audio) {
     WiiAudioSystem* a = (WiiAudioSystem*) audio;
+#if WII_AUDIO_DECODE_THREAD
+    g_decodeQuit = true;
+    if (g_decodeThread != LWP_THREAD_NULL) LWP_JoinThread(g_decodeThread, nullptr);
+    g_decodeThread = LWP_THREAD_NULL;
+#endif
     wiiStopAll(audio);
+#if WII_AUDIO_DECODE_THREAD
+    LWP_MutexDestroy(g_decodeMutex);
+#endif
     for (int i = 0; i < WII_VOICES; i++)
         if (a->voices[i].pb != nullptr) AESND_FreeVoice(a->voices[i].pb);
     for (int i = 0; i < WII_STREAMS; i++) {
@@ -620,6 +689,7 @@ static float wiiGetTrackPosition(AudioSystem* audio, int32_t idOrSound) {
 static void wiiSetTrackPosition(AudioSystem* audio, int32_t idOrSound, float pos) {
     WiiStream* s = findStream((WiiAudioSystem*) audio, idOrSound);
     if (s == nullptr || pos < 0.0f) return;
+    DECODE_LOCK();
     stb_vorbis_seek(s->vorbis, (unsigned int) (pos * (float) s->rate));
     // Drop what is buffered; the callback may be mid-increment, so do it with interrupts off.
     u32 level;
@@ -628,12 +698,17 @@ static void wiiSetTrackPosition(AudioSystem* audio, int32_t idOrSound, float pos
     s->eof = false;
     _CPU_ISR_Restore(level);
     s->played = (uint32_t) (pos * (float) s->rate / (float) (STREAM_CHUNK_BYTES / (s->channels * 2)));
+    DECODE_UNLOCK();
 }
 
 static float wiiGetSoundLength(AudioSystem* audio, int32_t idOrSound) {
     WiiStream* s = findStream((WiiAudioSystem*) audio, idOrSound);
     if (s == nullptr) return 0.0f;
-    if (s->lengthSeconds < 0.0f) s->lengthSeconds = stb_vorbis_stream_length_in_seconds(s->vorbis);
+    if (s->lengthSeconds < 0.0f) {
+        DECODE_LOCK();
+        s->lengthSeconds = stb_vorbis_stream_length_in_seconds(s->vorbis);
+        DECODE_UNLOCK();
+    }
     return s->lengthSeconds;
 }
 
