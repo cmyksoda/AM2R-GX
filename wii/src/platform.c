@@ -219,6 +219,7 @@ void platformGetMousePos(double *xPos, double *yPos)
 void platformSwapBuffers(void)
 {
 	GxRenderer_present();
+	Wii_efbDump();
 	WiiVideo_present();
 	Wii_shotHold();
 }

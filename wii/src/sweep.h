@@ -11,5 +11,7 @@ void Wii_sweepTick(struct Runner *runner);
 bool Wii_sweepFinished(void);
 /* Call right after presenting: holds a frame listed in shots.txt on screen for the host to grab. */
 void Wii_shotHold(void);
+/* Call before the display copy: dumps a shot frame's EFB when the EFBDUMP sentinel exists. */
+void Wii_efbDump(void);
 
 #endif

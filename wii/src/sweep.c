@@ -20,6 +20,8 @@
 
 #define SWEEP_FILE WII_GAME_DIR "/sweep.txt"
 #define SHOTS_FILE WII_GAME_DIR "/shots.txt"
+#define EFBDUMP_FILE WII_GAME_DIR "/EFBDUMP"
+#define EFBDUMP_DIR WII_APP_DIR "/grabs"
 #define SHOTS_MAX 64
 #define SHOT_HOLD_VSYNCS 60
 #define USAGE_LINE_BYTES 96
@@ -45,6 +47,7 @@ static int landed, framesIn;
 static uint64_t lastOps, opsSum;
 static uint32_t opsMax, arenaMin, soakOps; /* soakOps: worst frame since the last soak line */
 static bool shotDue, shotLast;
+static int shotFrame;
 static uint8_t *usage;
 static int tapeRoom = -1;
 static int lostFrames;
@@ -325,8 +328,59 @@ static void shots_tick(Runner *runner)
 		return;
 	tape_mark(runner, "mark");
 	snprintf(shotLine, sizeof shotLine, "TAPE shot frame=%d room=%d\n", runner->frameCount, runner->currentRoomIndex);
+	shotFrame = runner->frameCount;
 	shotLast = ++next == shotCount;
 	shotDue = true;
+}
+
+/* EFBDUMP sentinel: write the finished EFB of a shot frame as a PPM. The emulator's own window
+ * and screenshots resample the picture; this is what the video hardware would be handed. */
+void Wii_efbDump(void)
+{
+	static int have = -1;
+	static u8 *buf;
+	const u16 w = 640, h = 480;
+	char path[96];
+	FILE *f;
+	int x, y;
+
+	if (!shotDue)
+		return;
+	if (have < 0) {
+		f = fopen(EFBDUMP_FILE, "r");
+		have = f != NULL;
+		if (f)
+			fclose(f);
+		if (have)
+			buf = memalign(32, (u32)w * h * 4);
+	}
+	if (!have || !buf)
+		return;
+	GX_DrawDone();
+	DCInvalidateRange(buf, (u32)w * h * 4);
+	GX_SetTexCopySrc(0, 0, w, h);
+	GX_SetTexCopyDst(w, h, GX_TF_RGBA8, GX_FALSE);
+	GX_CopyTex(buf, GX_FALSE);
+	GX_PixModeSync();
+	GX_Flush();
+	GX_DrawDone(); /* the CPU reads this one, so wait for the GP to finish the copy */
+	DCInvalidateRange(buf, (u32)w * h * 4);
+	snprintf(path, sizeof path, EFBDUMP_DIR "/efb-%05d.ppm", shotFrame);
+	f = fopen(path, "wb");
+	if (!f)
+		return;
+	fprintf(f, "P6\n%d %d\n255\n", w, h);
+	for (y = 0; y < h; y++) {
+		for (x = 0; x < w; x++) {
+			/* RGBA8 texture tiling: 4x4 tiles of 64 bytes, AR plane then GB plane. */
+			const u8 *tile = buf + (((y >> 2) * (w >> 2) + (x >> 2)) << 6) + (((y & 3) << 2) + (x & 3)) * 2;
+			u8 rgb[3] = { tile[1], tile[32], tile[33] };
+
+			fwrite(rgb, 1, 3, f);
+		}
+	}
+	fclose(f);
+	logInfo("TAPE efbdump frame=%d\n", shotFrame);
 }
 
 /* Announce only once the frame is on screen, then freeze it: the host's grab lands up to half a
