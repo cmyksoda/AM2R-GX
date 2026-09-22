@@ -1,3 +1,6 @@
+Reason: The loop creates our GX renderer instead of a GL one on the Wii.
+Upstream: Port scaffolding, with the port.
+
 diff --git a/src/loop.c b/src/loop.c
 index 7a365c5..e56258f 100644
 --- a/src/loop.c

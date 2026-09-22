@@ -1,3 +1,6 @@
+Reason: gettime() on the Wii comes from the time base (ticks_to_nanosecs); no clock_gettime in libogc.
+Upstream: Port scaffolding, with the port.
+
 diff --git a/src/gettime.c b/src/gettime.c
 index 15365b0..9bb0f55 100644
 --- a/src/gettime.c

@@ -1,3 +1,6 @@
+Reason: audio_is_paused was !isPlaying, which can never be true for a paused sound under GM semantics; AM2R's area music never resumed after an item jingle. Asks the Wii backend instead.
+Upstream: Engine bug on every platform; proper fix is an isPaused slot in the AudioSystem vtable - offered upstream from the session 8 fork branch. Retires this patch when merged.
+
 --- a/src/vm_builtins.c
 +++ b/src/vm_builtins.c
 @@ -7134,8 +7134,14 @@

@@ -1,3 +1,6 @@
+Reason: file_copy() builtin: AM2R writes each save to a temp file and file_copy()s it into the slot; without it no save is ever written.
+Upstream: Missing builtin, platform-neutral - offer upstream (session 8 fork branch).
+
 diff --git a/src/vm_builtins.c b/src/vm_builtins.c
 index 6d2de37..c688763 100644
 --- a/src/vm_builtins.c

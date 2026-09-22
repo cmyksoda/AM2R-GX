@@ -1,3 +1,6 @@
+Reason: bgScreenGuide is GameMaker editor chrome (a blue 16 px grid + crosshair, background 0) that 237 AM2R rooms leave visible and tiled behind everything; the real runner would draw it. Skip it.
+Upstream: Game-specific; stays here.
+
 diff --git a/src/runner.c b/src/runner.c
 index a17f0d5..245143b 100644
 --- a/src/runner.c

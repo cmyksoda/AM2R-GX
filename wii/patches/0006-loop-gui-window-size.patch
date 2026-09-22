@@ -1,3 +1,6 @@
+Reason: GMS 1.4 Draw GUI works in window/display pixels unless display_set_gui_size is called; passing the game size (320) clipped the right half of AM2R's scale-2 HUD (minimap).
+Upstream: Engine bug on every platform - candidate for upstream once checked against a GL platform.
+
 diff --git a/src/loop.c b/src/loop.c
 index 7a365c5..b1c9e0a 100644
 --- a/src/loop.c

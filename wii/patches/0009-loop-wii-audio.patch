@@ -1,3 +1,6 @@
+Reason: The loop creates our Wii audio system (streamed OGG + DSP mixing) when there is no miniaudio/OpenAL.
+Upstream: Port scaffolding, with the port.
+
 --- a/src/loop.c
 +++ b/src/loop.c
 @@ -58,6 +58,9 @@

@@ -1,3 +1,6 @@
+Reason: The game_id builtin variable was missing; AM2R 1.5.5 derives its save-file encryption key from it, so saves written here and by the real runner could not read each other.
+Upstream: Missing builtin, platform-neutral - offered upstream from the session 8 fork branch. Retires this patch when merged.
+
 --- a/src/vm_builtins.c
 +++ b/src/vm_builtins.c
 @@ -328,6 +328,7 @@

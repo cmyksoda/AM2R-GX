@@ -1,3 +1,6 @@
+Reason: A collision handler that destroys self must not keep firing for everything else self overlapped this frame: AM2R's water drips multiplied and the room went to ~5 fps.
+Upstream: Engine bug on every platform - offered upstream from the session 8 fork branch. Retires this patch when merged.
+
 --- a/src/runner.c
 +++ b/src/runner.c
 @@ -3331,6 +3331,9 @@
