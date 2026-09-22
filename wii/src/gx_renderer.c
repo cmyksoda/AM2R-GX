@@ -4,6 +4,7 @@
 #include "sweep.h"
 #include "warp.h"
 #include "wii_mem.h"
+#include "wii_paths.h"
 #include "wii_video.h"
 
 #include "common.h"
@@ -18,6 +19,7 @@
 
 #include <gccore.h>
 #include <malloc.h>
+#include <stdio.h>
 #include <math.h>
 #include <string.h>
 
@@ -125,11 +127,34 @@ typedef struct {
 	 * box filter, instead of the game's blit landing at 1.5 screen pixels per game pixel. */
 	bool compose;
 	int32_t composeId;
+	int32_t shPal, shGB; /* SHDR indices of the two shaders we do natively, -1 if absent */
+	int32_t palTpag; /* palette sprite bound with texture_set_stage while shPal is set */
+	int palIndex; /* column of the palette to replace with (the game always passes 1) */
+	u8 gbColor[4][3]; /* shGameBoy ramp, darkest first, as the game's u_color1..4 (0..255) */
+	u16 *gbTexels; /* 4×4 RGB5A3 holding ramp colour 2: TEV needs it as a texture input */
 } GxRenderer;
+
+/* shPaletteSwap: the GLSL searches the palette's first column for the source colour and takes the
+ * same row from column palette_index. TEV can't search, so each swapped sprite is recoloured once
+ * on the CPU (exact match on the 16-bit texel, as both are quantised alike) and cached. */
+#define SWAP_MAX 256
+#define SWAP_BYTES_MAX (2u << 20)
+typedef struct {
+	int32_t tpag, palTpag;
+	int palIndex;
+	int32_t texW, texH;
+	u16 *texels;
+	GXTexObj obj;
+	u64 lastUsed;
+} GxSwap;
+static GxSwap gx_swaps[SWAP_MAX];
+static int gx_swapCount;
+static u32 gx_swapBytes;
 
 static RendererVtable gxVtable;
 static GxRenderer *gx_cur;
 static bool gx_wide_filter = true; /* [Screen] WiiWideFilter; 0 = the plain 2,1,2,1 stretch */
+
 void GxRenderer_setWideFilter(bool on)
 {
 	gx_wide_filter = on;
@@ -1235,6 +1260,115 @@ static int32_t gx_alloc_surface(GxRenderer *gx, int32_t width, int32_t height)
 
 static u8 *gx_usage; /* one bit per TPAG item drawn; NULL until a sweep asks for it */
 
+static int gx_texel_off(int texW, int x, int y)
+{
+	return ((y >> 2) * (texW >> 2) + (x >> 2)) * 16 + (y & 3) * 4 + (x & 3);
+}
+
+static void gx_swap_free(GxSwap *sw)
+{
+	gx_swapBytes -= tex_bytes(sw->texW, sw->texH);
+	WiiMem_texFree(sw->texels);
+	memset(sw, 0, sizeof *sw);
+}
+
+static bool gx_swap_evict(void)
+{
+	int i, victim = -1;
+	u64 oldest = UINT64_MAX;
+
+	for (i = 0; i < gx_swapCount; i++) {
+		if (gx_swaps[i].texels && gx_swaps[i].lastUsed < oldest) {
+			oldest = gx_swaps[i].lastUsed;
+			victim = i;
+		}
+	}
+	if (victim < 0)
+		return false;
+	gx_swap_free(&gx_swaps[victim]);
+	return true;
+}
+
+static GxSwap *gx_swap_build(GxRenderer *gx, int32_t tpagIndex, GxSwap *sw)
+{
+	DataWin *dw = gx->base.dataWin;
+	TexturePageItem *item = &dw->tpag.items[tpagIndex];
+	TexturePageItem *pal = &dw->tpag.items[gx->palTpag];
+	GxPage *ipage = gx_page(gx, item->texturePageId);
+	GxPage *ppage = gx_page(gx, pal->texturePageId);
+	u16 from[256], to[256];
+	int n = pal->sourceHeight, x, y, i, tw, th;
+
+	if (!ipage || !ppage || gx->palIndex < 1 || gx->palIndex >= pal->sourceWidth)
+		return NULL;
+	if (n > 256)
+		n = 256;
+	for (i = 0; i < n; i++) {
+		from[i] = ppage->texels[gx_texel_off(ppage->texW, pal->sourceX, pal->sourceY + i)];
+		to[i] = ppage->texels[gx_texel_off(ppage->texW, pal->sourceX + gx->palIndex, pal->sourceY + i)];
+	}
+	tw = pad4(item->sourceWidth);
+	th = pad4(item->sourceHeight);
+	while (gx_swapBytes + tex_bytes(tw, th) > SWAP_BYTES_MAX && gx_swap_evict())
+		;
+	while (!(sw->texels = WiiMem_texAlloc(tex_bytes(tw, th))) && (gx_swap_evict() || gx_evict_page(gx)))
+		;
+	if (!sw->texels)
+		return NULL;
+	memset(sw->texels, 0, tex_bytes(tw, th));
+	for (y = 0; y < item->sourceHeight; y++) {
+		for (x = 0; x < item->sourceWidth; x++) {
+			u16 c = ipage->texels[gx_texel_off(ipage->texW, item->sourceX + x, item->sourceY + y)];
+
+			for (i = 0; i < n; i++) {
+				if (from[i] == c) {
+					c = to[i];
+					break;
+				}
+			}
+			sw->texels[gx_texel_off(tw, x, y)] = c;
+		}
+	}
+	DCFlushRange(sw->texels, tex_bytes(tw, th));
+	sw->tpag = tpagIndex;
+	sw->palTpag = gx->palTpag;
+	sw->palIndex = gx->palIndex;
+	sw->texW = tw;
+	sw->texH = th;
+	GX_InitTexObj(&sw->obj, sw->texels, (u16)tw, (u16)th, GX_TF_RGB5A3, GX_CLAMP, GX_CLAMP, GX_FALSE);
+	GX_InitTexObjFilterMode(&sw->obj, GX_NEAR, GX_NEAR);
+	gx_swapBytes += tex_bytes(tw, th);
+	if (gx_swapCount <= 1)
+		logInfo("GX: palette swap live: palette %d[%d], %d colours\n", (int)gx->palTpag, gx->palIndex, n);
+	return sw;
+}
+
+static GxSwap *gx_swap_get(GxRenderer *gx, int32_t tpagIndex)
+{
+	int i, slot = -1;
+
+	for (i = 0; i < gx_swapCount; i++) {
+		GxSwap *sw = &gx_swaps[i];
+
+		if (sw->texels && sw->tpag == tpagIndex && sw->palTpag == gx->palTpag && sw->palIndex == gx->palIndex) {
+			sw->lastUsed = gx->frameCounter;
+			return sw;
+		}
+		if (!sw->texels && slot < 0)
+			slot = i;
+	}
+	if (slot < 0) {
+		if (gx_swapCount < SWAP_MAX)
+			slot = gx_swapCount++;
+		else if (gx_swap_evict())
+			return gx_swap_get(gx, tpagIndex);
+		else
+			return NULL;
+	}
+	gx_swaps[slot].lastUsed = gx->frameCounter;
+	return gx_swap_build(gx, tpagIndex, &gx_swaps[slot]);
+}
+
 static void gx_draw_tpag(GxRenderer *gx, int32_t tpagIndex, float x0, float y0, float x1, float y1,
 			 float x2, float y2, float x3, float y3, float srcX, float srcY, float srcW, float srcH,
 			 u8 r0, u8 g0, u8 b0, u8 a0, u8 r1, u8 g1, u8 b1, u8 a1,
@@ -1250,6 +1384,22 @@ static void gx_draw_tpag(GxRenderer *gx, int32_t tpagIndex, float x0, float y0, 
 	if (gx_usage)
 		gx_usage[tpagIndex >> 3] |= (u8)(1 << (tpagIndex & 7));
 	tpag = &dw->tpag.items[tpagIndex];
+	if (gx->base.currentShader >= 0 && gx->base.currentShader == gx->shPal && gx->palTpag >= 0 &&
+	    (uint32_t)gx->palTpag < dw->tpag.count) {
+		GxSwap *sw = gx_swap_get(gx, tpagIndex);
+
+		if (sw) {
+			u0 = srcX / (float)sw->texW;
+			v0 = srcY / (float)sw->texH;
+			u1 = (srcX + srcW) / (float)sw->texW;
+			v1 = (srcY + srcH) / (float)sw->texH;
+			gx_bind_tex(gx, &sw->obj);
+			emit_quad(x0, y0, x1, y1, x2, y2, x3, y3,
+				  u0, v0, u1, v0, u1, v1, u0, v1,
+				  r0, g0, b0, a0, r1, g1, b1, a1, r2, g2, b2, a2, r3, g3, b3, a3);
+			return;
+		}
+	}
 	page = gx_page(gx, tpag->texturePageId);
 	if (!page)
 		return;
@@ -1269,6 +1419,7 @@ static void gxInit(Renderer *renderer, DataWin *dataWin)
 	Matrix4f world;
 
 	renderer->dataWin = dataWin;
+	gx_cur = gx; /* shaders_are_supported() is asked at Game Start, before the first frame */
 	Matrix4f_identity(&world);
 	renderer->gmlMatrices[MATRIX_WORLD] = world;
 	WiiMem_reserveTextures(HEAP_RESERVE);
@@ -1277,6 +1428,22 @@ static void gxInit(Renderer *renderer, DataWin *dataWin)
 	gx->currentTarget = HOST_TARGET;
 	gx->appSurfId = -1;
 	gx->composeId = -1;
+	gx->shPal = gx->shGB = -1;
+	gx->palTpag = -1;
+	gx->palIndex = 1;
+	{
+		uint32_t i;
+
+		for (i = 0; i < dataWin->shdr.count; i++) {
+			const char *n = dataWin->shdr.shaders[i].name;
+
+			if (n && strcmp(n, "shPaletteSwap") == 0)
+				gx->shPal = (int32_t)i;
+			else if (n && strcmp(n, "shGameBoy") == 0)
+				gx->shGB = (int32_t)i;
+		}
+	}
+	logInfo("GX: shaders shPaletteSwap=%d shGameBoy=%d\n", (int)gx->shPal, (int)gx->shGB);
 	gx->tileCol = -1;
 	gx->tileRow = -1;
 	gx->boundTex = NULL;
@@ -2354,6 +2521,72 @@ static float gxGetSurfaceHeight(Renderer *renderer, int32_t surfaceID)
 	return (float)gx->surfs[surfaceID].h;
 }
 
+/* shGameBoy as a TEV program: m = max(R,G,B) of the texel (swap tables feed G and B into the
+ * R-channel compares), then three "m > threshold" compares pick ramp colours 1..4 from the vertex
+ * colour, a 4×4 texture, register 2 and konst 1. Thresholds 42/126/210 are the GLSL's 0.165 /
+ * 0.495 / 0.825 in 8 bits. One pass, no copies. */
+static bool gx_gb_begin(GxRenderer *gx)
+{
+	GXColor thr = { 42, 126, 0, 0 }, thr3 = { 210, 0, 0, 0 };
+	GXColor col3 = { gx->gbColor[2][0], gx->gbColor[2][1], gx->gbColor[2][2], 255 };
+	GXColor col4 = { gx->gbColor[3][0], gx->gbColor[3][1], gx->gbColor[3][2], 255 };
+	static GXTexObj obj;
+	int i;
+
+	if (!gx->gbTexels) {
+		gx->gbTexels = memalign(32, 32);
+		if (!gx->gbTexels)
+			return false;
+	}
+	for (i = 0; i < 16; i++)
+		gx->gbTexels[i] = pack_rgb5a3(gx->gbColor[1][0], gx->gbColor[1][1], gx->gbColor[1][2], 255);
+	DCFlushRange(gx->gbTexels, 32);
+	GX_InitTexObj(&obj, gx->gbTexels, 4, 4, GX_TF_RGB5A3, GX_CLAMP, GX_CLAMP, GX_FALSE);
+	GX_InitTexObjFilterMode(&obj, GX_NEAR, GX_NEAR);
+	GX_InvalidateTexAll();
+	GX_LoadTexObj(&obj, GX_TEXMAP1);
+
+	GX_SetTevSwapModeTable(GX_TEV_SWAP1, GX_CH_GREEN, GX_CH_GREEN, GX_CH_GREEN, GX_CH_ALPHA);
+	GX_SetTevSwapModeTable(GX_TEV_SWAP2, GX_CH_BLUE, GX_CH_BLUE, GX_CH_BLUE, GX_CH_ALPHA);
+	GX_SetTevColor(GX_TEVREG1, thr3);
+	GX_SetTevColor(GX_TEVREG2, col3);
+	GX_SetTevKColor(GX_KCOLOR0, thr);
+	GX_SetTevKColor(GX_KCOLOR1, col4);
+	GX_SetNumTevStages(6);
+	for (i = 0; i < 6; i++) {
+		GX_SetTevOrder(i, GX_TEXCOORD0, i == 3 ? GX_TEXMAP1 : GX_TEXMAP0, GX_COLOR0A0);
+		GX_SetTevSwapMode(i, GX_TEV_SWAP0, i == 0 ? GX_TEV_SWAP1 : i == 2 ? GX_TEV_SWAP2 : GX_TEV_SWAP0);
+		GX_SetTevAlphaIn(i, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, i == 5 ? GX_CA_RASA : GX_CA_ZERO);
+		GX_SetTevAlphaOp(i, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+	}
+	/* 0: G → reg0.   1: max(R,G) → prev.   2: max(prev,B) = m → reg0. */
+	GX_SetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_TEXC);
+	GX_SetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVREG0);
+	GX_SetTevColorIn(GX_TEVSTAGE1, GX_CC_C0, GX_CC_TEXC, GX_CC_C0, GX_CC_TEXC);
+	GX_SetTevColorOp(GX_TEVSTAGE1, GX_TEV_COMP_R8_GT, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+	GX_SetTevColorIn(GX_TEVSTAGE2, GX_CC_TEXC, GX_CC_CPREV, GX_CC_TEXC, GX_CC_CPREV);
+	GX_SetTevColorOp(GX_TEVSTAGE2, GX_TEV_COMP_R8_GT, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVREG0);
+	/* 3: m > 42 ? col2 (texmap1) : col1 (vertex).  4: m > 126 ? col3.  5: m > 210 ? col4. */
+	GX_SetTevKColorSel(GX_TEVSTAGE3, GX_TEV_KCSEL_K0_R);
+	GX_SetTevColorIn(GX_TEVSTAGE3, GX_CC_C0, GX_CC_KONST, GX_CC_TEXC, GX_CC_RASC);
+	GX_SetTevColorOp(GX_TEVSTAGE3, GX_TEV_COMP_R8_GT, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+	GX_SetTevKColorSel(GX_TEVSTAGE4, GX_TEV_KCSEL_K0_G);
+	GX_SetTevColorIn(GX_TEVSTAGE4, GX_CC_C0, GX_CC_KONST, GX_CC_C2, GX_CC_CPREV);
+	GX_SetTevColorOp(GX_TEVSTAGE4, GX_TEV_COMP_R8_GT, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+	GX_SetTevKColorSel(GX_TEVSTAGE5, GX_TEV_KCSEL_K1);
+	GX_SetTevColorIn(GX_TEVSTAGE5, GX_CC_C0, GX_CC_C1, GX_CC_KONST, GX_CC_CPREV);
+	GX_SetTevColorOp(GX_TEVSTAGE5, GX_TEV_COMP_R8_GT, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+	return true;
+}
+
+static void gx_gb_end(GxRenderer *gx)
+{
+	GX_SetNumTevStages(1);
+	GX_SetTevSwapMode(GX_TEVSTAGE0, GX_TEV_SWAP0, GX_TEV_SWAP0);
+	gx_vtx_fmt();
+	gx_unbind_tex(gx); /* GX_SetTevOp puts stage 0's colour and alpha inputs back */
+}
+
 static void gxDrawSurfaceColor(Renderer *renderer, int32_t surfaceID, int32_t srcLeft, int32_t srcTop, int32_t srcWidth,
 			       int32_t srcHeight, float x, float y, float xscale, float yscale, float angleDeg,
 			       uint32_t c1, uint32_t c2, uint32_t c3, uint32_t c4, float alpha)
@@ -2365,6 +2598,7 @@ static void gxDrawSurfaceColor(Renderer *renderer, int32_t surfaceID, int32_t sr
 	float angleRad;
 	Matrix4f transform;
 	u8 a = unorm(alpha);
+	bool gb = renderer->currentShader >= 0 && renderer->currentShader == gx->shGB;
 
 	if (surfaceID < 0 || (uint32_t)surfaceID >= gx->surfCount)
 		return;
@@ -2434,6 +2668,14 @@ static void gxDrawSurfaceColor(Renderer *renderer, int32_t surfaceID, int32_t sr
 	Matrix4f_transformPoint(&transform, (float)srcWidth, (float)srcHeight, &x2, &y2);
 	Matrix4f_transformPoint(&transform, 0, (float)srcHeight, &x3, &y3);
 	gx_bind_tex(gx, &s->obj);
+	if (gb && gx_gb_begin(gx)) {
+		const u8 *k = gx->gbColor[0];
+
+		emit_quad(x0, y0, x1, y1, x2, y2, x3, y3, u0, v0, u1, v0, u1, v1, u0, v1,
+			  k[0], k[1], k[2], 255, k[0], k[1], k[2], 255, k[0], k[1], k[2], 255, k[0], k[1], k[2], 255);
+		gx_gb_end(gx);
+		return;
+	}
 	emit_quad(x0, y0, x1, y1, x2, y2, x3, y3, u0, v0, u1, v0, u1, v1, u0, v1,
 		  (u8)BGR_R(c1), (u8)BGR_G(c1), (u8)BGR_B(c1), a,
 		  (u8)BGR_R(c2), (u8)BGR_G(c2), (u8)BGR_B(c2), a,
@@ -2629,20 +2871,42 @@ static void gxGpuResetShader(Renderer *renderer)
 	renderer->currentShader = -1;
 }
 
-static int32_t gxShaderGetUniform(MAYBE_UNUSED Renderer *renderer, MAYBE_UNUSED int32_t shaderIndex, MAYBE_UNUSED char *uniform)
+/* Handles are just names we recognise: 1 = palette_index; 11..14 = the GameBoy ramp colours. */
+enum { UNI_PAL_INDEX = 1, UNI_GB_COLOR1 = 11 };
+
+static int32_t gxShaderGetUniform(Renderer *renderer, int32_t shaderIndex, char *uniform)
 {
-	return -1;
+	GxRenderer *gx = (GxRenderer *)renderer;
+
+	if (!uniform)
+		return -1;
+	if (shaderIndex == gx->shPal && strcmp(uniform, "palette_index") == 0)
+		return UNI_PAL_INDEX;
+	if (shaderIndex == gx->shGB && strncmp(uniform, "u_color", 7) == 0 && uniform[7] >= '1' && uniform[7] <= '4')
+		return UNI_GB_COLOR1 + (uniform[7] - '1');
+	return 0;
 }
 
 static int32_t gxShaderGetSamplerIndex(MAYBE_UNUSED Renderer *renderer, MAYBE_UNUSED int32_t shaderIndex,
 				       MAYBE_UNUSED char *uniform)
 {
-	return -1;
+	return 0;
 }
 
-static void gxShaderSetUniformF(MAYBE_UNUSED Renderer *renderer, MAYBE_UNUSED int32_t handle, MAYBE_UNUSED int32_t count,
-				MAYBE_UNUSED float v1, MAYBE_UNUSED float v2, MAYBE_UNUSED float v3, MAYBE_UNUSED float v4)
+static void gxShaderSetUniformF(Renderer *renderer, int32_t handle, MAYBE_UNUSED int32_t count,
+				float v1, MAYBE_UNUSED float v2, MAYBE_UNUSED float v3, MAYBE_UNUSED float v4)
 {
+	GxRenderer *gx = (GxRenderer *)renderer;
+
+	if (handle == UNI_PAL_INDEX)
+		gx->palIndex = (int)v1;
+	else if (handle >= UNI_GB_COLOR1 && handle < UNI_GB_COLOR1 + 4) {
+		u8 *c = gx->gbColor[handle - UNI_GB_COLOR1];
+
+		c[0] = (u8)v1;
+		c[1] = (u8)v2;
+		c[2] = (u8)v3;
+	}
 }
 
 static void gxShaderSetUniformFArray(MAYBE_UNUSED Renderer *renderer, MAYBE_UNUSED int32_t handle,
@@ -2687,16 +2951,35 @@ static bool gxTextureGetUVs(MAYBE_UNUSED Renderer *renderer, MAYBE_UNUSED uint32
 	return false;
 }
 
-static void gxTextureSetStage(MAYBE_UNUSED Renderer *renderer, MAYBE_UNUSED int32_t slot, MAYBE_UNUSED uint32_t texID) {}
-
-static bool gxShaderIsCompiled(MAYBE_UNUSED Renderer *renderer, MAYBE_UNUSED int32_t shader)
+/* Only sprite textures (ids from gxSpriteGetTexture) can be a palette; a surface id is ignored. */
+static void gxTextureSetStage(Renderer *renderer, MAYBE_UNUSED int32_t slot, uint32_t texID)
 {
-	return false;
+	GxRenderer *gx = (GxRenderer *)renderer;
+
+	gx->palTpag = (texID >= 1 && texID < 0x10000) ? (int32_t)texID - 1 : -1;
 }
 
+static bool gxShaderIsCompiled(Renderer *renderer, int32_t shader)
+{
+	GxRenderer *gx = (GxRenderer *)renderer;
+
+	return shader >= 0 && (shader == gx->shPal || shader == gx->shGB);
+}
+
+/* The game wants both of its shaders "compiled" before it uses either. NOSHADERS marker (Dolphin
+ * only): answer no, to capture what the game does without them. */
 static bool gxShadersSupported(void)
 {
-	return false;
+	static int noShaders = -1;
+
+	if (noShaders < 0) {
+		FILE *f = fopen(WII_GAME_DIR "/NOSHADERS", "r");
+
+		noShaders = f != NULL;
+		if (f)
+			fclose(f);
+	}
+	return !noShaders && gx_cur && gx_cur->shPal >= 0 && gx_cur->shGB >= 0;
 }
 
 static void gxSetMatrix(Renderer *renderer, int32_t matrixType, Matrix4f matrix)
