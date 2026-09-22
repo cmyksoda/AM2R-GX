@@ -383,6 +383,52 @@ void Wii_efbDump(void)
 	logInfo("TAPE efbdump frame=%d\n", shotFrame);
 }
 
+/* JUKEBOX marker (Dolphin only): once in gameplay, play every music asset for a few seconds each,
+ * so tracks no scripted route reaches (bosses, ending, credits) are streamed and decoded too. */
+#define JUKEBOX_FRAMES 300
+void Wii_jukeboxTick(Runner *runner)
+{
+	static int armed, next, at;
+	static BuiltinFunc play, stopAll;
+	VMContext *vm = runner ? runner->vmContext : NULL;
+	DataWin *dw = runner ? runner->dataWin : NULL;
+	FILE *f;
+
+	if (armed < 0 || !vm || !dw)
+		return;
+	if (armed == 0) {
+		f = fopen(WII_GAME_DIR "/JUKEBOX", "r");
+		if (!f) {
+			armed = -1;
+			return;
+		}
+		fclose(f);
+		play = VM_findBuiltin(vm, "audio_play_sound");
+		stopAll = VM_findBuiltin(vm, "audio_stop_all");
+		armed = (play && stopAll) ? 1 : -1;
+		at = runner->frameCount + 600;
+		return;
+	}
+	if (runner->currentRoomIndex != Wii_am2rIds(runner)->landingRoom || runner->frameCount < at)
+		return;
+	while ((uint32_t)next < dw->sond.count && strncmp(dw->sond.sounds[next].name, "mus", 3) != 0)
+		next++;
+	stopAll(vm, NULL, 0);
+	if ((uint32_t)next >= dw->sond.count) {
+		logInfo("JUKEBOX done\n");
+		armed = -1;
+		return;
+	}
+	{
+		RValue args[3] = { RValue_makeReal(next), RValue_makeReal(10), RValue_makeReal(0) };
+
+		play(vm, args, 3);
+		logInfo("JUKEBOX %d '%s'\n", next, dw->sond.sounds[next].name);
+	}
+	next++;
+	at = runner->frameCount + JUKEBOX_FRAMES;
+}
+
 /* Announce only once the frame is on screen, then freeze it: the host's grab lands up to half a
  * second late, and a scrolling backdrop made identical builds look 79,000 pixels apart. */
 void Wii_shotHold(void)
@@ -406,6 +452,7 @@ void Wii_sweepTick(Runner *runner)
 	uint32_t delta, arena;
 
 	shots_tick(runner);
+	Wii_jukeboxTick(runner);
 	if (state < 0 || state == 3)
 		return;
 	if (state == 0) {

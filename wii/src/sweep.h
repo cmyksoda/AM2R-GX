@@ -13,5 +13,7 @@ bool Wii_sweepFinished(void);
 void Wii_shotHold(void);
 /* Call before the display copy: dumps a shot frame's EFB when the EFBDUMP sentinel exists. */
 void Wii_efbDump(void);
+/* JUKEBOX marker: streams every music track in turn once in gameplay. */
+void Wii_jukeboxTick(struct Runner *runner);
 
 #endif
