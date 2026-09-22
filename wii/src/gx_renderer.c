@@ -2892,6 +2892,36 @@ static bool gxSurfaceGetPixels(MAYBE_UNUSED Renderer *renderer, MAYBE_UNUSED int
 	return false;
 }
 
+/* surface_getpixel(_ext): one texel of a surface. 1.5.5 does this nine times at boot on a 4×4
+ * surface to learn its morph-trail colours; a live target is copied out first. */
+bool GxRenderer_surfacePixel(int32_t surfaceID, int x, int y, uint8_t rgba[4])
+{
+	GxRenderer *gx = gx_cur;
+	GxSurf *s;
+
+	if (!gx || surfaceID < 0 || (uint32_t)surfaceID >= gx->surfCount)
+		return false;
+	s = &gx->surfs[surfaceID];
+	if (!s->exists || s->tiles || !s->texels || x < 0 || y < 0 || x >= s->w || y >= s->h)
+		return false;
+	if (gx->currentTarget == surfaceID) {
+		/* Still the live target: peek the EFB itself (a 4×4 copy came back empty in Dolphin). */
+		GXColor c;
+
+		GX_DrawDone();
+		GX_PeekARGB((u16)x, (u16)y, &c);
+		rgba[0] = c.r;
+		rgba[1] = c.g;
+		rgba[2] = c.b;
+		rgba[3] = c.a;
+		return true;
+	}
+	GX_DrawDone(); /* the CPU reads the copy made at the last target switch, so wait for it */
+	DCInvalidateRange(s->texels, surf_bytes(s->texW, s->texH));
+	gx_rgba8_pget((const u8 *)s->texels, s->texW, x, y, &rgba[0], &rgba[1], &rgba[2], &rgba[3]);
+	return true;
+}
+
 static void gxDrawTiledPart(Renderer *renderer, int32_t tpagIndex, int32_t srcX, int32_t srcY, int32_t srcW, int32_t srcH,
 			    float dstX, float dstY, float dstW, float dstH, uint32_t color, float alpha)
 {
@@ -3147,6 +3177,11 @@ Renderer *GxRenderer_create(void)
 	GxRenderer *gx = (GxRenderer *)safeCalloc(1, sizeof(GxRenderer));
 
 	gx->base.vtable = &gxVtable;
+	/* GameMaker's draw state starts opaque white; 1.5.5 draws before its first draw_set_alpha. */
+	gx->base.drawColor = 0xFFFFFF;
+	gx->base.drawAlpha = 1.0f;
+	gx->base.drawFont = -1;
+	gx->base.circlePrecision = 24;
 	gxVtable.init = gxInit;
 	gxVtable.destroy = gxDestroy;
 	gxVtable.beginFrame = gxBeginFrame;

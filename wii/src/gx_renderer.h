@@ -14,6 +14,7 @@ void GxRenderer_loseSurfaces(void);
 void GxRenderer_present(void);
 /* A loose RGBA image as a texture page of its own; returns the page id (past the TXTR pages) or -1. */
 int32_t GxRenderer_addImage(const uint8_t *rgba, int w, int h);
+bool GxRenderer_surfacePixel(int32_t surfaceID, int x, int y, uint8_t rgba[4]);
 void GxRenderer_setWideFilter(bool on);
 
 #endif

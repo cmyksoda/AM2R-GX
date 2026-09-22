@@ -170,8 +170,21 @@ static RValue wii_background_add(VMContext *ctx, RValue *args, int32_t argCount)
 	return RValue_makeReal((GMLReal)i);
 }
 
+/* surface_getpixel(surf, x, y) / surface_getpixel_ext: GameMaker's colour packing, alpha on top. */
+static RValue wii_surface_getpixel(MAYBE_UNUSED VMContext *ctx, RValue *args, int32_t argCount)
+{
+	uint8_t px[4];
+
+	if (argCount < 3 || !GxRenderer_surfacePixel(arg_int(args, argCount, 0), arg_int(args, argCount, 1),
+						      arg_int(args, argCount, 2), px))
+		return RValue_makeReal(0.0);
+	return RValue_makeReal((GMLReal)(((uint32_t)px[3] << 24) | ((uint32_t)px[2] << 16) | ((uint32_t)px[1] << 8) | px[0]));
+}
+
 BuiltinFunc WiiAssets_builtin(const char *name)
 {
+	if (strcmp(name, "surface_getpixel") == 0 || strcmp(name, "surface_getpixel_ext") == 0)
+		return wii_surface_getpixel;
 	if (strcmp(name, "sprite_add") == 0)
 		return wii_sprite_add;
 	if (strcmp(name, "sprite_replace") == 0)

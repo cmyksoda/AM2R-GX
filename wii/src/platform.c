@@ -120,6 +120,10 @@ static void register_stubs(VMContext *ctx)
 		VM_registerBuiltin(ctx, "sprite_replace", WiiAssets_builtin("sprite_replace"));
 	if (VM_findBuiltin(ctx, "background_replace") == NULL)
 		VM_registerBuiltin(ctx, "background_replace", WiiAssets_builtin("background_replace"));
+	if (VM_findBuiltin(ctx, "surface_getpixel") == NULL)
+		VM_registerBuiltin(ctx, "surface_getpixel", WiiAssets_builtin("surface_getpixel"));
+	if (VM_findBuiltin(ctx, "surface_getpixel_ext") == NULL)
+		VM_registerBuiltin(ctx, "surface_getpixel_ext", WiiAssets_builtin("surface_getpixel_ext"));
 	if (VM_findBuiltin(ctx, "application_get_position") == NULL)
 		VM_registerBuiltin(ctx, "application_get_position", stub_application_get_position);
 	/* A name can only be registered once; the call cache below is what routes calls to the wrapper. */
