@@ -40,7 +40,7 @@ run-wii:
 # Overlay our wii/ onto the pinned clone, apply patches, cross-compile.
 wii: $(BUTTER)/CMakeLists.txt
 	mkdir -p $(BUTTER)/src/wii
-	rsync -a wii/src/ $(BUTTER)/src/wii/
+	rsync -a --delete wii/src/ $(BUTTER)/src/wii/
 	cd $(BUTTER) && git checkout -- CMakeLists.txt src/gettime.c src/loop.c src/runner.c src/vm_builtins.c src/vm_builtins.h
 	cd $(BUTTER) && git apply ../../wii/patches/0001-cmake-add-PLATFORM-wii.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0002-gettime-wii.patch
