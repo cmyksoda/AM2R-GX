@@ -10,5 +10,8 @@ void GxRenderer_memStats(uint32_t *surfCount, uint32_t *surfBytes, uint32_t *pag
 uint8_t *GxRenderer_tpagUsage(uint32_t *bytes);
 /* display_reset(): every surface is gone a few frames later, as on the real runner. */
 void GxRenderer_loseSurfaces(void);
+/* Wide mode: the composed 426×480 frame goes to the screen here, just before the display copy. */
+void GxRenderer_present(void);
+void GxRenderer_setWideFilter(bool on);
 
 #endif

@@ -52,10 +52,18 @@ static RValue ini_screen(VMContext *ctx, BuiltinFunc fn, const char *key, double
 static RValue wii_ini_read_real(VMContext *ctx, RValue *args, int32_t argCount)
 {
 	double console = WiiVideo_isWide() ? 1.0 : 0.0;
+	double filter;
 
 	if (argCount < 3 || args[0].type != RVALUE_STRING || args[1].type != RVALUE_STRING ||
 	    strcmp(args[0].string, "Screen") != 0 || strcmp(args[1].string, "Widescreen") != 0)
 		return engineIniReadReal(ctx, args, argCount);
+	/* Our own key rides along: 1 = even 3:2 box filter, 0 = plain 2,1,2,1 columns. */
+	filter = RValue_toReal(ini_screen(ctx, engineIniReadReal, "WiiWideFilter", -1.0));
+	if (filter < 0 && engineIniWriteReal) {
+		ini_screen(ctx, engineIniWriteReal, "WiiWideFilter", 1.0);
+		filter = 1.0;
+	}
+	GxRenderer_setWideFilter(filter != 0.0);
 	if (RValue_toReal(ini_screen(ctx, engineIniReadReal, "WiiAspect", -1.0)) == console)
 		return engineIniReadReal(ctx, args, argCount);
 	if (engineIniWriteReal) {
@@ -210,6 +218,7 @@ void platformGetMousePos(double *xPos, double *yPos)
 
 void platformSwapBuffers(void)
 {
+	GxRenderer_present();
 	WiiVideo_present();
 	Wii_shotHold();
 }

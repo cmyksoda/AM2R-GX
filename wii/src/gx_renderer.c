@@ -121,10 +121,19 @@ typedef struct {
 	int32_t viewX, viewY, viewW, viewH;
 	int32_t viewPortX, viewPortY, viewPortW, viewPortH;
 	bool targetDirty;
+	/* Wide mode composes the frame pixel-exact at 426×480 and presents it 3:2 through a
+	 * box filter, instead of the game's blit landing at 1.5 screen pixels per game pixel. */
+	bool compose;
+	int32_t composeId;
 } GxRenderer;
 
 static RendererVtable gxVtable;
 static GxRenderer *gx_cur;
+static bool gx_wide_filter = true; /* [Screen] WiiWideFilter; 0 = the plain 2,1,2,1 stretch */
+void GxRenderer_setWideFilter(bool on)
+{
+	gx_wide_filter = on;
+}
 static void gxSurfaceResize(Renderer *renderer, int32_t surfaceID, int32_t width, int32_t height);
 
 static int pad4(int v)
@@ -962,6 +971,27 @@ static void gx_bind_tile(GxRenderer *gx, GxSurf *s, int col, int row, bool resto
 		gx_restore_tile(gx, s, col, row);
 }
 
+static bool gx_bind_surface(GxRenderer *gx, int32_t id, bool restore);
+
+/* The composed frame stands in for the host framebuffer until present. */
+static void gx_bind_compose(GxRenderer *gx, bool restore)
+{
+	GxSurf *s = &gx->surfs[gx->composeId];
+
+	if (gx->currentTarget != gx->composeId) {
+		gx_bind_surface(gx, gx->composeId, restore);
+		return;
+	}
+	/* Already live: a full bind would stamp its 2×2 PE kick into the finished picture. */
+	gx_draw_state(gx);
+	gx->base.CPortX = 0;
+	gx->base.CPortY = 0;
+	gx->base.CPortW = s->w;
+	gx->base.CPortH = s->h;
+	gx_viewport(0, 0, s->w, s->h);
+	gx_ortho(0, (float)s->h, 0, (float)s->w);
+}
+
 static void gx_bind_host(GxRenderer *gx)
 {
 	/* Physical output is always the full framebuffer; the game's logical window
@@ -969,6 +999,10 @@ static void gx_bind_host(GxRenderer *gx)
 	int w = (int)WiiVideo_fbWidth();
 	int h = (int)WiiVideo_efbHeight();
 
+	if (gx->compose) {
+		gx_bind_compose(gx, true);
+		return;
+	}
 	/* Don't recopy the app surface from an EFB that set_target/clear already stomped. */
 	if (gx->currentTarget != gx->appSurfId)
 		gx_flush_target(gx);
@@ -1242,6 +1276,7 @@ static void gxInit(Renderer *renderer, DataWin *dataWin)
 	gx->pages = (GxPage *)safeCalloc(gx->pageCount, sizeof(GxPage));
 	gx->currentTarget = HOST_TARGET;
 	gx->appSurfId = -1;
+	gx->composeId = -1;
 	gx->tileCol = -1;
 	gx->tileRow = -1;
 	gx->boundTex = NULL;
@@ -1299,6 +1334,35 @@ void GxRenderer_loseSurfaces(void)
 	gx_lose_in = LOSE_SURFACES_FRAMES;
 }
 
+/* Compose when a game pixel would not be a whole number of screen pixels wide (the 426-wide view
+ * on a 640 framebuffer; 4:3 is an exact 2× and stays on the direct path). Sizes come from the
+ * window in game pixels, so the game's own scale setting doesn't matter. */
+static void gx_setup_compose(GxRenderer *gx, int32_t windowW, int32_t windowH)
+{
+	int fbw = (int)WiiVideo_fbWidth();
+	int fbh = (int)WiiVideo_efbHeight();
+	int cw, ch;
+
+	gx->compose = false;
+	if (!gx_wide_filter || gx->gameH < 1 || windowH < 1)
+		return;
+	cw = windowW * gx->gameH / windowH;
+	ch = (fbh / gx->gameH) * gx->gameH;
+	if (cw < 2 || cw > EFB_MAX_W || ch < 1 || fbw % cw == 0 || cw * 3 > fbw * 2)
+		return;
+	if (gx->composeId < 0 || (uint32_t)gx->composeId >= gx->surfCount || !gx->surfs[gx->composeId].exists) {
+		gx->composeId = gx_alloc_surface(gx, cw, ch);
+		if (gx->composeId < 0)
+			return;
+		logInfo("GX: wide compose %dx%d -> %d:%d filtered present\n", cw, ch, fbw, cw);
+	} else if (gx->surfs[gx->composeId].w != cw || gx->surfs[gx->composeId].h != ch) {
+		gxSurfaceResize(&gx->base, gx->composeId, cw, ch);
+		if (!gx->surfs[gx->composeId].exists)
+			return;
+	}
+	gx->compose = true;
+}
+
 static void gxBeginFrame(Renderer *renderer, int32_t gameW, int32_t gameH, int32_t windowW, int32_t windowH)
 {
 	GxRenderer *gx = (GxRenderer *)renderer;
@@ -1320,6 +1384,7 @@ static void gxBeginFrame(Renderer *renderer, int32_t gameW, int32_t gameH, int32
 		gx_lose_surfaces(gx);
 	if ((gx->frameCounter % 60) == 0)
 		gx_make_room(gx, MEM_RESERVE);
+	gx_setup_compose(gx, windowW, windowH);
 	Wii_tryWarp(renderer->runner);
 	Wii_sweepTick(renderer->runner);
 	Wii_forceGamepadProfile(renderer->runner);
@@ -1453,6 +1518,11 @@ static void gxEndFrameInit(Renderer *renderer)
 	GxRenderer *gx = (GxRenderer *)renderer;
 
 	if (renderer->runner->usingAppSurface && !renderer->runner->appSurfaceAutoDraw) {
+		if (gx->compose) {
+			gx_bind_compose(gx, false);
+			gxClearScreen(renderer, 0x000000, 1.0f);
+			return;
+		}
 		/* Clear the full EFB, not the overscan-inset viewport: the app surface renders into the
 		 * top-left corner and would peek out of the black border once overscan shrinks the picture. */
 		gx_bind_host(gx);
@@ -1561,6 +1631,86 @@ static void gxEndFrameEnd(Renderer *renderer)
 	}
 	if (Overscan_active())
 		gx_draw_overscan_overlay(gx);
+}
+
+/* Every 2 composed columns become 3 screen columns: pure, 50/50, pure. Pass 1 is the plain
+ * nearest 3:2 stretch; pass 2 redraws each middle column as the TEV average of two exact texel
+ * fetches, so no bilinear sampling (and no sub-pixel bias) is involved. Rows map 1:1. */
+static void gx_present_mix_column(float x, float h, float ua, float ub, float v1)
+{
+	GX_Begin(GX_QUADS, GX_VTXFMT1, 4);
+	GX_Position2f32(x, 0);
+	GX_Color4u8(255, 255, 255, 255);
+	GX_TexCoord2f32(ua, 0);
+	GX_TexCoord2f32(ub, 0);
+	GX_Position2f32(x + 1, 0);
+	GX_Color4u8(255, 255, 255, 255);
+	GX_TexCoord2f32(ua, 0);
+	GX_TexCoord2f32(ub, 0);
+	GX_Position2f32(x + 1, h);
+	GX_Color4u8(255, 255, 255, 255);
+	GX_TexCoord2f32(ua, v1);
+	GX_TexCoord2f32(ub, v1);
+	GX_Position2f32(x, h);
+	GX_Color4u8(255, 255, 255, 255);
+	GX_TexCoord2f32(ua, v1);
+	GX_TexCoord2f32(ub, v1);
+	GX_End();
+}
+
+void GxRenderer_present(void)
+{
+	GxRenderer *gx = gx_cur;
+	GxSurf *s;
+	int fbw, n, ox, k;
+	float v1, tw, h, u1;
+
+	if (!gx || !gx->compose)
+		return;
+	s = &gx->surfs[gx->composeId];
+	gx->compose = false;
+	gx_bind_host(gx); /* flushes the composed frame to its texture on the way */
+	gx_viewport(0, 0, (int)WiiVideo_fbWidth(), (int)WiiVideo_efbHeight());
+	gxClearScreen(&gx->base, 0x000000, 1.0f);
+	gx_bind_host(gx);
+	if (!s->exists || !s->texels)
+		return;
+	gx_prep_surf_obj(s);
+	gx_bind_tex(gx, &s->obj);
+	GX_SetBlendMode(GX_BM_NONE, GX_BL_ONE, GX_BL_ZERO, GX_LO_CLEAR);
+	fbw = (int)WiiVideo_fbWidth();
+	n = s->w / 2;
+	ox = (fbw - n * 3) / 2;
+	tw = (float)s->texW;
+	h = (float)s->h;
+	v1 = h / (float)s->texH;
+	u1 = (float)(2 * n) / tw;
+	emit_quad((float)ox, 0, (float)(ox + 3 * n), 0, (float)(ox + 3 * n), h, (float)ox, h,
+		  0, 0, u1, 0, u1, v1, 0, v1,
+		  255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255);
+
+	GX_SetVtxDesc(GX_VA_TEX1, GX_DIRECT);
+	GX_SetVtxAttrFmt(GX_VTXFMT1, GX_VA_POS, GX_POS_XY, GX_F32, 0);
+	GX_SetVtxAttrFmt(GX_VTXFMT1, GX_VA_CLR0, GX_CLR_RGBA, GX_RGBA8, 0);
+	GX_SetVtxAttrFmt(GX_VTXFMT1, GX_VA_TEX0, GX_TEX_ST, GX_F32, 0);
+	GX_SetVtxAttrFmt(GX_VTXFMT1, GX_VA_TEX1, GX_TEX_ST, GX_F32, 0);
+	GX_SetNumTexGens(2);
+	GX_SetTexCoordGen(GX_TEXCOORD1, GX_TG_MTX2x4, GX_TG_TEX1, GX_IDENTITY);
+	GX_SetNumTevStages(2);
+	GX_SetTevOrder(GX_TEVSTAGE1, GX_TEXCOORD1, GX_TEXMAP0, GX_COLOR0A0);
+	GX_SetTevKColorSel(GX_TEVSTAGE1, GX_TEV_KCSEL_1_2);
+	GX_SetTevColorIn(GX_TEVSTAGE1, GX_CC_CPREV, GX_CC_TEXC, GX_CC_KONST, GX_CC_ZERO);
+	GX_SetTevColorOp(GX_TEVSTAGE1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+	GX_SetTevAlphaIn(GX_TEVSTAGE1, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_APREV);
+	GX_SetTevAlphaOp(GX_TEVSTAGE1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+	for (k = 0; k < n; k++)
+		gx_present_mix_column((float)(ox + 3 * k + 1), h, (2.0f * (float)k + 0.5f) / tw,
+				      (2.0f * (float)k + 1.5f) / tw, v1);
+	GX_SetNumTevStages(1);
+	GX_SetNumTexGens(1);
+	gx_vtx_fmt();
+	gx_unbind_tex(gx);
+	gx_apply_blend(gx);
 }
 
 static void gxDrawSprite(Renderer *renderer, int32_t tpagIndex, float x, float y, float originX, float originY,
