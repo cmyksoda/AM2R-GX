@@ -107,6 +107,11 @@ static void register_stubs(VMContext *ctx)
 		"virtual_key_show",
 		"io_clear",
 		"texture_set_interpolation_ext",
+		/* 1.5.5's secret-ending hornoad is the only physics object; it sits still. */
+		"physics_apply_local_impulse",
+		"physics_apply_torque",
+		/* TrueType replacements for the non-English fonts; the embedded fonts stay. */
+		"font_replace",
 	};
 	uint32_t i;
 
