@@ -4,7 +4,9 @@
 #include "log.h"
 #include "runner.h"
 #include "runner_keyboard.h"
+#include "rvalue.h"
 #include "stb_ds.h"
+#include "vm.h"
 #include "warp.h"
 #include "wii_paths.h"
 
@@ -17,7 +19,7 @@
  * Runs from platformHandleEvents: keys pressed any later in the frame reach the game as held, never pressed. */
 #define MENU_GIVE_UP_FRAMES 3000 /* per step: a title that will not take a press, a screen that never comes */
 #define KEY_HOLD 2
-#define KEY_GAP 12
+#define KEY_GAP 30 /* menus lock input while the cursor slides */
 
 typedef struct {
 	const char *object;  /* wait until an instance of this exists... */
@@ -28,9 +30,10 @@ typedef struct {
 } MenuStep;
 
 /* Enter+Z at the title (Z alone can take a thousand frames of retries), Z everywhere else. */
+static char fileSelectKeys[16] = "DDDDZ"; /* "extras N" in the marker = N Downs before Z */
 static const MenuStep extras[] = {
 	{ "oPressStart", false, true, 30, "S" },
-	{ "oGameSelMenu", false, false, 300, "DDDDZ" },
+	{ "oGameSelMenu", false, false, 300, fileSelectKeys },
 	{ "oOptionsMain", false, false, 60, "DDDZ" },
 	{ "oOptionsExtras", false, false, 90, "." },
 	{ NULL, false, false, 0, "" },
@@ -91,6 +94,33 @@ static void census(Runner *runner)
 	logInfo("MENU census frame=%d room=%d live=%d:%s\n", runner->frameCount, runner->currentRoomIndex, (int)n, line);
 }
 
+/* Every numeric self variable of the watched object: which one is the cursor shows itself. */
+static void var_census(Runner *runner, const char *object, const char *when)
+{
+	VMContext *vm = runner->vmContext;
+	int32_t idx = Wii_objectIndex(runner, object);
+	Instance **list;
+	char line[400] = "";
+	int len = 0, shown = 0;
+	ptrdiff_t i, n;
+
+	if (!vm || idx < 0 || !runner->instancesByExactObject)
+		return;
+	list = runner->instancesByExactObject[idx];
+	if (arrlen(list) < 1 || !list[0])
+		return;
+	n = shlen(vm->varNameMap);
+	for (i = 0; i < n && shown < 40 && len < (int)sizeof line - 48; i++) {
+		RValue v = Instance_getSelfVar(list[0], vm->varNameMap[i].value);
+
+		if (v.type != RVALUE_REAL && v.type != RVALUE_INT32 && v.type != RVALUE_BOOL)
+			continue;
+		len += snprintf(line + len, sizeof line - len, " %s=%g", vm->varNameMap[i].key, (double)RValue_toReal(v));
+		shown++;
+	}
+	logInfo("MENU %s %s:%s\n", object, when, line);
+}
+
 static int key_vk(int key)
 {
 	return key == 'D' ? VK_DOWN : key == 'E' ? VK_ESCAPE : 'Z';
@@ -120,6 +150,37 @@ static bool step_ready(Runner *runner, const MenuStep *s)
 	       (!s->landing || runner->currentRoomIndex == Wii_am2rIds(runner)->landingRoom);
 }
 
+static double named_var(Runner *runner, Instance *inst, const char *name)
+{
+	VMContext *vm = runner->vmContext;
+	ptrdiff_t slot = shgeti(vm->varNameMap, (char *)name);
+	RValue v;
+
+	if (slot < 0 || !inst)
+		return -1;
+	v = Instance_getSelfVar(inst, vm->varNameMap[slot].value);
+	return v.type == RVALUE_UNDEFINED ? -1 : (double)RValue_toReal(v);
+}
+
+/* What check_keys produced this step, and the file select's cursor: one line per frame while keys
+ * are being pressed (and a moment after), so a press that did nothing shows where it was lost. */
+static void key_trace(Runner *runner)
+{
+	VMContext *vm = runner->vmContext;
+	int32_t idx = vm ? Wii_objectIndex(runner, "oControl") : -1;
+	Instance *ctl = (idx >= 0 && runner->instancesByExactObject && arrlen(runner->instancesByExactObject[idx]) > 0)
+	                    ? runner->instancesByExactObject[idx][0] : NULL;
+	RunnerKeyboardState *kb = runner->keyboard;
+
+	if (!ctl)
+		return;
+	logInfo("MENU trace frame=%d down=%d z=%d | kDown=%g steps=%g kMenu1=%g m1steps=%g kA=%g | curropt=%g controltype=%g\n",
+	        runner->frameCount, (int)kb->keyDown[VK_DOWN], (int)kb->keyDown['Z'],
+	        named_var(runner, ctl, "kDown"), named_var(runner, ctl, "kDownPushedSteps"),
+	        named_var(runner, ctl, "kMenu1"), named_var(runner, ctl, "kMenu1PushedSteps"), named_var(runner, ctl, "kA"),
+	        named_var(runner, vm->globalScopeInstance, "curropt"), named_var(runner, vm->globalScopeInstance, "controltype"));
+}
+
 void Wii_menuTick(Runner *runner)
 {
 	static int armed, step, since = -1, heldKey = -1, waited;
@@ -138,6 +199,11 @@ void Wii_menuTick(Runner *runner)
 		}
 		if (fscanf(f, "%15s", word) == 1 && strcmp(word, "pausetips") == 0)
 			steps = pausetips;
+		else if (fscanf(f, "%d", &t) == 1 && t >= 0 && t < 12) {
+			memset(fileSelectKeys, 'D', (size_t)t);
+			fileSelectKeys[t] = 'Z';
+			fileSelectKeys[t + 1] = '\0';
+		}
 		fclose(f);
 		armed = 1;
 		logInfo("MENU armed script=%s\n", steps == pausetips ? "pausetips" : "extras");
@@ -159,10 +225,13 @@ void Wii_menuTick(Runner *runner)
 		since = 0;
 		logInfo("MENU step=%d %s present frame=%d\n", step, s->object, runner->frameCount);
 		census(runner);
+		var_census(runner, s->object, "before");
 	}
 	t = since++ - s->settle;
 	if (t < 0)
 		return;
+	if (step == 1 && t < (int)strlen(s->keys) * (KEY_HOLD + KEY_GAP) + 60)
+		key_trace(runner);
 	k = t / (KEY_HOLD + KEY_GAP);
 	if (k < (int)strlen(s->keys)) {
 		if (t % (KEY_HOLD + KEY_GAP) >= KEY_HOLD)
@@ -178,6 +247,7 @@ void Wii_menuTick(Runner *runner)
 		since = s->settle > 60 ? s->settle - 60 : 0; /* not through yet: press again in a moment */
 		return;
 	}
+	var_census(runner, s->object, "after");
 	logInfo("MENU step=%d done frame=%d\n", step, runner->frameCount);
 	step++;
 	since = -1;
