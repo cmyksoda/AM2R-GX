@@ -2522,15 +2522,17 @@ static float gxGetSurfaceHeight(Renderer *renderer, int32_t surfaceID)
 	return (float)gx->surfs[surfaceID].h;
 }
 
-/* shGameBoy as a TEV program: m = max(R,G,B) of the texel (swap tables feed G and B into the
- * R-channel compares), then three "m > threshold" compares pick ramp colours 1..4 from the vertex
- * colour, a 4×4 texture, register 2 and konst 1. Thresholds 42/126/210 are the GLSL's 0.165 /
- * 0.495 / 0.825 in 8 bits. One pass, no copies. */
+/* shGameBoy as a TEV program. A TEV compare is additive (d + (a > b ? c : 0)), so selection is
+ * done with alpha masks: stages 0-4 build m = max(R,G,B) in reg0.a (swap tables feed each channel
+ * to the alpha side; max(x,y) = x + clamp(y - x)), stages 5-7 compare m against the thresholds
+ * 42 / 126 / 210 (the GLSL's 0.165 / 0.495 / 0.825) into a 0/255 mask, and the following stage
+ * lerps the colour so far towards the next ramp colour by that mask. Ramp colour 1 is the vertex
+ * colour, 2 a 4×4 texture, 3 and 4 registers. One pass, no copies. */
 static bool gx_gb_begin(GxRenderer *gx)
 {
-	GXColor thr = { 42, 126, 0, 0 }, thr3 = { 210, 0, 0, 0 };
-	GXColor col3 = { gx->gbColor[2][0], gx->gbColor[2][1], gx->gbColor[2][2], 255 };
-	GXColor col4 = { gx->gbColor[3][0], gx->gbColor[3][1], gx->gbColor[3][2], 255 };
+	GXColor zero = { 0, 0, 0, 0 }, thr = { 42, 126, 210, 0 };
+	GXColor col3 = { gx->gbColor[2][0], gx->gbColor[2][1], gx->gbColor[2][2], 0 };
+	GXColor col4 = { gx->gbColor[3][0], gx->gbColor[3][1], gx->gbColor[3][2], 0 };
 	static GXTexObj obj;
 	int i;
 
@@ -2547,36 +2549,46 @@ static bool gx_gb_begin(GxRenderer *gx)
 	GX_InvalidateTexAll();
 	GX_LoadTexObj(&obj, GX_TEXMAP1);
 
-	GX_SetTevSwapModeTable(GX_TEV_SWAP1, GX_CH_GREEN, GX_CH_GREEN, GX_CH_GREEN, GX_CH_ALPHA);
-	GX_SetTevSwapModeTable(GX_TEV_SWAP2, GX_CH_BLUE, GX_CH_BLUE, GX_CH_BLUE, GX_CH_ALPHA);
-	GX_SetTevColor(GX_TEVREG1, thr3);
-	GX_SetTevColor(GX_TEVREG2, col3);
+	GX_SetTevSwapModeTable(GX_TEV_SWAP1, GX_CH_RED, GX_CH_GREEN, GX_CH_BLUE, GX_CH_RED);
+	GX_SetTevSwapModeTable(GX_TEV_SWAP2, GX_CH_RED, GX_CH_GREEN, GX_CH_BLUE, GX_CH_GREEN);
+	GX_SetTevSwapModeTable(GX_TEV_SWAP3, GX_CH_RED, GX_CH_GREEN, GX_CH_BLUE, GX_CH_BLUE);
+	GX_SetTevColor(GX_TEVREG0, zero);
+	GX_SetTevColor(GX_TEVREG1, col3);
+	GX_SetTevColor(GX_TEVREG2, col4);
 	GX_SetTevKColor(GX_KCOLOR0, thr);
-	GX_SetTevKColor(GX_KCOLOR1, col4);
-	GX_SetNumTevStages(6);
-	for (i = 0; i < 6; i++) {
-		GX_SetTevOrder(i, GX_TEXCOORD0, i == 3 ? GX_TEXMAP1 : GX_TEXMAP0, GX_COLOR0A0);
-		GX_SetTevSwapMode(i, GX_TEV_SWAP0, i == 0 ? GX_TEV_SWAP1 : i == 2 ? GX_TEV_SWAP2 : GX_TEV_SWAP0);
-		GX_SetTevAlphaIn(i, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, i == 5 ? GX_CA_RASA : GX_CA_ZERO);
-		GX_SetTevAlphaOp(i, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+	GX_SetNumTevStages(9);
+	for (i = 0; i < 9; i++) {
+		GX_SetTevOrder(i, GX_TEXCOORD0, i == 6 ? GX_TEXMAP1 : GX_TEXMAP0, GX_COLOR0A0);
+		GX_SetTevSwapMode(i, GX_TEV_SWAP0, i == 0 ? GX_TEV_SWAP1 : i == 1 ? GX_TEV_SWAP2 : i == 3 ? GX_TEV_SWAP3 : GX_TEV_SWAP0);
+		GX_SetTevColorIn(i, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO);
+		GX_SetTevColorOp(i, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
 	}
-	/* 0: G → reg0.   1: max(R,G) → prev.   2: max(prev,B) = m → reg0. */
-	GX_SetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_TEXC);
-	GX_SetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVREG0);
-	GX_SetTevColorIn(GX_TEVSTAGE1, GX_CC_C0, GX_CC_TEXC, GX_CC_C0, GX_CC_TEXC);
-	GX_SetTevColorOp(GX_TEVSTAGE1, GX_TEV_COMP_R8_GT, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
-	GX_SetTevColorIn(GX_TEVSTAGE2, GX_CC_TEXC, GX_CC_CPREV, GX_CC_TEXC, GX_CC_CPREV);
-	GX_SetTevColorOp(GX_TEVSTAGE2, GX_TEV_COMP_R8_GT, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVREG0);
-	/* 3: m > 42 ? col2 (texmap1) : col1 (vertex).  4: m > 126 ? col3.  5: m > 210 ? col4. */
-	GX_SetTevKColorSel(GX_TEVSTAGE3, GX_TEV_KCSEL_K0_R);
-	GX_SetTevColorIn(GX_TEVSTAGE3, GX_CC_C0, GX_CC_KONST, GX_CC_TEXC, GX_CC_RASC);
-	GX_SetTevColorOp(GX_TEVSTAGE3, GX_TEV_COMP_R8_GT, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
-	GX_SetTevKColorSel(GX_TEVSTAGE4, GX_TEV_KCSEL_K0_G);
-	GX_SetTevColorIn(GX_TEVSTAGE4, GX_CC_C0, GX_CC_KONST, GX_CC_C2, GX_CC_CPREV);
-	GX_SetTevColorOp(GX_TEVSTAGE4, GX_TEV_COMP_R8_GT, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
-	GX_SetTevKColorSel(GX_TEVSTAGE5, GX_TEV_KCSEL_K1);
-	GX_SetTevColorIn(GX_TEVSTAGE5, GX_CC_C0, GX_CC_C1, GX_CC_KONST, GX_CC_CPREV);
-	GX_SetTevColorOp(GX_TEVSTAGE5, GX_TEV_COMP_R8_GT, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+	/* m: reg0.a = R; reg1.a = max(G - R, 0); reg0.a += reg1.a; reg1.a = max(B - reg0.a, 0); reg0.a += reg1.a */
+	GX_SetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_TEXA);
+	GX_SetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVREG0);
+	GX_SetTevAlphaIn(GX_TEVSTAGE1, GX_CA_A0, GX_CA_ZERO, GX_CA_ZERO, GX_CA_TEXA);
+	GX_SetTevAlphaOp(GX_TEVSTAGE1, GX_TEV_SUB, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVREG1);
+	GX_SetTevAlphaIn(GX_TEVSTAGE2, GX_CA_A1, GX_CA_ZERO, GX_CA_ZERO, GX_CA_A0);
+	GX_SetTevAlphaOp(GX_TEVSTAGE2, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVREG0);
+	GX_SetTevAlphaIn(GX_TEVSTAGE3, GX_CA_A0, GX_CA_ZERO, GX_CA_ZERO, GX_CA_TEXA);
+	GX_SetTevAlphaOp(GX_TEVSTAGE3, GX_TEV_SUB, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVREG1);
+	GX_SetTevAlphaIn(GX_TEVSTAGE4, GX_CA_A1, GX_CA_ZERO, GX_CA_ZERO, GX_CA_A0);
+	GX_SetTevAlphaOp(GX_TEVSTAGE4, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVREG0);
+	/* masks: prev.a = (m > threshold) ? vertex alpha (255) : 0; the next stage's colour lerps by it */
+	GX_SetTevKAlphaSel(GX_TEVSTAGE5, GX_TEV_KASEL_K0_R);
+	GX_SetTevAlphaIn(GX_TEVSTAGE5, GX_CA_A0, GX_CA_KONST, GX_CA_RASA, GX_CA_ZERO);
+	GX_SetTevAlphaOp(GX_TEVSTAGE5, GX_TEV_COMP_A8_GT, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+	GX_SetTevColorIn(GX_TEVSTAGE6, GX_CC_RASC, GX_CC_TEXC, GX_CC_APREV, GX_CC_ZERO);
+	GX_SetTevKAlphaSel(GX_TEVSTAGE6, GX_TEV_KASEL_K0_G);
+	GX_SetTevAlphaIn(GX_TEVSTAGE6, GX_CA_A0, GX_CA_KONST, GX_CA_RASA, GX_CA_ZERO);
+	GX_SetTevAlphaOp(GX_TEVSTAGE6, GX_TEV_COMP_A8_GT, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+	GX_SetTevColorIn(GX_TEVSTAGE7, GX_CC_CPREV, GX_CC_C1, GX_CC_APREV, GX_CC_ZERO);
+	GX_SetTevKAlphaSel(GX_TEVSTAGE7, GX_TEV_KASEL_K0_B);
+	GX_SetTevAlphaIn(GX_TEVSTAGE7, GX_CA_A0, GX_CA_KONST, GX_CA_RASA, GX_CA_ZERO);
+	GX_SetTevAlphaOp(GX_TEVSTAGE7, GX_TEV_COMP_A8_GT, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+	GX_SetTevColorIn(GX_TEVSTAGE8, GX_CC_CPREV, GX_CC_C2, GX_CC_APREV, GX_CC_ZERO);
+	GX_SetTevAlphaIn(GX_TEVSTAGE8, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_RASA);
+	GX_SetTevAlphaOp(GX_TEVSTAGE8, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
 	return true;
 }
 
