@@ -1,3 +1,4 @@
+#include "assets.h"
 #include "common.h"
 #include "gettime.h"
 #include "gx_renderer.h"
@@ -104,8 +105,8 @@ static void register_stubs(VMContext *ctx)
 		"device_mouse_raw_y",
 		"virtual_key_add",
 		"virtual_key_show",
-		"background_add",
 		"io_clear",
+		"texture_set_interpolation_ext",
 	};
 	uint32_t i;
 
@@ -115,6 +116,10 @@ static void register_stubs(VMContext *ctx)
 	}
 	if (VM_findBuiltin(ctx, "display_reset") == NULL)
 		VM_registerBuiltin(ctx, "display_reset", wii_display_reset);
+	if (VM_findBuiltin(ctx, "sprite_replace") == NULL)
+		VM_registerBuiltin(ctx, "sprite_replace", WiiAssets_builtin("sprite_replace"));
+	if (VM_findBuiltin(ctx, "background_replace") == NULL)
+		VM_registerBuiltin(ctx, "background_replace", WiiAssets_builtin("background_replace"));
 	if (VM_findBuiltin(ctx, "application_get_position") == NULL)
 		VM_registerBuiltin(ctx, "application_get_position", stub_application_get_position);
 	/* A name can only be registered once; the call cache below is what routes calls to the wrapper. */
@@ -140,6 +145,8 @@ static void register_stubs(VMContext *ctx)
 			}
 			if (engineIniReadReal && ctx->funcCallCache[fi].builtin == (void *)engineIniReadReal)
 				ctx->funcCallCache[fi].builtin = (void *)wii_ini_read_real;
+			if (strcmp(name, "sprite_add") == 0 || strcmp(name, "background_add") == 0)
+				ctx->funcCallCache[fi].builtin = (void *)WiiAssets_builtin(name);
 			if (ctx->funcCallCache[fi].builtin != NULL)
 				continue;
 			b = VM_findBuiltin(ctx, name);

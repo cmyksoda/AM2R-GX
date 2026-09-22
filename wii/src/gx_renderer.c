@@ -57,6 +57,7 @@ typedef struct {
 typedef struct {
 	bool loaded;
 	bool failed;
+	bool pinned; /* a runtime image (sprite_add), not a TXTR page: never evicted or reloaded */
 	u64 retryAt; /* a failed load is retried after a cooldown, not every frame */
 	int32_t texW, texH;
 	u16 *texels;
@@ -652,7 +653,7 @@ static bool gx_evict_page(GxRenderer *gx)
 	u64 oldest = UINT64_MAX;
 
 	for (i = 0; i < gx->pageCount; i++) {
-		if (!gx->pages[i].loaded || !gx->pages[i].texels)
+		if (!gx->pages[i].loaded || !gx->pages[i].texels || gx->pages[i].pinned)
 			continue;
 		if (gx->pages[i].lastUsed == gx->frameCounter)
 			continue;
@@ -1258,7 +1259,43 @@ static int32_t gx_alloc_surface(GxRenderer *gx, int32_t width, int32_t height)
 	return id;
 }
 
+/* sprite_add / sprite_replace: a loose PNG becomes a page of its own, past the TXTR pages. */
+int32_t GxRenderer_addImage(const uint8_t *rgba, int w, int h)
+{
+	GxRenderer *gx = gx_cur;
+	GxPage *page;
+	int tw, th;
+	u16 *texels;
+
+	if (!gx || w < 1 || h < 1 || w > GX_MAX_TEX_DIM || h > GX_MAX_TEX_DIM || gx->pageCount >= 32000)
+		return -1;
+	tw = pad4(w);
+	th = pad4(h);
+	while (!(texels = WiiMem_texAlloc(tex_bytes(tw, th))) && gx_evict_page(gx))
+		;
+	if (!texels)
+		return -1;
+	swizzle_rgb5a3(texels, rgba, w, h, tw);
+	DCFlushRange(texels, tex_bytes(tw, th));
+	gx->pages = (GxPage *)safeRealloc(gx->pages, (gx->pageCount + 1) * sizeof(GxPage));
+	gx->boundPage = NULL; /* pointed into the old array */
+	page = &gx->pages[gx->pageCount];
+	memset(page, 0, sizeof *page);
+	GX_InitTexObj(&page->obj, texels, (u16)tw, (u16)th, GX_TF_RGB5A3, GX_CLAMP, GX_CLAMP, GX_FALSE);
+	GX_InitTexObjFilterMode(&page->obj, GX_NEAR, GX_NEAR);
+	page->texels = texels;
+	page->texW = tw;
+	page->texH = th;
+	page->loaded = true;
+	page->pinned = true;
+	page->lastUsed = gx->frameCounter;
+	gx->pagesResident++;
+	GX_InvalidateTexAll();
+	return (int32_t)gx->pageCount++;
+}
+
 static u8 *gx_usage; /* one bit per TPAG item drawn; NULL until a sweep asks for it */
+static uint32_t gx_usageCount; /* items the bitmap covers; sprite_add can append more later */
 
 static int gx_texel_off(int texW, int x, int y)
 {
@@ -1381,7 +1418,7 @@ static void gx_draw_tpag(GxRenderer *gx, int32_t tpagIndex, float x0, float y0, 
 
 	if (tpagIndex < 0 || (uint32_t)tpagIndex >= dw->tpag.count)
 		return;
-	if (gx_usage)
+	if (gx_usage && (uint32_t)tpagIndex < gx_usageCount)
 		gx_usage[tpagIndex >> 3] |= (u8)(1 << (tpagIndex & 7));
 	tpag = &dw->tpag.items[tpagIndex];
 	if (gx->base.currentShader >= 0 && gx->base.currentShader == gx->shPal && gx->palTpag >= 0 &&
@@ -2757,8 +2794,11 @@ static void gxSurfaceResize(Renderer *renderer, int32_t surfaceID, int32_t width
 uint8_t *GxRenderer_tpagUsage(uint32_t *bytes)
 {
 	*bytes = gx_cur ? (gx_cur->base.dataWin->tpag.count + 7) / 8 : 0;
-	if (!gx_usage && *bytes)
+	if (!gx_usage && *bytes) {
 		gx_usage = calloc(*bytes, 1);
+		gx_usageCount = gx_cur->base.dataWin->tpag.count;
+	}
+	*bytes = (gx_usageCount + 7) / 8;
 	return gx_usage;
 }
 
