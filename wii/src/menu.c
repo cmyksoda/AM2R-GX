@@ -27,28 +27,29 @@ typedef struct {
 	bool retry;          /* screens that ignore early presses: press again until the next step's screen is up */
 	int settle;          /* frames to let the screen finish sliding in */
 	const char *keys;    /* 'D' Down, 'Z' Z, 'S' Enter+Z, 'E' Esc, '.' shoot; one per KEY_HOLD + KEY_GAP frames */
+	const char *skipIf;  /* a screen the game may show instead (modifiers.ini skips the game-type box) */
 } MenuStep;
 
 /* Enter+Z at the title (Z alone can take a thousand frames of retries), Z everywhere else. */
 static char fileSelectKeys[16] = "DDDDZ"; /* "extras N" in the marker = N Downs before Z */
 static const MenuStep extras[] = {
-	{ "oPressStart", false, true, 30, "S" },
-	{ "oGameSelMenu", false, false, 300, fileSelectKeys },
-	{ "oOptionsMain", false, false, 60, "DDDZ" },
-	{ "oOptionsExtras", false, false, 90, "." },
-	{ NULL, false, false, 0, "" },
+	{ "oPressStart", false, true, 30, "S", NULL },
+	{ "oGameSelMenu", false, false, 300, fileSelectKeys, NULL },
+	{ "oOptionsMain", false, false, 60, "DDDZ", NULL },
+	{ "oOptionsExtras", false, false, 90, ".", NULL },
+	{ NULL, false, false, 0, "", NULL },
 };
 /* New game to the ship (skipping the intro), Esc, then each of the four pause-menu rows: the
  * tips under them are the centred odd-width lines that garble on half pixels (session 5). */
 static const MenuStep pausetips[] = {
-	{ "oPressStart", false, true, 30, "S" },
-	{ "oGameSelMenu", false, false, 300, "Z" },
-	{ "oSlotMenu_normal_only", false, false, 30, "Z" },
-	{ "oSlotMenu2", false, false, 30, "Z" },
-	{ "oIntroCutscene", false, true, 60, "Z" },
-	{ "oCharacter", true, true, 300, "E" },
-	{ "oPauseOption", false, false, 60, ".D.D.D." },
-	{ NULL, false, false, 0, "" },
+	{ "oPressStart", false, true, 30, "S", NULL },
+	{ "oGameSelMenu", false, false, 300, "Z", NULL },
+	{ "oSlotMenu_normal_only", false, false, 30, "Z", "oSlotMenu2" },
+	{ "oSlotMenu2", false, false, 30, "Z", NULL },
+	{ "oIntroCutscene", false, true, 60, "Z", NULL },
+	{ "oCharacter", true, true, 300, "E", NULL },
+	{ "oPauseOption", false, false, 60, ".D.D.D.", NULL },
+	{ NULL, false, false, 0, "", NULL },
 };
 static const MenuStep *steps = extras;
 #define CENSUS_EVERY 120
@@ -212,6 +213,12 @@ void Wii_menuTick(Runner *runner)
 	if (!s->object)
 		return;
 	if (since < 0) {
+		if (s->skipIf && has_instance(runner, s->skipIf)) {
+			logInfo("MENU step=%d skipped: %s is up instead of %s\n", step, s->skipIf, s->object);
+			step++;
+			waited = 0;
+			return;
+		}
 		if (!step_ready(runner, s)) {
 			if (++waited % CENSUS_EVERY == 0)
 				census(runner);
