@@ -31,9 +31,9 @@
 #define DATA155 WII_GAME_DIR "/data155.win"
 #define IO_CHUNK (256 << 10)
 #define SRC_BLOCK (1 << 20)
-#define SRC_BLOCKS 20 /* the delta copies from all over the 1.1 file: 8 blocks re-read 6 GB (trial 6) */
+#define SRC_BLOCKS 14 /* the delta copies from all over the 1.1 file: 8 blocks re-read 6 GB (trial 6) */
 #define CANVAS_BUDGET (16 << 20) /* new pages built per pass; each old page is decoded once per pass */
-#define REGION_BYTES (50u << 20) /* borrowed from the top of MEM2 for the run, so the heap never crosses into MEM2 */
+#define REGION_BYTES (48u << 20) /* borrowed from the top of MEM2 (51 MB free there at this point) */
 #define BLOB_ALIGN 128           /* GameMaker aligns every PNG in TXTR to this */
 #define PNG_LEVEL 2 /* speed over size: a page is read once per load, written once ever */
 #define GUTTER 1    /* the ring kept round each item; must match tools/repack_textures.py --gutter */
