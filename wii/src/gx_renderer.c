@@ -2559,12 +2559,9 @@ static float gxGetSurfaceHeight(Renderer *renderer, int32_t surfaceID)
 	return (float)gx->surfs[surfaceID].h;
 }
 
-/* shGameBoy as a TEV program. A TEV compare is additive (d + (a > b ? c : 0)), so selection is
- * done with alpha masks: stages 0-4 build m = max(R,G,B) in reg0.a (swap tables feed each channel
- * to the alpha side; max(x,y) = x + clamp(y - x)), stages 5-7 compare m against the thresholds
- * 42 / 126 / 210 (the GLSL's 0.165 / 0.495 / 0.825) into a 0/255 mask, and the following stage
- * lerps the colour so far towards the next ramp colour by that mask. Ramp colour 1 is the vertex
- * colour, 2 a 4×4 texture, 3 and 4 registers. One pass, no copies. */
+/* shGameBoy as a TEV program. Compares add (d + (a > b ? c : 0)), so: stages 0-4 build
+ * m = max(R,G,B) in reg0.a, stages 5-7 turn m > 42 / 126 / 210 into 0/255 masks, and each mask
+ * lerps the colour to the next ramp entry (vertex colour, 4×4 texture, reg1, reg2). One pass. */
 static bool gx_gb_begin(GxRenderer *gx)
 {
 	GXColor zero = { 0, 0, 0, 0 }, thr = { 42, 126, 210, 0 };
