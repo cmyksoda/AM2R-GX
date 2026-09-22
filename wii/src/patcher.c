@@ -31,9 +31,9 @@
 #define DATA155 WII_GAME_DIR "/data155.win"
 #define IO_CHUNK (256 << 10)
 #define SRC_BLOCK (1 << 20)
-#define SRC_BLOCKS 8 /* trial 4: 183k block requests, 27 reads - the delta walks the source in order */
+#define SRC_BLOCKS 20 /* the delta copies from all over the 1.1 file: 8 blocks re-read 6 GB (trial 6) */
 #define CANVAS_BUDGET (16 << 20) /* new pages built per pass; each old page is decoded once per pass */
-#define REGION_BYTES (44u << 20) /* borrowed from the top of MEM2 for the run, so the heap never crosses into MEM2 */
+#define REGION_BYTES (50u << 20) /* borrowed from the top of MEM2 for the run, so the heap never crosses into MEM2 */
 #define BLOB_ALIGN 128           /* GameMaker aligns every PNG in TXTR to this */
 #define PNG_LEVEL 2 /* speed over size: a page is read once per load, written once ever */
 #define GUTTER 1    /* the ring kept round each item; must match tools/repack_textures.py --gutter */
@@ -59,7 +59,7 @@ static bool region_take(void)
 {
 	u8 *hi = (u8 *)((u32)SYS_GetArena2Hi() & ~31u);
 
-	if (SYS_GetArena2Size() < REGION_BYTES + (4u << 20))
+	if (SYS_GetArena2Size() < REGION_BYTES + (2u << 20))
 		return false;
 	regionHi = bumpHi = hi;
 	regionLo = bumpLo = hi - REGION_BYTES;
@@ -90,6 +90,8 @@ static void *xd_alloc(void *opaque, size_t items, usize_t size)
 	HeapBlock *b, **link = &heap;
 
 	(void)opaque;
+	if (bytes >= (1u << 20))
+		logInfo("PATCH xdelta asks %u KB\n", (unsigned)(bytes >> 10));
 	for (b = heap; b; link = &b->next, b = b->next) {
 		if (b->used || b->size < bytes)
 			continue;
