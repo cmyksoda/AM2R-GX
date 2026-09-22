@@ -411,8 +411,18 @@ void Wii_jukeboxTick(Runner *runner)
 	}
 	if (runner->currentRoomIndex != Wii_am2rIds(runner)->landingRoom || runner->frameCount < at)
 		return;
-	while ((uint32_t)next < dw->sond.count && strncmp(dw->sond.sounds[next].name, "mus", 3) != 0)
-		next++;
+	/* Music first (5 s each), then every other sound (a third of a second each). */
+	if (armed == 1) {
+		while ((uint32_t)next < dw->sond.count && strncmp(dw->sond.sounds[next].name, "mus", 3) != 0)
+			next++;
+		if ((uint32_t)next >= dw->sond.count) {
+			armed = 2;
+			next = 0;
+		}
+	}
+	if (armed == 2)
+		while ((uint32_t)next < dw->sond.count && strncmp(dw->sond.sounds[next].name, "mus", 3) == 0)
+			next++;
 	stopAll(vm, NULL, 0);
 	if ((uint32_t)next >= dw->sond.count) {
 		logInfo("JUKEBOX done\n");
@@ -426,7 +436,7 @@ void Wii_jukeboxTick(Runner *runner)
 		logInfo("JUKEBOX %d '%s'\n", next, dw->sond.sounds[next].name);
 	}
 	next++;
-	at = runner->frameCount + JUKEBOX_FRAMES;
+	at = runner->frameCount + (armed == 1 ? JUKEBOX_FRAMES : 20);
 }
 
 /* Announce only once the frame is on screen, then freeze it: the host's grab lands up to half a
