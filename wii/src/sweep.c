@@ -12,6 +12,7 @@
 #include "warp.h"
 #include "wii_mem.h"
 #include "wii_paths.h"
+#include "wii_video.h"
 
 #include <gccore.h>
 #include <malloc.h>
@@ -269,6 +270,14 @@ static void sweep_shot(Runner *runner)
 	shotDue = true;
 }
 
+void Wii_requestShot(int frame, const char *what, bool last)
+{
+	snprintf(shotLine, sizeof shotLine, "TAPE shot frame=%d %s\n", frame, what);
+	shotFrame = frame;
+	shotLast = last;
+	shotDue = true;
+}
+
 static void sweep_leave(Runner *runner)
 {
 	int32_t i, n = (int32_t)arrlen(runner->instances), live = 0;
@@ -339,7 +348,7 @@ void Wii_efbDump(void)
 {
 	static int have = -1;
 	static u8 *buf;
-	const u16 w = 640, h = 480;
+	const u16 w = WII_FB_W, h = WII_FB_H;
 	char path[96];
 	FILE *f;
 	int x, y;
@@ -383,8 +392,8 @@ void Wii_efbDump(void)
 	logInfo("TAPE efbdump frame=%d\n", shotFrame);
 }
 
-/* JUKEBOX marker (Dolphin only): once in gameplay, play every music asset for a few seconds each,
- * so tracks no scripted route reaches (bosses, ending, credits) are streamed and decoded too. */
+/* JUKEBOX marker (Dolphin only): once in gameplay, every music track for a few seconds, then every
+ * other sound briefly, so what no scripted route reaches (bosses, ending, credits) gets decoded too. */
 #define JUKEBOX_FRAMES 300
 void Wii_jukeboxTick(Runner *runner)
 {

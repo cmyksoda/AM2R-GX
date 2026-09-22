@@ -46,6 +46,17 @@ const Am2rIds *Wii_am2rIds(Runner *runner)
 	return &ids;
 }
 
+int32_t Wii_objectIndex(Runner *runner, const char *name)
+{
+	DataWin *dw = runner ? runner->dataWin : NULL;
+	uint32_t i;
+
+	for (i = 0; dw && i < dw->objt.count; i++)
+		if (strcmp(dw->objt.objects[i].name, name) == 0)
+			return (int32_t)i;
+	return -1;
+}
+
 /* The move a door makes. oCharacter's Room Start re-places Samus from global.target*+offset*,
  * so the globals are what actually position her; the direct x/y only covers the first frame. */
 void Wii_warpTo(Runner *runner, int room, int x, int y, int camx, int camy)
@@ -138,8 +149,7 @@ void Wii_tryFusion(Runner *runner)
 	static int32_t varId = -1;
 	VMContext *vm = runner ? runner->vmContext : NULL;
 	Instance **list;
-	int32_t n, i, control = -1;
-	uint32_t o;
+	int32_t n, i, control;
 	FILE *f;
 
 	if (armed < 0 || !vm || !runner->instancesByExactObject)
@@ -155,9 +165,7 @@ void Wii_tryFusion(Runner *runner)
 	}
 	if (runner->currentRoomIndex != Wii_am2rIds(runner)->landingRoom)
 		return;
-	for (o = 0; o < runner->dataWin->objt.count; o++)
-		if (strcmp(runner->dataWin->objt.objects[o].name, "oControl") == 0)
-			control = (int32_t)o;
+	control = Wii_objectIndex(runner, "oControl");
 	if (varId < 0) {
 		ptrdiff_t slot = shgeti(vm->varNameMap, "mod_fusion");
 

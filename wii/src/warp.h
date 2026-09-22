@@ -13,6 +13,8 @@ typedef struct {
 	int32_t landingRoom;       /* rm_a0h01 */
 } Am2rIds;
 const Am2rIds *Wii_am2rIds(struct Runner *runner);
+/* Object index by name, -1 if the data has none (a linear scan: hooks only). */
+int32_t Wii_objectIndex(struct Runner *runner, const char *name);
 
 /* Sets global.<name> if the game has such a variable; silently does nothing otherwise. */
 void Wii_setGlobal(struct Runner *runner, const char *name, int value);
