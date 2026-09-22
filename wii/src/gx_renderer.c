@@ -1553,6 +1553,7 @@ static void gxBeginFrame(Renderer *renderer, int32_t gameW, int32_t gameH, int32
 		gx_make_room(gx, MEM_RESERVE);
 	gx_setup_compose(gx, windowW, windowH);
 	Wii_tryWarp(renderer->runner);
+	Wii_tryFusion(renderer->runner);
 	Wii_sweepTick(renderer->runner);
 	Wii_forceGamepadProfile(renderer->runner);
 	appId = renderer->runner->applicationSurfaceId;

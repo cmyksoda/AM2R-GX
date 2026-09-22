@@ -130,6 +130,60 @@ void Wii_tryWarp(Runner *runner)
 	Wii_warpTo(runner, room, x, y, x, y);
 }
 
+/* FUSION marker (Dolphin only): oControl.mod_fusion = 1 once in the landing room, which is what
+ * the Fusion difficulty sets - it is an unlockable, so a fresh save can't reach it by menu. */
+void Wii_tryFusion(Runner *runner)
+{
+	static int armed;
+	static int32_t varId = -1;
+	VMContext *vm = runner ? runner->vmContext : NULL;
+	Instance **list;
+	int32_t n, i, control = -1;
+	uint32_t o;
+	FILE *f;
+
+	if (armed < 0 || !vm || !runner->instancesByExactObject)
+		return;
+	if (armed == 0) {
+		f = fopen(WII_GAME_DIR "/FUSION", "r");
+		if (!f) {
+			armed = -1;
+			return;
+		}
+		fclose(f);
+		armed = 1;
+	}
+	if (runner->currentRoomIndex != Wii_am2rIds(runner)->landingRoom)
+		return;
+	for (o = 0; o < runner->dataWin->objt.count; o++)
+		if (strcmp(runner->dataWin->objt.objects[o].name, "oControl") == 0)
+			control = (int32_t)o;
+	if (varId < 0) {
+		ptrdiff_t slot = shgeti(vm->varNameMap, "mod_fusion");
+
+		varId = slot >= 0 ? vm->varNameMap[slot].value : -1;
+	}
+	if (control < 0 || varId < 0) {
+		armed = -1;
+		return;
+	}
+	/* msr_fusionsuit (default 1) draws separate Samus Returns-style sprites and never touches the
+	 * palette shader; the AM2R-style suit (0) is the one that recolours through it. */
+	list = runner->instancesByExactObject[control];
+	n = (int32_t)arrlen(list);
+	for (i = 0; i < n; i++) {
+		ptrdiff_t ms = shgeti(vm->varNameMap, "msr_fusionsuit");
+
+		if (!list[i] || list[i]->destroyed)
+			continue;
+		Instance_setSelfVar(list[i], varId, RValue_makeInt32(1));
+		if (ms >= 0)
+			Instance_setSelfVar(list[i], vm->varNameMap[ms].value, RValue_makeInt32(0));
+	}
+	logInfo("Wii: FUSION -> oControl.mod_fusion = 1, msr_fusionsuit = 0 (%d instances)\n", (int)n);
+	armed = -1;
+}
+
 /* global.controltype picks the prompt glyph set: 0 keyboard, 1 numbered pad, 2 named A/B pad.
  * check_keys resets it every step from the last input seen; our keyboard synthesis makes it
  * flip. Pin it to 2 after the step so prompts stay the named-button set. Gameplay unaffected. */
