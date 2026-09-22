@@ -2,7 +2,7 @@ Reason: Add PLATFORM=wii to the CMake build: our src/wii/ tree, libogc + portlib
 Upstream: Port scaffolding. Goes upstream with the whole src/wii/ tree, not before.
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 8de80db..e369e05 100644
+index 8de80db..c2c1bb9 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -26,6 +26,13 @@ endif()
@@ -130,7 +130,7 @@ index 8de80db..e369e05 100644
          set(PLATFORM_LIBRARIES ${PLATFORM_LIBRARIES} ${CMAKE_DL_LIBS})
      endif()
  
-@@ -440,9 +470,27 @@ if(PLATFORM STREQUAL "cli" OR PLATFORM STREQUAL "vita" OR PLATFORM STREQUAL "swi
+@@ -440,9 +470,31 @@ if(PLATFORM STREQUAL "cli" OR PLATFORM STREQUAL "vita" OR PLATFORM STREQUAL "swi
              target_link_libraries(butterscotch PRIVATE GLESv2 stdc++)
              nx_generate_nacp(OUTPUT Butterscotch.nacp NAME "Butterscotch" AUTHOR "Butterscotch" VERSION "1.0.0")
              nx_create_nro(butterscotch NACP Butterscotch.nacp)
@@ -143,7 +143,11 @@ index 8de80db..e369e05 100644
 +                file(GLOB WII_OWN_SOURCES src/wii/*.c)
 +                set_source_files_properties(${WII_OWN_SOURCES} PROPERTIES COMPILE_OPTIONS "-Wunused;-Wshadow")
 +            endif()
-+            target_link_libraries(butterscotch PRIVATE wiiuse bte fat aesnd freetype png16 bz2 brotlidec brotlicommon z ogc m)
++            # xdelta3 (decoder only, liblzma secondary) for the first-boot patcher.
++            target_sources(butterscotch PRIVATE src/wii/xdelta3/xdelta3.c)
++            set_source_files_properties(src/wii/xdelta3/xdelta3.c PROPERTIES COMPILE_OPTIONS
++                "-DHAVE_CONFIG_H=1;-DXD3_ENCODER=0;-DXD3_MAIN=0;-DSECONDARY_LZMA=1;-w")
++            target_link_libraries(butterscotch PRIVATE wiiuse bte fat aesnd freetype png16 bz2 brotlidec brotlicommon lzma z ogc m)
 +            add_custom_command(TARGET butterscotch POST_BUILD
 +                COMMAND $ENV{DEVKITPRO}/tools/bin/elf2dol
 +                    $<TARGET_FILE:butterscotch>
@@ -159,7 +163,7 @@ index 8de80db..e369e05 100644
          target_sources(butterscotch PRIVATE src/backends/${BACKEND}.m)
      else()
          target_sources(butterscotch PRIVATE src/backends/${BACKEND}.c)
-@@ -455,7 +503,7 @@ if(PLATFORM STREQUAL "cli" OR PLATFORM STREQUAL "vita" OR PLATFORM STREQUAL "swi
+@@ -455,7 +507,7 @@ if(PLATFORM STREQUAL "cli" OR PLATFORM STREQUAL "vita" OR PLATFORM STREQUAL "swi
          set(ENABLE_ASAN_DEFAULT OFF)
      endif()
      set(ENABLE_ASAN ${ENABLE_ASAN_DEFAULT} CACHE BOOL "Enable AddressSanitizer")

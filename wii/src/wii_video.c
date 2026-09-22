@@ -41,7 +41,7 @@ bool WiiVideo_init(void)
 
 	VIDEO_Init();
 	rmode = pick_mode();
-	/* 16:9 TVs get the same fill (a horizontal stretch) unless WII_WIDE_PILLARBOX is built in. */
+	/* 16:9 TVs stretch the frame; the game composes its wide view for that unless WII_WIDE_PILLARBOX is built in. */
 	wide = (CONF_GetAspectRatio() == CONF_ASPECT_16_9);
 
 	fb = 0;
@@ -126,18 +126,18 @@ bool WiiVideo_isWide(void)
 	return wide;
 }
 
-/* Self-contained: takes a fresh XFB so it works even if GX/video never came up. */
-void WiiVideo_panic(const char *title, const char *body)
+/* Own XFB, so it works even if GX never came up; the game's next frame takes the display back. */
+bool WiiVideo_console(void)
 {
 	static void *pxfb;
 	GXRModeObj *m;
 
 	VIDEO_Init();
 	m = pick_mode();
-	pxfb = MEM_K0_TO_K1(SYS_AllocateFramebuffer(m));
 	if (!pxfb)
-		return;
-
+		pxfb = MEM_K0_TO_K1(SYS_AllocateFramebuffer(m));
+	if (!pxfb)
+		return false;
 	console_init(pxfb, 20, 20, m->fbWidth, m->xfbHeight, m->fbWidth * VI_DISPLAY_PIX_SZ);
 	VIDEO_Configure(m);
 	VIDEO_SetNextFramebuffer(pxfb);
@@ -146,8 +146,15 @@ void WiiVideo_panic(const char *title, const char *body)
 	VIDEO_WaitVSync();
 	if (m->viTVMode & VI_NON_INTERLACE)
 		VIDEO_WaitVSync();
+	printf("\x1b[2J");
+	return true;
+}
 
-	printf("\x1b[2J\n\n  AM2R GX -- %s\n\n", title ? title : "fatal error");
+void WiiVideo_panic(const char *title, const char *body)
+{
+	if (!WiiVideo_console())
+		return;
+	printf("\n\n  AM2R GX -- %s\n\n", title ? title : "fatal error");
 	if (body && *body)
 		printf("  %s\n\n", body);
 	printf("  Log: " WII_LOG_PATH "\n");

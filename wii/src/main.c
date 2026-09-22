@@ -2,6 +2,7 @@
 #include "log.h"
 #include "loop.h"
 #include "overscan.h"
+#include "patcher.h"
 #include "wii_log.h"
 #include "wii_mem.h"
 #include "wii_paths.h"
@@ -14,10 +15,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#define GAME_DIR WII_APP_DIR
-#define DATA_WIN WII_GAME_DIR "/data.win"
 #define SAVE_DIR WII_APP_DIR "/save"
-#define LOG_PATH WII_LOG_PATH
 
 static void wait_home(const char *why)
 {
@@ -54,6 +52,7 @@ static void poison_arenas(void)
 int main(int argc, char **argv)
 {
 	CommandLineArgs args;
+	bool playback;
 	int rc;
 
 	(void)argc;
@@ -70,15 +69,15 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	mkdir(GAME_DIR, 0777);
-	mkdir(GAME_DIR "/game", 0777);
+	mkdir(WII_APP_DIR, 0777);
+	mkdir(WII_GAME_DIR, 0777);
 	mkdir(SAVE_DIR, 0777);
 
-	if (chdir(GAME_DIR) != 0)
-		logWarn("chdir(%s) failed — paths stay absolute\n", GAME_DIR);
+	if (chdir(WII_APP_DIR) != 0)
+		logWarn("chdir(%s) failed — paths stay absolute\n", WII_APP_DIR);
 
-	if (!WiiLog_open(LOG_PATH))
-		logWarn("could not open %s — console only\n", LOG_PATH);
+	if (!WiiLog_open(WII_LOG_PATH))
+		logWarn("could not open %s — console only\n", WII_LOG_PATH);
 
 	Overscan_load();
 
@@ -88,8 +87,12 @@ int main(int argc, char **argv)
 		WiiVideo_isWide() ? "16:9 stretch" : "4:3 fill");
 	log_mallinfo("boot");
 
-	if (access(DATA_WIN, R_OK) != 0) {
-		wait_home("data.win not found at " WII_GAME_DIR "/ -- run 'make sd-pack' and copy apps/ onto the SD card");
+	playback = access(WII_GAME_DIR "/PLAYBACK", R_OK) == 0;
+	if (playback)
+		WiiLog_enableGecko(); /* Dolphin: the patcher's progress is worth watching live too */
+	WiiPatcher_run();
+	if (access(WII_DATA_WIN, R_OK) != 0) {
+		wait_home("no game data: put your AM2R_11.zip in " WII_APP_DIR "/ (with the patch/ folder) and boot again");
 		WiiLog_close();
 		return 1;
 	}
@@ -97,7 +100,6 @@ int main(int argc, char **argv)
 	memset(&args, 0, sizeof(args));
 	args.exitAtFrame = -1; // run until the player holds HOME
 	args.speedMultiplier = 1.0;
-	args.fastForwardSpeed = 0.0;
 	args.osType = OS_WINDOWS;
 	args.windowWidth = WII_FB_W;
 	args.windowHeight = WII_FB_H;
@@ -106,22 +108,19 @@ int main(int argc, char **argv)
 	args.lazyRooms = true;
 	args.lazyTextures = true;
 	args.lazyAudio = true;
-	args.headless = false;
-	args.traceFrames = false;
 	args.renderer = NOOP;
-	args.dataWinPath = DATA_WIN;
+	args.dataWinPath = WII_DATA_WIN;
 	args.saveFolder = SAVE_DIR;
 
 	/* Dolphin-only tape replay: a PLAYBACK sentinel beside the game enables it.
 	 * Never present on real SD cards, so hardware keeps live controller input. */
-	if (access(GAME_DIR "/game/PLAYBACK", R_OK) == 0) {
-		args.playbackInputsPath = GAME_DIR "/game/am2r_inputs.json";
+	if (playback) {
+		args.playbackInputsPath = WII_GAME_DIR "/am2r_inputs.json";
 		/* 1.5.5 calls randomize() at boot; a tape only replays if that stays a no-op. */
 		args.hasSeed = true;
-		WiiLog_enableGecko();
 		logInfo("PLAYBACK sentinel found -- replaying %s\n", args.playbackInputsPath);
 	}
-	if (access(GAME_DIR "/game/POISON", R_OK) == 0)
+	if (access(WII_GAME_DIR "/POISON", R_OK) == 0)
 		poison_arenas();
 
 	rc = loop(args, argv[0] ? argv[0] : "boot.dol");

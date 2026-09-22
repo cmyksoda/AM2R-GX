@@ -20,7 +20,7 @@ WII_CMAKE_FLAGS := \
 	-DBUTTERSCOTCH_COMMIT_HASH="$(SHA)" \
 	-DBUTTERSCOTCH_COMMIT_DATE="2026-09-10"
 
-.PHONY: all hello run run-wii clean wii wii-warn wii-sd sd-pack host-smoke
+.PHONY: all hello run run-wii clean wii wii-warn wii-sd sd-pack patchkit host-smoke
 
 all: hello
 
@@ -59,6 +59,19 @@ wii: $(BUTTER)/CMakeLists.txt
 	cp -f $(WII_BUILD)/boot.dol dist/apps/am2r/boot.dol
 	cp -f wii/hbc/meta.xml dist/apps/am2r/meta.xml
 	cp -f wii/hbc/icon.png dist/apps/am2r/icon.png
+
+# The first-boot patch kit: the community 1.1 -> 1.5.5 delta, the texture plan the console follows, and
+# the loose 1.5.5 files (no game data inside). Ends up next to boot.dol as apps/am2r/patch/.
+AUTOPATCHER ?= working/extracted/autopatcher/windows/data
+CU155 ?= working/extracted/cu155/data.win
+GROUPS ?= working/repacked/cu155/groups-v3.json
+patchkit:
+	mkdir -p dist/apps/am2r/patch/files build
+	cp -f $(AUTOPATCHER)/data.xdelta dist/apps/am2r/patch/data.xdelta
+	python3 tools/repack_textures.py $(CU155) build/plan-repacked.win --groups $(GROUPS) --report build/plan.json
+	python3 tools/repack_plan.py $(CU155) build/plan.json dist/apps/am2r/patch/plan.bin
+	rsync -a --delete $(AUTOPATCHER)/files_to_copy/ dist/apps/am2r/patch/files/
+	du -sh dist/apps/am2r/patch
 
 # Same tree, second build dir, unused/shadow warnings on for src/wii/ only (upstream's are noise).
 wii-warn: wii

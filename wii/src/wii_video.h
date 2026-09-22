@@ -12,9 +12,11 @@ void WiiVideo_present(void);
 GXRModeObj *WiiVideo_rmode(void);
 u32 WiiVideo_fbWidth(void);
 u32 WiiVideo_efbHeight(void);
-/* SYSCONF 16:9. Game still fills 640×480 (stretch). Pillarbox is WII_WIDE_PILLARBOX. */
+/* SYSCONF 16:9: the TV stretches the 640-wide frame, so the game composes its own wide view for it
+ * (platform.c, gx_renderer.c); WII_WIDE_PILLARBOX keeps 4:3 instead. */
 bool WiiVideo_isWide(void);
-/* Blind-debug fallback: bring up a text console and show a fatal message on the TV. */
+/* Text console on its own XFB: the panic screen and the patcher's progress display. */
+bool WiiVideo_console(void);
 void WiiVideo_panic(const char *title, const char *body);
 
 #endif
