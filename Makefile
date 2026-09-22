@@ -8,8 +8,19 @@ AM2R_DATA ?= working/extracted/win11
 SD_GAME := dist/apps/am2r/game
 DOLPHIN_USER := project-notes/research/evidence-I/dolphin-user
 WII_SD := $(DOLPHIN_USER)/Load/WiiSDSync
+WII_CMAKE_FLAGS := \
+	-DCMAKE_TOOLCHAIN_FILE="$(CURDIR)/wii/cmake/wii.cmake" \
+	-DPLATFORM=wii \
+	-DCMAKE_BUILD_TYPE=Release \
+	-DAUDIO_BACKEND=none \
+	-DENABLE_WAD14=ON -DENABLE_WAD16=ON -DENABLE_WAD17=OFF \
+	-DENABLE_NOOP_RENDERER=OFF -DENABLE_LEGACY_GL=OFF -DENABLE_MODERN_GL=OFF \
+	-DENABLE_VM_GML_PROFILER=ON -DENABLE_VM_STUB_LOGS=ON -DENABLE_VM_TRACING=OFF \
+	-DENABLE_ASAN=OFF \
+	-DBUTTERSCOTCH_COMMIT_HASH="$(SHA)" \
+	-DBUTTERSCOTCH_COMMIT_DATE="2026-09-10"
 
-.PHONY: all hello run run-wii clean wii wii-sd sd-pack host-smoke
+.PHONY: all hello run run-wii clean wii wii-warn wii-sd sd-pack host-smoke
 
 all: hello
 
@@ -42,22 +53,17 @@ wii: $(BUTTER)/CMakeLists.txt
 	cd $(BUTTER) && git apply ../../wii/patches/0010-vm-audio-is-paused-wii.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0011-runner-no-collision-events-after-destroy.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0012-vm-game-id.patch
-	cmake -B $(WII_BUILD) -S $(BUTTER) \
-		-DCMAKE_TOOLCHAIN_FILE="$(CURDIR)/wii/cmake/wii.cmake" \
-		-DPLATFORM=wii \
-		-DCMAKE_BUILD_TYPE=Release \
-		-DAUDIO_BACKEND=none \
-		-DENABLE_WAD14=ON -DENABLE_WAD16=ON -DENABLE_WAD17=OFF \
-		-DENABLE_NOOP_RENDERER=OFF -DENABLE_LEGACY_GL=OFF -DENABLE_MODERN_GL=OFF \
-		-DENABLE_VM_GML_PROFILER=ON -DENABLE_VM_STUB_LOGS=ON -DENABLE_VM_TRACING=OFF \
-		-DENABLE_ASAN=OFF \
-		-DBUTTERSCOTCH_COMMIT_HASH="$(SHA)" \
-		-DBUTTERSCOTCH_COMMIT_DATE="2026-09-10"
+	cmake -B $(WII_BUILD) -S $(BUTTER) $(WII_CMAKE_FLAGS)
 	cmake --build $(WII_BUILD) -j$(shell nproc)
 	mkdir -p dist/apps/am2r
 	cp -f $(WII_BUILD)/boot.dol dist/apps/am2r/boot.dol
 	cp -f wii/hbc/meta.xml dist/apps/am2r/meta.xml
 	cp -f wii/hbc/icon.png dist/apps/am2r/icon.png
+
+# Same tree, second build dir, unused/shadow warnings on for src/wii/ only (upstream's are noise).
+wii-warn: wii
+	cmake -B $(WII_BUILD)-warn -S $(BUTTER) -DWII_STRICT=ON $(WII_CMAKE_FLAGS)
+	cmake --build $(WII_BUILD)-warn -j$(shell nproc) 2>&1 | grep -E "src/wii/.*warning" || echo "no warnings in src/wii/"
 	@ls -l dist/apps/am2r/boot.dol
 
 wii-sd:

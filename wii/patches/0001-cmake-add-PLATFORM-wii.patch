@@ -2,7 +2,7 @@ Reason: Add PLATFORM=wii to the CMake build: our src/wii/ tree, libogc + portlib
 Upstream: Port scaffolding. Goes upstream with the whole src/wii/ tree, not before.
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 8de80db..254b65c 100644
+index 8de80db..e369e05 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -26,6 +26,13 @@ endif()
@@ -130,7 +130,7 @@ index 8de80db..254b65c 100644
          set(PLATFORM_LIBRARIES ${PLATFORM_LIBRARIES} ${CMAKE_DL_LIBS})
      endif()
  
-@@ -440,9 +470,22 @@ if(PLATFORM STREQUAL "cli" OR PLATFORM STREQUAL "vita" OR PLATFORM STREQUAL "swi
+@@ -440,9 +470,27 @@ if(PLATFORM STREQUAL "cli" OR PLATFORM STREQUAL "vita" OR PLATFORM STREQUAL "swi
              target_link_libraries(butterscotch PRIVATE GLESv2 stdc++)
              nx_generate_nacp(OUTPUT Butterscotch.nacp NAME "Butterscotch" AUTHOR "Butterscotch" VERSION "1.0.0")
              nx_create_nro(butterscotch NACP Butterscotch.nacp)
@@ -138,6 +138,11 @@ index 8de80db..254b65c 100644
 +            target_include_directories(butterscotch PRIVATE $ENV{DEVKITPRO}/libogc/include $ENV{DEVKITPRO}/portlibs/ppc/include/freetype2)
 +            target_link_directories(butterscotch PRIVATE $ENV{DEVKITPRO}/libogc/lib/wii)
 +            target_compile_options(butterscotch PRIVATE -Wno-unused-parameter -Wno-unused-variable)
++            if(WII_STRICT)
++                # The port's own files with the unused/shadow warnings back on (make wii-warn).
++                file(GLOB WII_OWN_SOURCES src/wii/*.c)
++                set_source_files_properties(${WII_OWN_SOURCES} PROPERTIES COMPILE_OPTIONS "-Wunused;-Wshadow")
++            endif()
 +            target_link_libraries(butterscotch PRIVATE wiiuse bte fat aesnd freetype png16 bz2 brotlidec brotlicommon z ogc m)
 +            add_custom_command(TARGET butterscotch POST_BUILD
 +                COMMAND $ENV{DEVKITPRO}/tools/bin/elf2dol
@@ -154,7 +159,7 @@ index 8de80db..254b65c 100644
          target_sources(butterscotch PRIVATE src/backends/${BACKEND}.m)
      else()
          target_sources(butterscotch PRIVATE src/backends/${BACKEND}.c)
-@@ -455,7 +498,7 @@ if(PLATFORM STREQUAL "cli" OR PLATFORM STREQUAL "vita" OR PLATFORM STREQUAL "swi
+@@ -455,7 +503,7 @@ if(PLATFORM STREQUAL "cli" OR PLATFORM STREQUAL "vita" OR PLATFORM STREQUAL "swi
          set(ENABLE_ASAN_DEFAULT OFF)
      endif()
      set(ENABLE_ASAN ${ENABLE_ASAN_DEFAULT} CACHE BOOL "Enable AddressSanitizer")
