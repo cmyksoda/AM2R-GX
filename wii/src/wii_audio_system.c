@@ -401,7 +401,9 @@ static float streamPosition(WiiStream* s) {
 }
 
 static void streamsUpdate(WiiAudioSystem* a, float dt) {
+#if !WII_AUDIO_DECODE_THREAD
     uint64_t t0 = gettime();
+#endif
     for (int i = 0; i < WII_STREAMS; i++) {
         WiiStream* s = &a->streams[i];
         if (!s->active) continue;
@@ -421,9 +423,11 @@ static void streamsUpdate(WiiAudioSystem* a, float dt) {
             streamStop(s);
         }
     }
+#if !WII_AUDIO_DECODE_THREAD
     uint64_t dtTicks = gettime() - t0;
     a->statTicks += dtTicks;
     if (dtTicks > a->statMaxTicks) a->statMaxTicks = dtTicks;
+#endif
     if (++a->statFrames >= STREAM_STATS_FRAMES) {
         uint32_t starved = 0;
         int active = 0;
@@ -547,7 +551,7 @@ static int32_t wiiPlaySound(AudioSystem* audio, int32_t soundIndex, MAYBE_UNUSED
     if (!embedded) return streamPlay(a, soundIndex, sound, loop);
     if (sound->audioGroup != 0) return -1;
 
-    DataWin* group = dw;        // group 0 is data.win; AM2R 1.1 keeps SFX there
+    DataWin* group = dw;        // group 0 is data.win; AM2R keeps its SFX there
     if (sound->audioFile < 0 || (uint32_t) sound->audioFile >= group->audo.count) return -1;
     AudioEntry* entry = &group->audo.entries[sound->audioFile];
     bool fresh = entry->data == nullptr;

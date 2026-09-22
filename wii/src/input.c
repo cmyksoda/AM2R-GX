@@ -67,19 +67,23 @@ static float gc_axis(s8 pos)
 
 static void apply_move(GamepadSlot *slot, float lx, float ly, bool up, bool down, bool left, bool right)
 {
+	up = up || ly < -STICK_DIGITAL;
+	down = down || ly > STICK_DIGITAL;
+	left = left || lx < -STICK_DIGITAL;
+	right = right || lx > STICK_DIGITAL;
 	slot->axisValue[0] = lx;
 	slot->axisValue[1] = ly;
-	set_btn(slot, 12, up || ly < -STICK_DIGITAL);
-	set_btn(slot, 13, down || ly > STICK_DIGITAL);
-	set_btn(slot, 14, left || lx < -STICK_DIGITAL);
-	set_btn(slot, 15, right || lx > STICK_DIGITAL);
-	if (up || ly < -STICK_DIGITAL)
+	set_btn(slot, 12, up);
+	set_btn(slot, 13, down);
+	set_btn(slot, 14, left);
+	set_btn(slot, 15, right);
+	if (up)
 		want(VK_UP);
-	if (down || ly > STICK_DIGITAL)
+	if (down)
 		want(VK_DOWN);
-	if (left || lx < -STICK_DIGITAL)
+	if (left)
 		want(VK_LEFT);
-	if (right || lx > STICK_DIGITAL)
+	if (right)
 		want(VK_RIGHT);
 }
 

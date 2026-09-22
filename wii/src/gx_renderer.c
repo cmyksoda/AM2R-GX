@@ -23,11 +23,10 @@
 #include <math.h>
 #include <string.h>
 
-/* Headroom kept free for room loads, and what one page load needs: its PNG blob plus 2 MB of
- * texels (the PNG decode streams row by row, so no full-size temporary). */
-#define MEM_RESERVE (4u << 20)
+#define MEM_RESERVE (4u << 20) /* headroom kept free for room loads */
 #define LOSE_SURFACES_FRAMES 5 /* comfortably past the game's 2-frame init */
 #define HEAP_RESERVE (14u << 20) /* what malloc keeps of MEM2 once the game data is loaded */
+/* What one page load needs: its PNG blob plus 2 MB of texels (the decode streams row by row). */
 #define PAGE_LOAD_NEED (4u << 20)
 #define PAGE_RETRY_FRAMES 300
 #define GX_MAX_TEX_DIM 1024
@@ -36,8 +35,6 @@
 #define SURF_IDLE_FRAMES 600
 #define SURF_RECLAIM_BELOW (12u << 20)
 #define HOST_TARGET (-1)
-#define EFB_MAX_W 640
-#define EFB_MAX_H 480
 /* A 512×512 tile would be taller than the 480-line EFB, so tiles are 512×256 (s_map: 4×4). */
 #define SURF_TILE_W 512
 #define SURF_TILE_H 256
@@ -172,6 +169,12 @@ static u32 tex_bytes(int tw, int th)
 	return (u32)tw * (u32)th * sizeof(u16);
 }
 
+/* RGB5A3 pages are 4x4-texel tiles of 32 bytes. */
+static int gx_texel_off(int texW, int x, int y)
+{
+	return ((y >> 2) * (texW >> 2) + (x >> 2)) * 16 + (y & 3) * 4 + (x & 3);
+}
+
 static u32 surf_bytes(int tw, int th)
 {
 	return (u32)tw * (u32)th * SURF_BPP;
@@ -240,7 +243,7 @@ static void gx_page_sample(GxPage *p, float u, float v, u8 *r, u8 *g, u8 *b, u8 
 		x = p->texW - 1;
 	if (y >= p->texH)
 		y = p->texH - 1;
-	off = ((y >> 2) * (p->texW >> 2) + (x >> 2)) * 16 + (y & 3) * 4 + (x & 3);
+	off = gx_texel_off(p->texW, x, y);
 	unpack_rgb5a3(p->texels[off], r, g, b, a);
 }
 
@@ -252,9 +255,7 @@ static void swizzle_rgb5a3(u16 *dst, const u8 *rgba, int w, int h, int tw)
 	for (y = 0; y < h; y++) {
 		for (x = 0; x < w; x++) {
 			const u8 *p = rgba + ((y * w + x) * 4);
-			int tx = x >> 2;
-			int ty = y >> 2;
-			int off = (ty * (tw >> 2) + tx) * 16 + (y & 3) * 4 + (x & 3);
+			int off = gx_texel_off(tw, x, y);
 
 			dst[off] = pack_rgb5a3(p[0], p[1], p[2], p[3]);
 		}
@@ -702,7 +703,7 @@ static void gx_page_row(void *user, int y, const u8 *rgba, int width)
 		return;
 	for (x = 0; x < n; x++) {
 		const u8 *p = rgba + x * 4;
-		int off = ((y >> 2) * (pr->tw >> 2) + (x >> 2)) * 16 + (y & 3) * 4 + (x & 3);
+		int off = gx_texel_off(pr->tw, x, y);
 
 		pr->dst[off] = pack_rgb5a3(p[0], p[1], p[2], p[3]);
 	}
@@ -863,16 +864,12 @@ static void gx_flush_target(GxRenderer *gx)
 		texels = s->texels;
 		copyW = s->w;
 		copyH = s->h;
-		if (copyW > EFB_MAX_W)
-			copyW = EFB_MAX_W;
-		if (copyH > EFB_MAX_H)
-			copyH = EFB_MAX_H;
 		texW = s->texW;
 		texH = s->texH;
 		s->objReady = false;
 	}
-	if (copyW > EFB_MAX_W)
-		copyW = EFB_MAX_W;
+	if (copyW > WII_FB_W)
+		copyW = WII_FB_W;
 	if (copyH > (int)WiiVideo_efbHeight())
 		copyH = (int)WiiVideo_efbHeight();
 	copyW &= ~1;
@@ -1089,10 +1086,10 @@ static bool gx_bind_surface(GxRenderer *gx, int32_t id, bool restore)
 	gx->tileRow = 0;
 	vw = s->w;
 	vh = s->h;
-	if (vw > EFB_MAX_W)
-		vw = EFB_MAX_W;
-	if (vh > EFB_MAX_H)
-		vh = EFB_MAX_H;
+	if (vw > WII_FB_W)
+		vw = WII_FB_W;
+	if (vh > WII_FB_H)
+		vh = WII_FB_H;
 	gx_viewport(0, 0, vw, vh);
 	gx_ortho(0, (float)s->h, 0, (float)s->w);
 	if (restore)
@@ -1213,7 +1210,7 @@ static int32_t gx_alloc_surface(GxRenderer *gx, int32_t width, int32_t height)
 		width = 1;
 	if (height < 1)
 		height = 1;
-	tiled = (width > EFB_MAX_W || height > EFB_MAX_H);
+	tiled = (width > WII_FB_W || height > WII_FB_H);
 	/* Slot 0 is never a real surface — GML inits ids to 0 meaning "none". */
 	for (i = 1; i < gx->surfCount; i++) {
 		if (!gx->surfs[i].exists && !gx->surfs[i].retired) {
@@ -1259,7 +1256,6 @@ static int32_t gx_alloc_surface(GxRenderer *gx, int32_t width, int32_t height)
 	return id;
 }
 
-/* sprite_add / sprite_replace: a loose PNG becomes a page of its own, past the TXTR pages. */
 int32_t GxRenderer_addImage(const uint8_t *rgba, int w, int h)
 {
 	GxRenderer *gx = gx_cur;
@@ -1267,7 +1263,7 @@ int32_t GxRenderer_addImage(const uint8_t *rgba, int w, int h)
 	int tw, th;
 	u16 *texels;
 
-	if (!gx || w < 1 || h < 1 || w > GX_MAX_TEX_DIM || h > GX_MAX_TEX_DIM || gx->pageCount >= 32000)
+	if (!gx || w < 1 || h < 1 || w > GX_MAX_TEX_DIM || h > GX_MAX_TEX_DIM || gx->pageCount >= INT16_MAX) /* TexturePageItem.texturePageId */
 		return -1;
 	tw = pad4(w);
 	th = pad4(h);
@@ -1297,10 +1293,6 @@ int32_t GxRenderer_addImage(const uint8_t *rgba, int w, int h)
 static u8 *gx_usage; /* one bit per TPAG item drawn; NULL until a sweep asks for it */
 static uint32_t gx_usageCount; /* items the bitmap covers; sprite_add can append more later */
 
-static int gx_texel_off(int texW, int x, int y)
-{
-	return ((y >> 2) * (texW >> 2) + (x >> 2)) * 16 + (y & 3) * 4 + (x & 3);
-}
 
 static void gx_swap_free(GxSwap *sw)
 {
@@ -1513,12 +1505,12 @@ static void gxDestroy(Renderer *renderer)
 	free(gx);
 }
 
-/* On the real runner display_reset is a device reset: every surface dies, a few frames later.
- * 1.5.5 depends on it - its wide surface is born 320 wide during oControl's 2-frame init, and is
- * only ever recreated at 426 because that reset wipes it. */
 /* Not a renderer field: the game's first display_reset comes before the renderer's first frame. */
 static int gx_lose_in;
 
+/* On the real runner display_reset is a device reset: every surface dies, a few frames later.
+ * 1.5.5 depends on it - its wide surface is born 320 wide during oControl's 2-frame init, and is
+ * only ever recreated at 426 because that reset wipes it. */
 static void gx_lose_surfaces(GxRenderer *gx)
 {
 	int32_t appId = gx->base.runner ? gx->base.runner->applicationSurfaceId : -1;
@@ -1552,7 +1544,7 @@ static void gx_setup_compose(GxRenderer *gx, int32_t windowW, int32_t windowH)
 		return;
 	cw = windowW * gx->gameH / windowH;
 	ch = (fbh / gx->gameH) * gx->gameH;
-	if (cw < 2 || cw > EFB_MAX_W || ch < 1 || fbw % cw == 0 || cw * 3 > fbw * 2)
+	if (cw < 2 || cw > WII_FB_W || ch < 1 || fbw % cw == 0 || cw * 3 > fbw * 2)
 		return;
 	if (gx->composeId < 0 || (uint32_t)gx->composeId >= gx->surfCount || !gx->surfs[gx->composeId].exists) {
 		gx->composeId = gx_alloc_surface(gx, cw, ch);
@@ -2764,7 +2756,7 @@ static void gxSurfaceResize(Renderer *renderer, int32_t surfaceID, int32_t width
 	s->w = width;
 	s->h = height;
 	s->objReady = false;
-	tiled = (width > EFB_MAX_W || height > EFB_MAX_H);
+	tiled = (width > WII_FB_W || height > WII_FB_H);
 	if (tiled) {
 		if (!gx_alloc_tiles(gx, s, width, height))
 			s->exists = false;
