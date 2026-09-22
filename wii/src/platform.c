@@ -110,8 +110,6 @@ static void register_stubs(VMContext *ctx)
 		/* 1.5.5's secret-ending hornoad is the only physics object; it sits still. */
 		"physics_apply_local_impulse",
 		"physics_apply_torque",
-		/* TrueType replacements for the non-English fonts; the embedded fonts stay. */
-		"font_replace",
 	};
 	uint32_t i;
 
@@ -129,6 +127,8 @@ static void register_stubs(VMContext *ctx)
 		VM_registerBuiltin(ctx, "surface_getpixel", WiiAssets_builtin("surface_getpixel"));
 	if (VM_findBuiltin(ctx, "surface_getpixel_ext") == NULL)
 		VM_registerBuiltin(ctx, "surface_getpixel_ext", WiiAssets_builtin("surface_getpixel_ext"));
+	if (VM_findBuiltin(ctx, "font_replace") == NULL)
+		VM_registerBuiltin(ctx, "font_replace", WiiAssets_builtin("font_replace"));
 	if (VM_findBuiltin(ctx, "application_get_position") == NULL)
 		VM_registerBuiltin(ctx, "application_get_position", stub_application_get_position);
 	/* A name can only be registered once; the call cache below is what routes calls to the wrapper. */
@@ -249,6 +249,7 @@ void *platformGetProcAddress(const char *name)
 bool platformHandleEvents(void)
 {
 	WiiInput_poll(g_runner);
+	Wii_menuTick(g_runner);
 	return WiiInput_shouldQuit() || Wii_sweepFinished();
 }
 

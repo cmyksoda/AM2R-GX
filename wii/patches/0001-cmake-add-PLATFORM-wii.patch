@@ -1,5 +1,8 @@
+Reason: Add PLATFORM=wii to the CMake build: our src/wii/ tree, libogc + portlibs libraries, elf2dol, no GL sources.
+Upstream: Port scaffolding. Goes upstream with the whole src/wii/ tree, not before.
+
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 8de80db..07fedf8 100644
+index 8de80db..254b65c 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -26,6 +26,13 @@ endif()
@@ -132,10 +135,10 @@ index 8de80db..07fedf8 100644
              nx_generate_nacp(OUTPUT Butterscotch.nacp NAME "Butterscotch" AUTHOR "Butterscotch" VERSION "1.0.0")
              nx_create_nro(butterscotch NACP Butterscotch.nacp)
 +        elseif(PLATFORM STREQUAL "wii")
-+            target_include_directories(butterscotch PRIVATE $ENV{DEVKITPRO}/libogc/include)
++            target_include_directories(butterscotch PRIVATE $ENV{DEVKITPRO}/libogc/include $ENV{DEVKITPRO}/portlibs/ppc/include/freetype2)
 +            target_link_directories(butterscotch PRIVATE $ENV{DEVKITPRO}/libogc/lib/wii)
 +            target_compile_options(butterscotch PRIVATE -Wno-unused-parameter -Wno-unused-variable)
-+            target_link_libraries(butterscotch PRIVATE wiiuse bte fat aesnd z ogc m)
++            target_link_libraries(butterscotch PRIVATE wiiuse bte fat aesnd freetype png16 bz2 brotlidec brotlicommon z ogc m)
 +            add_custom_command(TARGET butterscotch POST_BUILD
 +                COMMAND $ENV{DEVKITPRO}/tools/bin/elf2dol
 +                    $<TARGET_FILE:butterscotch>

@@ -3,7 +3,8 @@
 
 #include "vm.h"
 
-/* Our sprite_add / sprite_replace / background_add / background_replace, or NULL for other names. */
+/* Our replacements for the asset builtins (sprite_add/replace, background_add/replace, font_replace,
+ * surface_getpixel[_ext]); NULL for other names. */
 BuiltinFunc WiiAssets_builtin(const char *name);
 
 #endif
