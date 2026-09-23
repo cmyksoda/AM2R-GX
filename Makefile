@@ -67,7 +67,9 @@ CU155 ?= working/extracted/cu155/data.win
 GROUPS ?= working/repacked/cu155/groups-v3.json
 patchkit:
 	mkdir -p dist/apps/am2r/patch/files build
-	cp -f $(AUTOPATCHER)/data.xdelta dist/apps/am2r/patch/data.xdelta
+	# Re-encoded with an 8 MB source window: the community delta copies from all over the 1.1 file and
+	# the console's 14 MB source cache re-read 2.7 GB (vWii: 328 s of an 8:49 first boot); this one re-reads 27 MB.
+	xdelta3 -e -f -S lzma -B 8388608 -W 8388608 -s $(AM2R_DATA)/data.win $(CU155) dist/apps/am2r/patch/data.xdelta
 	python3 tools/repack_textures.py $(CU155) build/plan-repacked.win --groups $(GROUPS) --report build/plan.json
 	python3 tools/repack_plan.py $(CU155) build/plan.json dist/apps/am2r/patch/plan.bin
 	rsync -a --delete $(AUTOPATCHER)/files_to_copy/ dist/apps/am2r/patch/files/
