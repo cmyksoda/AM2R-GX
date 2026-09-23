@@ -26,7 +26,7 @@ typedef struct {
 	bool landing;        /* ...in the landing room */
 	bool retry;          /* screens that ignore early presses: press again until the next step's screen is up */
 	int settle;          /* frames to let the screen finish sliding in */
-	const char *keys;    /* 'D' Down, 'Z' Z, 'S' Enter+Z, 'E' Esc, '.' shoot; one per KEY_HOLD + KEY_GAP frames */
+	const char *keys;    /* 'D' Down, 'U' Up, 'Z' Z, 'S' Enter+Z, 'E' Esc, '.' shoot; one per KEY_HOLD + KEY_GAP frames */
 	const char *skipIf;  /* a screen the game may show instead (modifiers.ini skips the game-type box) */
 } MenuStep;
 
@@ -48,7 +48,8 @@ static const MenuStep pausetips[] = {
 	{ "oSlotMenu2", false, false, 30, "Z", NULL },
 	{ "oIntroCutscene", false, true, 60, "Z", NULL },
 	{ "oCharacter", true, true, 300, "E", NULL },
-	{ "oPauseOption", false, false, 60, ".D.D.D.", NULL },
+	{ "oPauseOption", false, false, 60, ".D.D.D.UUUZ", NULL }, /* back up to Continue, take it */
+	{ "oCharacter", true, false, 120, "..", NULL }, /* back in the room: the ground after a pause (vWii: blue) */
 	{ NULL, false, false, 0, "", NULL },
 };
 static const MenuStep *steps = extras;
@@ -124,7 +125,7 @@ static void var_census(Runner *runner, const char *object, const char *when)
 
 static int key_vk(int key)
 {
-	return key == 'D' ? VK_DOWN : key == 'E' ? VK_ESCAPE : 'Z';
+	return key == 'D' ? VK_DOWN : key == 'U' ? VK_UP : key == 'E' ? VK_ESCAPE : 'Z';
 }
 
 static void press(Runner *runner, char key, int *held)

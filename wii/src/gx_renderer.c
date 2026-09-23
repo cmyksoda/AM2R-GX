@@ -799,7 +799,15 @@ static bool gx_load_page(GxRenderer *gx, uint32_t pageId)
 	page->loaded = true;
 	gx->pagesResident++;
 	GX_InvalidateTexAll();
-	logInfo("GX: TXTR %u %dx%d (padded %dx%d, resident %u)\n", pageId, w, h, tw, th, gx->pagesResident);
+	{
+		const u32 *ck = (const u32 *)texels;
+		u32 sum = 0, i, n = tex_bytes(tw, th) / 4;
+
+		for (i = 0; i < n && i < 16384; i++)
+			sum = sum * 31 + ck[i];
+		logInfo("GX: TXTR %u %dx%d (padded %dx%d, resident %u) %s sum=%08x\n", pageId, w, h, tw, th,
+			gx->pagesResident, streamed ? "rows" : "rgba", sum);
+	}
 	return true;
 
 fail:
@@ -1580,6 +1588,8 @@ static void gx_setup_compose(GxRenderer *gx, int32_t windowW, int32_t windowH)
 	int fbh = (int)WiiVideo_efbHeight();
 	int cw, ch;
 
+	static bool said;
+
 	gx->compose = false;
 	if (!gx_wide_filter || gx->gameH < 1 || windowH < 1)
 		return;
@@ -1589,8 +1599,13 @@ static void gx_setup_compose(GxRenderer *gx, int32_t windowW, int32_t windowH)
 		return;
 	if (gx->composeId < 0 || (uint32_t)gx->composeId >= gx->surfCount || !gx->surfs[gx->composeId].exists) {
 		gx->composeId = gx_alloc_surface(gx, cw, ch);
-		if (gx->composeId < 0)
+		if (gx->composeId < 0) {
+			if (!said) {
+				said = true;
+				logWarn("GX: wide compose %dx%d: no surface memory (window %dx%d)\n", cw, ch, windowW, windowH);
+			}
 			return;
+		}
 		logInfo("GX: wide compose %dx%d -> %d:%d filtered present\n", cw, ch, fbw, cw);
 	} else if (gx->surfs[gx->composeId].w != cw || gx->surfs[gx->composeId].h != ch) {
 		gxSurfaceResize(&gx->base, gx->composeId, cw, ch);
@@ -1880,6 +1895,18 @@ static void gxEndFrameEnd(Renderer *renderer)
 	}
 	if (Overscan_active())
 		gx_draw_overscan_overlay(gx);
+	/* GameMaker forgets the shader at frame end; the subscreen leaves the palette swap set and the
+	 * next room's tiles that share Samus's colours came back blue (vWii + Dolphin, session 9). */
+	if (renderer->currentShader >= 0) {
+		static int said;
+
+		if (said < 5) {
+			said++;
+			logInfo("GX: shader %d still set at frame end (palIndex %d palTpag %d) - reset\n",
+				renderer->currentShader, gx->palIndex, gx->palTpag);
+		}
+		renderer->currentShader = -1;
+	}
 	gx_stat.lastEnd = gettime();
 	gx_stat.drawUs += ticks_to_microsecs(gx_stat.lastEnd - gx_stat.frameStart);
 	if (++gx_stat.n == 200) {
