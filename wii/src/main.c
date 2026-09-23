@@ -82,6 +82,7 @@ int main(int argc, char **argv)
 		logWarn("could not open %s — console only\n", WII_LOG_PATH);
 
 	Overscan_load();
+	WiiVideo_setActiveWidth(Overscan_viWidth());
 
 	logInfo("AM2R GX\n");
 	logInfo("mode %ux%u xfb=%u aspect=%s\n", WiiVideo_fbWidth(), WiiVideo_efbHeight(),

@@ -9,6 +9,7 @@
 
 bool WiiVideo_init(void);
 void WiiVideo_present(void);
+void WiiVideo_setActiveWidth(int w);
 GXRModeObj *WiiVideo_rmode(void);
 u32 WiiVideo_fbWidth(void);
 u32 WiiVideo_efbHeight(void);

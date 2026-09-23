@@ -10,6 +10,7 @@
 
 static int g_h;
 static int g_v;
+static int g_vi; /* VI active width, 0 = the mode's own */
 static bool g_active;
 
 static int clampi(int v, int lo, int hi)
@@ -20,16 +21,19 @@ static int clampi(int v, int lo, int hi)
 void Overscan_load(void)
 {
 	FILE *f = fopen(OVERSCAN_PATH, "r");
-	int h = 0, v = 0;
+	int h = 0, v = 0, vi = 0, n = 0;
 
 	if (f) {
-		if (fscanf(f, "%d %d", &h, &v) == 2) {
+		n = fscanf(f, "%d %d %d", &h, &v, &vi);
+		if (n >= 2) {
 			g_h = clampi(h, 0, OVERSCAN_MAX_H);
 			g_v = clampi(v, 0, OVERSCAN_MAX_V);
 		}
+		if (n == 3)
+			g_vi = clampi(vi, 640, 720);
 		fclose(f);
 	}
-	logInfo("Overscan: h=%d v=%d\n", g_h, g_v);
+	logInfo("Overscan: h=%d v=%d vi=%d\n", g_h, g_v, g_vi);
 }
 
 static void Overscan_save(void)
@@ -37,7 +41,10 @@ static void Overscan_save(void)
 	FILE *f = fopen(OVERSCAN_PATH, "w");
 
 	if (f) {
-		fprintf(f, "%d %d\n", g_h, g_v);
+		if (g_vi)
+			fprintf(f, "%d %d %d\n", g_h, g_v, g_vi);
+		else
+			fprintf(f, "%d %d\n", g_h, g_v);
 		fclose(f);
 	}
 }
@@ -72,4 +79,9 @@ void Overscan_adjustH(int delta)
 void Overscan_adjustV(int delta)
 {
 	g_v = clampi(g_v + delta, 0, OVERSCAN_MAX_V);
+}
+
+int Overscan_viWidth(void)
+{
+	return g_vi;
 }

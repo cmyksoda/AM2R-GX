@@ -15,6 +15,7 @@ void Overscan_toggle(void);
 
 int Overscan_h(void);
 int Overscan_v(void);
+int Overscan_viWidth(void);
 void Overscan_adjustH(int delta);
 void Overscan_adjustV(int delta);
 

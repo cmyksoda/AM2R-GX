@@ -6,6 +6,9 @@
 #include <ogc/conf.h>
 #include <stdio.h>
 #include <string.h>
+#include <ogc/lwp_watchdog.h>
+
+#include "log.h"
 
 #define FIFO_SIZE (1024 * 1024)
 
@@ -91,9 +94,36 @@ bool WiiVideo_init(void)
 	return true;
 }
 
+/* Whole-frame wall time, present to present: the GML profiler only sees script time. */
+static void frame_stats(u64 t0, u64 t1, u64 t2)
+{
+	static u64 last, frame, gpu, sync;
+	static u32 n, late;
+
+	if (last) {
+		u32 us = ticks_to_microsecs(t2 - last);
+
+		frame += us;
+		gpu += ticks_to_microsecs(t1 - t0);
+		sync += ticks_to_microsecs(t2 - t1);
+		if (us > 17500)
+			late++;
+		if (++n == 200) {
+			logInfo("FRAME avg %.2f ms (gpu wait %.2f, vsync wait %.2f), %u/200 late\n",
+				frame / 200000.0, gpu / 200000.0, sync / 200000.0, late);
+			frame = gpu = sync = 0;
+			n = late = 0;
+		}
+	}
+	last = t2;
+}
+
 void WiiVideo_present(void)
 {
+	u64 t0 = gettime(), t1;
+
 	GX_DrawDone();
+	t1 = gettime();
 	GX_CopyDisp(xfb[fb], GX_TRUE);
 	GX_Flush();
 	VIDEO_SetNextFramebuffer(xfb[fb]);
@@ -104,6 +134,21 @@ void WiiVideo_present(void)
 	VIDEO_Flush();
 	VIDEO_WaitVSync();
 	fb ^= 1;
+	frame_stats(t0, t1, gettime());
+}
+
+/* VI scales the 640-wide XFB onto this many of the line's 720 pixels. Nintendo's 640 leaves
+ * borders on the Wii U's HDMI path; 704 or 720 fill it (overscan.txt's third number). */
+void WiiVideo_setActiveWidth(int w)
+{
+	if (!rmode || w < 640 || w > 720 || w == rmode->viWidth)
+		return;
+	rmode->viWidth = (u16)(w & ~1);
+	rmode->viXOrigin = (u16)((720 - rmode->viWidth) / 2);
+	VIDEO_Configure(rmode);
+	VIDEO_Flush();
+	VIDEO_WaitVSync();
+	logInfo("VI active width %u (origin %u)\n", rmode->viWidth, rmode->viXOrigin);
 }
 
 GXRModeObj *WiiVideo_rmode(void)
