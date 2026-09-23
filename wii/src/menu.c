@@ -56,9 +56,10 @@ static const MenuStep pausetips[] = {
 static const MenuStep landing[] = {
 	{ "oPressStart", false, true, 30, "S", NULL },
 	{ "oGameSelMenu", false, false, 300, "Z", NULL },
-	{ "oSlotMenu_normal_only", false, false, 30, "Z", "oSlotMenu2" },
-	{ "oSlotMenu2", false, false, 30, "Z", NULL },
-	{ "oIntroCutscene", false, true, 60, "S", NULL }, /* Start skips the intro at once (Jaxi, session 9) */
+	{ "oSlotMenu1", false, false, 30, "Z", "oSlotMenu_normal_only" }, /* a used slot asks "continue" first */
+	{ "oSlotMenu_normal_only", false, false, 30, "Z", "oCharacter" },
+	{ "oSlotMenu2", false, false, 30, "Z", "oCharacter" },
+	{ "oIntroCutscene", false, true, 60, "S", "oCharacter" }, /* Start skips the intro at once (Jaxi, session 9) */
 	{ "oCharacter", false, false, 30, "", NULL },
 	{ NULL, false, false, 0, "", NULL },
 };
