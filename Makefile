@@ -53,6 +53,7 @@ wii: $(BUTTER)/CMakeLists.txt
 	cd $(BUTTER) && git apply ../../wii/patches/0010-vm-audio-is-paused-wii.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0011-runner-no-collision-events-after-destroy.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0012-vm-game-id.patch
+	cd $(BUTTER) && git apply ../../wii/patches/0013-runner-persistent-room-keeps-payload.patch
 	cmake -B $(WII_BUILD) -S $(BUTTER) $(WII_CMAKE_FLAGS)
 	cmake --build $(WII_BUILD) -j$(shell nproc)
 	mkdir -p dist/apps/am2r
