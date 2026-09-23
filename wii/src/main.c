@@ -64,7 +64,9 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	if (!fatInitDefault()) {
+	/* 256 pages (1 MB) instead of libfat's 16 KB default: the game stats a file every frame, and
+	 * with the directory sectors evicted each stat cost 17 ms on a real card (vWii, session 9). */
+	if (!fatInit(256, true)) {
 		wait_home("fatInitDefault failed (no SD?)");
 		return 1;
 	}
