@@ -52,6 +52,16 @@ static const MenuStep pausetips[] = {
 	{ "oCharacter", true, false, 120, "..", NULL }, /* back in the room: the ground after a pause (vWii: blue) */
 	{ NULL, false, false, 0, "", NULL },
 };
+/* Into the game and nothing else: new game (intro skipped) or a continued save, for warp runs. */
+static const MenuStep landing[] = {
+	{ "oPressStart", false, true, 30, "S", NULL },
+	{ "oGameSelMenu", false, false, 300, "Z", NULL },
+	{ "oSlotMenu_normal_only", false, false, 30, "Z", "oSlotMenu2" },
+	{ "oSlotMenu2", false, false, 30, "Z", NULL },
+	{ "oIntroCutscene", false, true, 60, "Z", NULL },
+	{ "oCharacter", false, false, 30, "", NULL },
+	{ NULL, false, false, 0, "", NULL },
+};
 static const MenuStep *steps = extras;
 #define CENSUS_EVERY 120
 #define CENSUS_MAX 14
@@ -201,6 +211,8 @@ void Wii_menuTick(Runner *runner)
 		}
 		if (fscanf(f, "%15s", word) == 1 && strcmp(word, "pausetips") == 0)
 			steps = pausetips;
+		else if (strcmp(word, "landing") == 0)
+			steps = landing;
 		else if (fscanf(f, "%d", &t) == 1 && t >= 0 && t < 12) {
 			memset(fileSelectKeys, 'D', (size_t)t);
 			fileSelectKeys[t] = 'Z';
@@ -208,7 +220,7 @@ void Wii_menuTick(Runner *runner)
 		}
 		fclose(f);
 		armed = 1;
-		logInfo("MENU armed script=%s\n", steps == pausetips ? "pausetips" : "extras");
+		logInfo("MENU armed script=%s\n", steps == pausetips ? "pausetips" : steps == landing ? "landing" : "extras");
 	}
 	s = &steps[step];
 	if (!s->object)
