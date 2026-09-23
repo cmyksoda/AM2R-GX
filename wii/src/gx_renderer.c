@@ -108,6 +108,7 @@ typedef struct {
 	u8 alphaTestRef;
 	bool colorWriteR, colorWriteG, colorWriteB, colorWriteA;
 	bool texBound;
+	bool skipView; /* wide mode: view 0 lands on the app surface, which the game never shows */
 
 	GxVert *primVerts;
 	int32_t primCount;
@@ -156,7 +157,7 @@ static bool gx_wide_filter = true; /* [Screen] WiiWideFilter; 0 = the plain 2,1,
 
 /* Per-frame accounting for the hardware profile: what the draw phase costs outside GML scripts. */
 static struct {
-	u32 quads, tiles, sprites, copies, binds, targets, n;
+	u32 quads, tiles, sprites, copies, binds, targets, skipped, n;
 	u64 emitUs, copyUs, drawUs, otherUs, frameStart, lastEnd;
 } gx_stat;
 
@@ -395,6 +396,8 @@ static void gx_pe_kick(void)
 {
 	gx_vtx_fmt();
 	GX_SetTevOp(GX_TEVSTAGE0, GX_PASSCLR);
+	if (gx_cur)
+		gx_cur->texBound = false;
 	GX_SetBlendMode(GX_BM_NONE, GX_BL_ONE, GX_BL_ZERO, GX_LO_CLEAR);
 	GX_SetColorUpdate(GX_TRUE);
 	GX_SetAlphaUpdate(GX_TRUE);
@@ -444,6 +447,8 @@ static GxPage *gx_page_of(GxRenderer *gx, GXTexObj *obj)
 
 static void gx_bind_tex(GxRenderer *gx, GXTexObj *obj)
 {
+	if (gx->texBound && gx->boundTex == obj)
+		return;
 	gx_stat.binds++;
 	GX_LoadTexObj(obj, GX_TEXMAP0);
 	GX_SetTevOp(GX_TEVSTAGE0, GX_MODULATE);
@@ -624,8 +629,13 @@ static void emit_quad_raw(float x0, float y0, float x1, float y1, float x2, floa
 			  u8 r0, u8 g0, u8 b0, u8 a0, u8 r1, u8 g1, u8 b1, u8 a1,
 			  u8 r2, u8 g2, u8 b2, u8 a2, u8 r3, u8 g3, u8 b3, u8 a3)
 {
-	u64 t = gettime();
+	u64 t;
 
+	if (gx_cur && gx_cur->skipView && gx_cur->currentTarget == gx_cur->appSurfId) {
+		gx_stat.skipped++;
+		return;
+	}
+	t = gettime();
 	GX_Begin(GX_QUADS, GX_VTXFMT0, 4);
 	GX_Position2f32(x0, y0);
 	GX_Color4u8(r0, g0, b0, a0);
@@ -780,6 +790,8 @@ static bool gx_load_page(GxRenderer *gx, uint32_t pageId)
 	}
 	DCFlushRange(texels, tex_bytes(tw, th));
 	GX_InitTexObj(&page->obj, texels, (u16)tw, (u16)th, GX_TF_RGB5A3, GX_CLAMP, GX_CLAMP, GX_FALSE);
+	if (gx_cur)
+		gx_cur->texBound = false; /* the object may be the bound one */
 	GX_InitTexObjFilterMode(&page->obj, GX_NEAR, GX_NEAR);
 	page->texels = texels;
 	page->texW = tw;
@@ -839,6 +851,8 @@ static void gx_prep_tile_obj(GxTile *t)
 	if (t->objReady || !t->texels)
 		return;
 	GX_InitTexObj(&t->obj, t->texels, (u16)t->texW, (u16)t->texH, SURF_TEX_FMT, GX_CLAMP, GX_CLAMP, GX_FALSE);
+	if (gx_cur)
+		gx_cur->texBound = false; /* the object may be the bound one */
 	GX_InitTexObjFilterMode(&t->obj, GX_NEAR, GX_NEAR);
 	t->objReady = true;
 }
@@ -910,6 +924,8 @@ static void gx_prep_surf_obj(GxSurf *s)
 	if (s->objReady || !s->texels)
 		return;
 	GX_InitTexObj(&s->obj, s->texels, (u16)s->texW, (u16)s->texH, SURF_TEX_FMT, GX_CLAMP, GX_CLAMP, GX_FALSE);
+	if (gx_cur)
+		gx_cur->texBound = false; /* the object may be the bound one */
 	GX_InitTexObjFilterMode(&s->obj, GX_NEAR, GX_NEAR);
 	s->objReady = true;
 }
@@ -956,6 +972,7 @@ static void gx_restore_tile(GxRenderer *gx, GxSurf *s, int col, int row)
 	gx_prep_tile_obj(t);
 	GX_LoadTexObj(&t->obj, GX_TEXMAP0);
 	GX_SetTevOp(GX_TEVSTAGE0, GX_MODULATE);
+	gx->texBound = false;
 	GX_SetAlphaCompare(GX_ALWAYS, 0, GX_AOP_AND, GX_ALWAYS, 0);
 	GX_SetZMode(GX_FALSE, GX_ALWAYS, GX_FALSE);
 	GX_SetColorUpdate(GX_TRUE);
@@ -1294,6 +1311,8 @@ int32_t GxRenderer_addImage(const uint8_t *rgba, int w, int h)
 	page = &gx->pages[gx->pageCount];
 	memset(page, 0, sizeof *page);
 	GX_InitTexObj(&page->obj, texels, (u16)tw, (u16)th, GX_TF_RGB5A3, GX_CLAMP, GX_CLAMP, GX_FALSE);
+	if (gx_cur)
+		gx_cur->texBound = false; /* the object may be the bound one */
 	GX_InitTexObjFilterMode(&page->obj, GX_NEAR, GX_NEAR);
 	page->texels = texels;
 	page->texW = tw;
@@ -1381,6 +1400,8 @@ static GxSwap *gx_swap_build(GxRenderer *gx, int32_t tpagIndex, GxSwap *sw)
 	sw->texW = tw;
 	sw->texH = th;
 	GX_InitTexObj(&sw->obj, sw->texels, (u16)tw, (u16)th, GX_TF_RGB5A3, GX_CLAMP, GX_CLAMP, GX_FALSE);
+	if (gx_cur)
+		gx_cur->texBound = false; /* the object may be the bound one */
 	GX_InitTexObjFilterMode(&sw->obj, GX_NEAR, GX_NEAR);
 	gx_swapBytes += tex_bytes(tw, th);
 	if (gx_swapCount <= 1)
@@ -1426,6 +1447,10 @@ static void gx_draw_tpag(GxRenderer *gx, int32_t tpagIndex, float x0, float y0, 
 
 	if (tpagIndex < 0 || (uint32_t)tpagIndex >= dw->tpag.count)
 		return;
+	if (gx->skipView && gx->currentTarget == gx->appSurfId) {
+		gx_stat.skipped++;
+		return;
+	}
 	if (gx_usage && (uint32_t)tpagIndex < gx_usageCount)
 		gx_usage[tpagIndex >> 3] |= (u8)(1 << (tpagIndex & 7));
 	tpag = &dw->tpag.items[tpagIndex];
@@ -1644,6 +1669,10 @@ static void gxBeginView(Renderer *renderer, int32_t viewX, int32_t viewY, int32_
 	if (renderer->runner->viewsEnabled)
 		viewCurrent = renderer->runner->viewCurrent;
 	view = &renderer->runner->views[viewCurrent];
+	/* 1.5.5 wide mode draws the room twice; view 0's copy goes to the hidden application surface. */
+	gx->skipView = viewCurrent == 0 && renderer->runner->viewsEnabled && renderer->runner->usingAppSurface &&
+		       !renderer->runner->appSurfaceAutoDraw && renderer->runner->views[1].enabled &&
+		       renderer->runner->views[1].surfaceId >= 0;
 	gx->base.cameraCurrent = view->cameraId;
 	camera = Runner_getCameraById(renderer->runner, gx->base.cameraCurrent);
 	if (camera) {
@@ -1654,6 +1683,7 @@ static void gxBeginView(Renderer *renderer, int32_t viewX, int32_t viewY, int32_
 
 static void gxEndView(Renderer *renderer)
 {
+	((GxRenderer *)renderer)->skipView = false;
 	GxRenderer *gx = (GxRenderer *)renderer;
 
 	if (gx->currentTarget == gx->appSurfId) {
@@ -1680,6 +1710,7 @@ static void gxApplyViewProjection(Renderer *renderer, const Matrix4f *viewMatrix
 	GxRenderer *gx = (GxRenderer *)renderer;
 	GMLCamera *camera = Runner_getCameraById(renderer->runner, renderer->cameraCurrent);
 
+	gx->skipView = false;
 	gxApplyProjection(renderer, viewMatrix, projectionMatrix);
 	if (!camera || gx->currentTarget < 0)
 		return;
@@ -1695,6 +1726,7 @@ static void gxApplyViewProjection(Renderer *renderer, const Matrix4f *viewMatrix
 static void gxBeginGUI(Renderer *renderer, int32_t guiW, int32_t guiH, int32_t portX, int32_t portY,
 		       int32_t portW, int32_t portH, int32_t targetSurfaceId)
 {
+	((GxRenderer *)renderer)->skipView = false;
 	GxRenderer *gx = (GxRenderer *)renderer;
 	GMLCamera *camera = &renderer->runner->guiCamera;
 
@@ -1809,6 +1841,7 @@ static void gx_draw_overscan_overlay(GxRenderer *gx)
 
 static void gxEndFrameEnd(Renderer *renderer)
 {
+	((GxRenderer *)renderer)->skipView = false;
 	GxRenderer *gx = (GxRenderer *)renderer;
 	int32_t appId;
 	GxSurf *s;
@@ -1850,12 +1883,13 @@ static void gxEndFrameEnd(Renderer *renderer)
 	gx_stat.lastEnd = gettime();
 	gx_stat.drawUs += ticks_to_microsecs(gx_stat.lastEnd - gx_stat.frameStart);
 	if (++gx_stat.n == 200) {
-		logInfo("GXSTAT draw %.2f ms/frame: emit %.2f ms in %u quads (%u tiles, %u sprites), %u copies %.2f ms, "
+		logInfo("GXSTAT draw %.2f ms/frame: emit %.2f ms in %u quads (%u tiles, %u sprites, %u skipped), %u copies %.2f ms, "
 			"%u binds, %u targets; between draws %.2f ms\n",
 			gx_stat.drawUs / 200000.0, gx_stat.emitUs / 200000.0, gx_stat.quads / 200, gx_stat.tiles / 200,
-			gx_stat.sprites / 200, gx_stat.copies / 200, gx_stat.copyUs / 200000.0, gx_stat.binds / 200,
-			gx_stat.targets / 200, gx_stat.otherUs / 200000.0);
+			gx_stat.sprites / 200, gx_stat.skipped / 200, gx_stat.copies / 200, gx_stat.copyUs / 200000.0,
+			gx_stat.binds / 200, gx_stat.targets / 200, gx_stat.otherUs / 200000.0);
 		gx_stat.quads = gx_stat.tiles = gx_stat.sprites = gx_stat.copies = gx_stat.binds = gx_stat.targets = 0;
+		gx_stat.skipped = 0;
 		gx_stat.emitUs = gx_stat.copyUs = gx_stat.drawUs = gx_stat.otherUs = 0;
 		gx_stat.n = 0;
 	}
@@ -2607,6 +2641,8 @@ static bool gx_gb_begin(GxRenderer *gx)
 		gx->gbTexels[i] = pack_rgb5a3(gx->gbColor[1][0], gx->gbColor[1][1], gx->gbColor[1][2], 255);
 	DCFlushRange(gx->gbTexels, 32);
 	GX_InitTexObj(&obj, gx->gbTexels, 4, 4, GX_TF_RGB5A3, GX_CLAMP, GX_CLAMP, GX_FALSE);
+	if (gx_cur)
+		gx_cur->texBound = false; /* the object may be the bound one */
 	GX_InitTexObjFilterMode(&obj, GX_NEAR, GX_NEAR);
 	GX_InvalidateTexAll();
 	GX_LoadTexObj(&obj, GX_TEXMAP1);
