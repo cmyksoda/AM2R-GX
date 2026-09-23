@@ -46,7 +46,7 @@ static const MenuStep pausetips[] = {
 	{ "oGameSelMenu", false, false, 300, "Z", NULL },
 	{ "oSlotMenu_normal_only", false, false, 30, "Z", "oSlotMenu2" },
 	{ "oSlotMenu2", false, false, 30, "Z", NULL },
-	{ "oIntroCutscene", false, true, 60, "Z", NULL },
+	{ "oIntroCutscene", false, true, 60, "S", NULL }, /* Start skips the intro at once (Jaxi, session 9) */
 	{ "oCharacter", true, true, 300, "E", NULL },
 	{ "oPauseOption", false, false, 60, ".D.D.D.UUUZ", NULL }, /* back up to Continue, take it */
 	{ "oCharacter", true, false, 120, "..", NULL }, /* back in the room: the ground after a pause (vWii: blue) */
@@ -58,7 +58,7 @@ static const MenuStep landing[] = {
 	{ "oGameSelMenu", false, false, 300, "Z", NULL },
 	{ "oSlotMenu_normal_only", false, false, 30, "Z", "oSlotMenu2" },
 	{ "oSlotMenu2", false, false, 30, "Z", NULL },
-	{ "oIntroCutscene", false, true, 60, "Z", NULL },
+	{ "oIntroCutscene", false, true, 60, "S", NULL }, /* Start skips the intro at once (Jaxi, session 9) */
 	{ "oCharacter", false, false, 30, "", NULL },
 	{ NULL, false, false, 0, "", NULL },
 };
