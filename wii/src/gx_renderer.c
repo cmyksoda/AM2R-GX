@@ -22,6 +22,7 @@
 #include <stdio.h>
 #include <math.h>
 #include <string.h>
+#include <ogc/lwp_watchdog.h>
 
 #define MEM_RESERVE (4u << 20) /* headroom kept free for room loads */
 #define LOSE_SURFACES_FRAMES 5 /* comfortably past the game's 2-frame init */
@@ -152,6 +153,12 @@ static u32 gx_swapBytes;
 static RendererVtable gxVtable;
 static GxRenderer *gx_cur;
 static bool gx_wide_filter = true; /* [Screen] WiiWideFilter; 0 = the plain 2,1,2,1 stretch */
+
+/* Per-frame accounting for the hardware profile: what the draw phase costs outside GML scripts. */
+static struct {
+	u32 quads, tiles, sprites, copies, binds, targets, n;
+	u64 emitUs, copyUs, drawUs, otherUs, frameStart, lastEnd;
+} gx_stat;
 
 void GxRenderer_setWideFilter(bool on)
 {
@@ -437,6 +444,7 @@ static GxPage *gx_page_of(GxRenderer *gx, GXTexObj *obj)
 
 static void gx_bind_tex(GxRenderer *gx, GXTexObj *obj)
 {
+	gx_stat.binds++;
 	GX_LoadTexObj(obj, GX_TEXMAP0);
 	GX_SetTevOp(GX_TEVSTAGE0, GX_MODULATE);
 	gx->texBound = true;
@@ -616,6 +624,8 @@ static void emit_quad_raw(float x0, float y0, float x1, float y1, float x2, floa
 			  u8 r0, u8 g0, u8 b0, u8 a0, u8 r1, u8 g1, u8 b1, u8 a1,
 			  u8 r2, u8 g2, u8 b2, u8 a2, u8 r3, u8 g3, u8 b3, u8 a3)
 {
+	u64 t = gettime();
+
 	GX_Begin(GX_QUADS, GX_VTXFMT0, 4);
 	GX_Position2f32(x0, y0);
 	GX_Color4u8(r0, g0, b0, a0);
@@ -636,6 +646,8 @@ static void emit_quad_raw(float x0, float y0, float x1, float y1, float x2, floa
 		GX_Flush();
 		gx_quads = 0;
 	}
+	gx_stat.quads++;
+	gx_stat.emitUs += ticks_to_microsecs(gettime() - t);
 }
 
 static u8 unorm(float a)
@@ -876,6 +888,8 @@ static void gx_flush_target(GxRenderer *gx)
 	copyH &= ~1;
 	if (copyW < 2 || copyH < 2 || !texels)
 		return;
+	u64 tc = gettime();
+
 	GX_Flush();
 	GX_DrawDone();
 	DCInvalidateRange(texels, surf_bytes(texW, texH));
@@ -886,6 +900,8 @@ static void gx_flush_target(GxRenderer *gx)
 	DCInvalidateRange(texels, surf_bytes(texW, texH));
 	GX_InvalidateTexAll();
 	gx->targetDirty = false;
+	gx_stat.copies++;
+	gx_stat.copyUs += ticks_to_microsecs(gettime() - tc);
 	gx_draw_state(gx);
 }
 
@@ -1564,6 +1580,9 @@ static void gxBeginFrame(Renderer *renderer, int32_t gameW, int32_t gameH, int32
 	GxRenderer *gx = (GxRenderer *)renderer;
 	int32_t appId;
 
+	gx_stat.frameStart = gettime();
+	if (gx_stat.lastEnd)
+		gx_stat.otherUs += ticks_to_microsecs(gx_stat.frameStart - gx_stat.lastEnd);
 	gx->gameW = gameW;
 	gx->gameH = gameH;
 	gx->frameCounter++;
@@ -1828,6 +1847,18 @@ static void gxEndFrameEnd(Renderer *renderer)
 	}
 	if (Overscan_active())
 		gx_draw_overscan_overlay(gx);
+	gx_stat.lastEnd = gettime();
+	gx_stat.drawUs += ticks_to_microsecs(gx_stat.lastEnd - gx_stat.frameStart);
+	if (++gx_stat.n == 200) {
+		logInfo("GXSTAT draw %.2f ms/frame: emit %.2f ms in %u quads (%u tiles, %u sprites), %u copies %.2f ms, "
+			"%u binds, %u targets; between draws %.2f ms\n",
+			gx_stat.drawUs / 200000.0, gx_stat.emitUs / 200000.0, gx_stat.quads / 200, gx_stat.tiles / 200,
+			gx_stat.sprites / 200, gx_stat.copies / 200, gx_stat.copyUs / 200000.0, gx_stat.binds / 200,
+			gx_stat.targets / 200, gx_stat.otherUs / 200000.0);
+		gx_stat.quads = gx_stat.tiles = gx_stat.sprites = gx_stat.copies = gx_stat.binds = gx_stat.targets = 0;
+		gx_stat.emitUs = gx_stat.copyUs = gx_stat.drawUs = gx_stat.otherUs = 0;
+		gx_stat.n = 0;
+	}
 }
 
 /* Every 2 composed columns become 3 screen columns: pure, 50/50, pure. Pass 1 is the plain
@@ -1913,6 +1944,7 @@ void GxRenderer_present(void)
 static void gxDrawSprite(Renderer *renderer, int32_t tpagIndex, float x, float y, float originX, float originY,
 			 float xscale, float yscale, float angleDeg, uint32_t color, float alpha)
 {
+	gx_stat.sprites++;
 	GxRenderer *gx = (GxRenderer *)renderer;
 	DataWin *dw = renderer->dataWin;
 	TexturePageItem *tpag;
@@ -1988,6 +2020,7 @@ static void gxDrawSpritePart(Renderer *renderer, int32_t tpagIndex, int32_t srcO
 			     int32_t srcH, float x, float y, float xscale, float yscale, float angleDeg, float pivotX,
 			     float pivotY, uint32_t color, float alpha)
 {
+	gx_stat.sprites++;
 	GxRenderer *gx = (GxRenderer *)renderer;
 	float x0, y0, x1, y1, x2, y2, x3, y3;
 	u8 r = (u8)BGR_R(color), g = (u8)BGR_G(color), b = (u8)BGR_B(color), a = unorm(alpha);
@@ -2002,6 +2035,7 @@ static void gxDrawSpritePartColor(Renderer *renderer, int32_t tpagIndex, int32_t
 				  int32_t srcH, float x, float y, float xscale, float yscale, float angleDeg,
 				  float pivotX, float pivotY, uint32_t c1, uint32_t c2, uint32_t c3, uint32_t c4, float alpha)
 {
+	gx_stat.sprites++;
 	GxRenderer *gx = (GxRenderer *)renderer;
 	float x0, y0, x1, y1, x2, y2, x3, y3;
 	u8 a = unorm(alpha);
@@ -2018,6 +2052,7 @@ static void gxDrawSpritePartColor(Renderer *renderer, int32_t tpagIndex, int32_t
 static void gxDrawSpritePos(Renderer *renderer, int32_t tpagIndex, float x1, float y1, float x2, float y2, float x3,
 			    float y3, float x4, float y4, float alpha)
 {
+	gx_stat.sprites++;
 	GxRenderer *gx = (GxRenderer *)renderer;
 	DataWin *dw = renderer->dataWin;
 	TexturePageItem *tpag;
@@ -2474,6 +2509,7 @@ static bool gxSurfaceExists(Renderer *renderer, int32_t surfaceID)
 
 static bool gxSetRenderTarget(Renderer *renderer, int32_t surfaceID, bool implicitApplicationSurface)
 {
+	gx_stat.targets++;
 	GxRenderer *gx = (GxRenderer *)renderer;
 	int32_t viewCurrent = 0;
 	RuntimeView *view;
@@ -2914,6 +2950,7 @@ bool GxRenderer_surfacePixel(int32_t surfaceID, int x, int y, uint8_t rgba[4])
 static void gxDrawTiledPart(Renderer *renderer, int32_t tpagIndex, int32_t srcX, int32_t srcY, int32_t srcW, int32_t srcH,
 			    float dstX, float dstY, float dstW, float dstH, uint32_t color, float alpha)
 {
+	gx_stat.tiles++;
 	float x, y;
 
 	if (srcW <= 0 || srcH <= 0)
