@@ -102,17 +102,43 @@ void Wii_warpTo(Runner *runner, int room, int x, int y, int camx, int camy)
 	logInfo("Wii: warp to room %d at %d,%d\n", room, x, y);
 }
 
-/* Optional debug warp: warp.txt beside the game holds "room x y". */
+static bool wii_has_character(Runner *runner)
+{
+	int32_t idx = Wii_objectIndex(runner, "oCharacter");
+	Instance **list;
+	int32_t i, n;
+
+	if (idx < 0 || !runner->instancesByExactObject)
+		return false;
+	list = runner->instancesByExactObject[idx];
+	n = (int32_t)arrlen(list);
+	for (i = 0; i < n; i++)
+		if (list[i] && !list[i]->destroyed)
+			return true;
+	return false;
+}
+
+/* Optional debug warp: warp.txt beside the game holds "room x y [frames]". It fires once the player
+ * exists (a new game's landing or a continued save); with frames, the game quits that many frames
+ * after the warp so a host script can collect the log. */
 void Wii_tryWarp(Runner *runner)
 {
 	static int armed;
 	static int landed;
-	static int room, x, y;
+	static int room, x, y, frames, ran;
 	FILE *f;
 	char line[128];
 
 	if (armed < 0)
 		return;
+	if (armed == 2) {
+		if (frames > 0 && ++ran >= frames) {
+			logInfo("Wii: warp run of %d frames done, quitting\n", frames);
+			runner->shouldExit = true;
+			armed = -1;
+		}
+		return;
+	}
 	if (armed == 0) {
 		f = fopen(WII_GAME_DIR "/warp.txt", "r");
 		if (!f) {
@@ -120,10 +146,11 @@ void Wii_tryWarp(Runner *runner)
 			return;
 		}
 		room = x = y = -1;
+		frames = 0;
 		while (fgets(line, sizeof line, f)) {
 			if (line[0] == '#' || line[0] == '\n' || line[0] == '\r')
 				continue;
-			if (sscanf(line, "%d %d %d", &room, &x, &y) == 3)
+			if (sscanf(line, "%d %d %d %d", &room, &x, &y, &frames) >= 3)
 				break;
 		}
 		fclose(f);
@@ -132,13 +159,14 @@ void Wii_tryWarp(Runner *runner)
 			return;
 		}
 		armed = 1;
-		logInfo("Wii: warp.txt room=%d (%d,%d)\n", room, x, y);
+		logInfo("Wii: warp.txt room=%d (%d,%d) frames=%d\n", room, x, y, frames);
 	}
-	if (runner->currentRoomIndex != Wii_am2rIds(runner)->landingRoom)
+	if (!wii_has_character(runner))
 		return;
 	if (++landed != WARP_SETTLE_FRAMES)
 		return;
 	Wii_warpTo(runner, room, x, y, x, y);
+	armed = 2;
 }
 
 /* FUSION marker (Dolphin only): oControl.mod_fusion = 1 once in the landing room, which is what
