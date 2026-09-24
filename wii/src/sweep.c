@@ -18,6 +18,7 @@
 #include <malloc.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 #define SWEEP_FILE WII_GAME_DIR "/sweep.txt"
 #define SHOTS_FILE WII_GAME_DIR "/shots.txt"
@@ -465,11 +466,29 @@ void Wii_shotHold(void)
 	shotLast = false;
 }
 
+/* HEAPCHK marker (Dolphin only): walk the malloc bins every frame. A corrupted free list stops the walk
+ * inside mallinfo, so the last "HEAPCHK frame" line names the frame the heap was damaged in. */
+static void heapcheck_tick(Runner *runner)
+{
+	static int armed;
+
+	if (armed == 0)
+		armed = access(WII_GAME_DIR "/HEAPCHK", R_OK) == 0 ? 1 : -1;
+	if (armed < 0)
+		return;
+	logInfo("HEAPCHK frame=%d\n", runner->frameCount);
+	if (runner->frameCount % 60 == 0)
+		logInfo("HEAPCHK ok fordblks=%d\n", mallinfo().fordblks);
+	else
+		mallinfo();
+}
+
 void Wii_sweepTick(Runner *runner)
 {
 	uint64_t ops;
 	uint32_t delta, arena;
 
+	heapcheck_tick(runner);
 	shots_tick(runner);
 	Wii_jukeboxTick(runner);
 	if (state < 0 || state == 3)
