@@ -158,7 +158,8 @@ static struct {
 	double area; /* target pixels covered by the quads: fill, the thing a GPU-bound room pays for */
 	double *areaByTpag; /* the same per texture page item, to name what a GPU-bound room is filling with */
 	uint32_t *drawsByTpag;
-	bool fillChecked;
+	uint32_t fillCount; /* items the two tables cover */
+	bool fillChecked, fillWanted;
 	u64 emitUs, copyUs, drawUs, otherUs, frameStart, lastEnd;
 } gx_stat;
 
@@ -702,7 +703,7 @@ static void gx_report_fill(DataWin *dw)
 		uint32_t i, best = 0, s, f;
 		const char *name = "?";
 
-		for (i = 1; i < dw->tpag.count; i++)
+		for (i = 1; i < gx_stat.fillCount; i++)
 			if (gx_stat.areaByTpag[i] > gx_stat.areaByTpag[best])
 				best = i;
 		if (gx_stat.areaByTpag[best] < 200 * 1000.0)
@@ -720,8 +721,8 @@ static void gx_report_fill(DataWin *dw)
 			dw->tpag.items[best].sourceHeight, gx_stat.areaByTpag[best] / 200e6, gx_stat.drawsByTpag[best] / 200.0);
 		gx_stat.areaByTpag[best] = 0;
 	}
-	memset(gx_stat.areaByTpag, 0, dw->tpag.count * sizeof *gx_stat.areaByTpag);
-	memset(gx_stat.drawsByTpag, 0, dw->tpag.count * sizeof *gx_stat.drawsByTpag);
+	memset(gx_stat.areaByTpag, 0, gx_stat.fillCount * sizeof *gx_stat.areaByTpag);
+	memset(gx_stat.drawsByTpag, 0, gx_stat.fillCount * sizeof *gx_stat.drawsByTpag);
 }
 
 static u8 unorm(float a)
@@ -1476,13 +1477,25 @@ static void gx_draw_tpag(GxRenderer *gx, int32_t tpagIndex, float x0, float y0, 
 		FILE *f = fopen(WII_GAME_DIR "/GXFILL", "r"); /* Dolphin-only: name the fillers, every 200 frames */
 
 		gx_stat.fillChecked = true;
-		if (f) {
+		gx_stat.fillWanted = f != NULL;
+		if (f)
 			fclose(f);
-			gx_stat.areaByTpag = calloc(dw->tpag.count, sizeof *gx_stat.areaByTpag);
-			gx_stat.drawsByTpag = calloc(dw->tpag.count, sizeof *gx_stat.drawsByTpag);
-		}
 	}
-	if (gx_stat.areaByTpag && gx_stat.drawsByTpag) {
+	if (gx_stat.fillWanted && dw->tpag.count > gx_stat.fillCount) {
+		/* Loose PNGs and sprite_add append page items after the first draw; tables sized then overran
+		 * the heap at the first report (the 4:3 title-screen corruption of sessions 10-11). */
+		uint32_t n = dw->tpag.count, old = gx_stat.fillCount;
+
+		gx_stat.areaByTpag = realloc(gx_stat.areaByTpag, n * sizeof *gx_stat.areaByTpag);
+		gx_stat.drawsByTpag = realloc(gx_stat.drawsByTpag, n * sizeof *gx_stat.drawsByTpag);
+		if (gx_stat.areaByTpag && gx_stat.drawsByTpag) {
+			memset(gx_stat.areaByTpag + old, 0, (n - old) * sizeof *gx_stat.areaByTpag);
+			memset(gx_stat.drawsByTpag + old, 0, (n - old) * sizeof *gx_stat.drawsByTpag);
+			gx_stat.fillCount = n;
+		} else
+			gx_stat.fillWanted = false;
+	}
+	if (gx_stat.areaByTpag && gx_stat.drawsByTpag && (uint32_t)tpagIndex < gx_stat.fillCount) {
 		gx_stat.areaByTpag[tpagIndex] += gx_visible_area(x0, y0, x1, y1, x2, y2, x3, y3);
 		gx_stat.drawsByTpag[tpagIndex]++;
 	}
