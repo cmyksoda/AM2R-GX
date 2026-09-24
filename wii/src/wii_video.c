@@ -7,30 +7,48 @@
 #include <stdio.h>
 #include <string.h>
 #include <ogc/lwp_watchdog.h>
+#include <ogc/machine/processor.h>
 
 #include "log.h"
 
 #define FIFO_SIZE (1024 * 1024)
 
 static GXRModeObj *rmode;
-static void *xfb[2];
+static void *xfb[3];
 static u32 fb;
+static bool fifty;
+static volatile int shownFb, queuedFb = -1;
 static void *fifo;
 static bool inited;
 static bool first_present = true;
 static bool wide;
 
+/* A PAL console follows its own 50/60 Hz setting (EuRGB60), as licensed games do: a TV that cannot take PAL60
+ * belongs to a console set to 50 Hz. 50 Hz is the 480-line EFB scaled onto 576 interlaced lines. */
 static GXRModeObj *pick_mode(void)
 {
 	GXRModeObj *m = VIDEO_GetPreferredMode(NULL);
 
-	if (m->xfbHeight > 480) {
-		if (CONF_GetProgressiveScan() && VIDEO_HaveComponentCable())
+	if (m->xfbHeight > 480 && CONF_GetEuRGB60() > 0) {
+		if (CONF_GetProgressiveScan() > 0 && VIDEO_HaveComponentCable())
 			m = &TVEurgb60Hz480Prog;
 		else
 			m = &TVEurgb60Hz480IntDf;
+	} else if (m->xfbHeight > 480) {
+		m = &TVPal576IntDfScale;
 	}
 	return m;
+}
+
+/* At 50 Hz the game still steps 60 times a second: the VI shows whichever finished frame is newest at each
+ * retrace, so one frame in six is never shown. A third XFB keeps the copy off the buffer being scanned out. */
+static void on_retrace(u32 count)
+{
+	(void)count;
+	if (queuedFb >= 0) {
+		shownFb = queuedFb;
+		queuedFb = -1;
+	}
 }
 
 bool WiiVideo_init(void)
@@ -47,11 +65,15 @@ bool WiiVideo_init(void)
 	/* 16:9 TVs stretch the frame; the game composes its wide view for that unless WII_WIDE_PILLARBOX is built in. */
 	wide = (CONF_GetAspectRatio() == CONF_ASPECT_16_9);
 
+	fifty = rmode->viTVMode >> 2 == VI_PAL;
 	fb = 0;
 	xfb[0] = MEM_K0_TO_K1(SYS_AllocateFramebuffer(rmode));
 	xfb[1] = MEM_K0_TO_K1(SYS_AllocateFramebuffer(rmode));
-	if (!xfb[0] || !xfb[1])
+	xfb[2] = fifty ? MEM_K0_TO_K1(SYS_AllocateFramebuffer(rmode)) : NULL;
+	if (!xfb[0] || !xfb[1] || (fifty && !xfb[2]))
 		return false;
+	if (fifty)
+		VIDEO_SetPostRetraceCallback(on_retrace);
 
 	VIDEO_Configure(rmode);
 	VIDEO_SetNextFramebuffer(xfb[fb]);
@@ -118,12 +140,38 @@ static void frame_stats(u64 t0, u64 t1, u64 t2)
 	last = t2;
 }
 
+static void present_fifty(void)
+{
+	u32 level;
+	int r;
+
+	for (r = 0; r == shownFb || r == queuedFb; r++)
+		;
+	GX_CopyDisp(xfb[r], GX_TRUE);
+	GX_DrawDone();
+	_CPU_ISR_Disable(level);
+	queuedFb = r;
+	VIDEO_SetNextFramebuffer(xfb[r]);
+	VIDEO_Flush();
+	_CPU_ISR_Restore(level);
+	if (first_present) {
+		VIDEO_SetBlack(false);
+		VIDEO_Flush();
+		first_present = false;
+	}
+}
+
 void WiiVideo_present(void)
 {
 	u64 t0 = gettime(), t1;
 
 	GX_DrawDone();
 	t1 = gettime();
+	if (fifty) {
+		present_fifty();
+		frame_stats(t0, t1, gettime());
+		return;
+	}
 	GX_CopyDisp(xfb[fb], GX_TRUE);
 	GX_Flush();
 	VIDEO_SetNextFramebuffer(xfb[fb]);
