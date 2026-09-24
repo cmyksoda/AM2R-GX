@@ -28,9 +28,10 @@ typedef struct {
 	bool retry;          /* screens that ignore early presses: press again until the next step's screen is up */
 	int settle;          /* frames to let the screen finish sliding in */
 	const char *keys;    /* 'D' Down, 'U' Up, 'L' Left, 'R' Right, 'Z' Z, 'S' Enter+Z, 'E' Esc, '.' shoot, '_' nothing;
-	                        one per KEY_HOLD + KEY_GAP frames. Held directions: lowercase d u l r hold one, a digit
-	                        holds a set (1 Down, 2 Up, 4 Left, 8 Right, added up); the set stays held across taps
-	                        and changes only at the next hold, '_' or '.'. */
+	                        pad buttons: 'C' Ctrl (X), 'H' Shift (L), 'A' A (R), 'W' S (Select), 'P' Space (R2), 'K' C (L2);
+	                        one per KEY_HOLD + KEY_GAP frames. Held keys: lowercase d u l r z hold one, j = Right+Z
+	                        and k = Left+Z (a full-height jump), a digit holds a set (1 Down, 2 Up, 4 Left, 8 Right);
+	                        the set stays held across taps and changes only at the next hold, '_' or '.'. */
 	const char *skipIf;  /* a screen the game may show instead (modifiers.ini skips the game-type box) */
 } MenuStep;
 
@@ -74,7 +75,7 @@ static const MenuStep landing[] = {
  * jumps and morphs in the air; default Down Down with Left already held. A fifth number G replaces KEY_GAP
  * for taps and idles only (G=6: Down Down Left 8 frames apart, a human's speed; holds keep their 32).
  * "morph keys <slots> [G]" spells the slots out by hand instead; a trailing "pause" on either form pauses first. */
-static char morphKeys[80] = "rrrrrrrr_lDDllllllllllll.";
+static char morphKeys[200] = "rrrrrrrr_lDDllllllllllll.";
 static const MenuStep morph[] = {
 	{ "oPressStart", false, true, 30, "S", NULL },
 	{ "oGameSelMenu", false, false, 300, "Z", NULL },
@@ -100,6 +101,10 @@ static const MenuStep morphPause[] = {
 };
 static const MenuStep *steps = extras;
 static int keyGap = KEY_GAP;
+/* COLTRACE marker "xmin xmax": patch 0099 logs Samus's collision queries while her x is in range. */
+bool Wii_coltrace;
+int32_t Wii_coltraceObj = -1;
+static float coltraceMin, coltraceMax;
 #define CENSUS_EVERY 120
 #define CENSUS_MAX 14
 
@@ -178,6 +183,12 @@ static int key_vk(int key)
 	case 'L': case 'l': return VK_LEFT;
 	case 'R': case 'r': return VK_RIGHT;
 	case 'E': return VK_ESCAPE;
+	case 'C': return VK_CONTROL; /* the pad's Y / the game's X button */
+	case 'H': return VK_SHIFT;   /* R trigger / the game's L */
+	case 'A': return 'A';        /* L trigger / the game's R */
+	case 'W': return 'S';        /* pad X / Select */
+	case 'P': return ' ';        /* the game's R2 */
+	case 'K': return 'C';        /* the game's L2 */
 	default: return 'Z';
 	}
 }
@@ -208,6 +219,9 @@ static int hold_mask(char c)
 	case 'u': return 2;
 	case 'l': return 4;
 	case 'r': return 8;
+	case 'z': return 16;
+	case 'j': return 8 | 16;
+	case 'k': return 4 | 16;
 	default: return (c >= '0' && c <= '9') ? c - '0' : -1;
 	}
 }
@@ -220,10 +234,10 @@ static int slot_len(char c)
 
 static void set_holds(Runner *runner, int *held, int want)
 {
-	static const int vk[4] = { VK_DOWN, VK_UP, VK_LEFT, VK_RIGHT };
+	static const int vk[5] = { VK_DOWN, VK_UP, VK_LEFT, VK_RIGHT, 'Z' };
 	int b;
 
-	for (b = 0; b < 4; b++) {
+	for (b = 0; b < 5; b++) {
 		if ((want & (1 << b)) && !(*held & (1 << b)))
 			RunnerKeyboard_onKeyDown(runner->keyboard, vk[b]);
 		else if (!(want & (1 << b)) && (*held & (1 << b)))
@@ -306,6 +320,28 @@ static bool key_down(RunnerKeyboardState *kb, int key)
 
 /* TRACE marker: for a bug only Jaxi's hands on the Wii trigger. One line whenever Samus, her mask or the
  * pad changes; keys = 1 Down 2 Up 4 Left 8 Right 16 Z 32 X. Synced to the card once a second. */
+static void coltrace_tick(Runner *runner)
+{
+	static int armed;
+	Instance *samus;
+	FILE *f;
+
+	if (armed < 0)
+		return;
+	if (armed == 0) {
+		f = fopen(WII_GAME_DIR "/COLTRACE", "r");
+		armed = f && fscanf(f, "%f %f", &coltraceMin, &coltraceMax) == 2 ? 1 : -1;
+		if (f)
+			fclose(f);
+		if (armed > 0)
+			logInfo("COLTRACE armed x %g..%g\n", coltraceMin, coltraceMax);
+		return;
+	}
+	samus = samus_instance(runner);
+	Wii_coltraceObj = Wii_am2rIds(runner)->character;
+	Wii_coltrace = samus && samus->x >= coltraceMin && samus->x <= coltraceMax;
+}
+
 void Wii_traceTick(Runner *runner)
 {
 	static int armed, lines, lroom = -1, lmask = -1, lkeys = -1;
@@ -315,7 +351,10 @@ void Wii_traceTick(Runner *runner)
 	FILE *f;
 	int keys;
 
-	if (armed < 0 || !runner || !runner->keyboard)
+	if (!runner)
+		return;
+	coltrace_tick(runner);
+	if (armed < 0 || !runner->keyboard)
 		return;
 	if (armed == 0) {
 		f = fopen(WII_GAME_DIR "/TRACE", "r");
@@ -365,12 +404,12 @@ void Wii_menuTick(Runner *runner)
 			steps = landing;
 		else if (strcmp(word, "morph") == 0) {
 			int r, l, j = 0, g = 0, n;
-			char how[16] = "", then[16] = "", rest[160] = "";
+			char how[16] = "", then[16] = "", rest[300] = "";
 
 			if (!fgets(rest, sizeof rest, f))
 				rest[0] = '\0';
 			/* The slots spelled out by hand, or built from the counts. */
-			if (sscanf(rest, " keys %79s %d %15s", morphKeys, &g, then) < 1 &&
+			if (sscanf(rest, " keys %199s %d %15s", morphKeys, &g, then) < 1 &&
 			    sscanf(rest, "%d %d %15s %d %d %15s", &r, &l, how, &j, &g, then) >= 2 && r >= 0 && l >= 0 && j >= 0 && j < 8 &&
 			    r + l + 2 * j < (int)sizeof morphKeys - 6) {
 				memset(morphKeys, 'r', (size_t)r);
