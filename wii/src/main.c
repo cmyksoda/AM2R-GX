@@ -52,7 +52,8 @@ static void poison_arenas(void)
 }
 
 /* wiiload can hand the DOL "NAME=text" arguments: each becomes game/NAME for this run only (a marker such as
- * MENU=landing or "warp.txt=241 16 1856 1200"), so the host needs no FTP transfer to arm a hands-free run. */
+ * MENU=landing or "warp.txt=241 16 1856 1200"), so the host needs no FTP transfer to arm a hands-free run.
+ * HBC passes the first argument as argv[0] (no program name in front); an SD launch has the DOL path there. */
 static char argMarkers[8][32];
 static int argMarkerCount;
 
@@ -60,7 +61,7 @@ static void markers_from_args(int argc, char **argv)
 {
 	int i;
 
-	for (i = 1; i < argc && argMarkerCount < 8; i++) {
+	for (i = 0; i < argc && argMarkerCount < 8; i++) {
 		const char *eq = strchr(argv[i], '=');
 		char path[96];
 		FILE *f;
@@ -125,6 +126,7 @@ int main(int argc, char **argv)
 	if (!WiiLog_open(WII_LOG_PATH))
 		logWarn("could not open %s — console only\n", WII_LOG_PATH);
 	markers_from_args(argc, argv);
+	NetLog_init();
 
 	Overscan_load();
 	WiiVideo_setActiveWidth(Overscan_viWidth());
