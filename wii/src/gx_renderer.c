@@ -292,11 +292,18 @@ static void gx_vtx_fmt(void)
 	GX_SetZMode(GX_FALSE, GX_ALWAYS, GX_FALSE);
 }
 
+/* The projection in force, in the units quads are drawn in: what the rasterizer keeps. */
+static float gx_clipT = -1e9f, gx_clipB = 1e9f, gx_clipL = -1e9f, gx_clipR = 1e9f;
+
 static void gx_ortho(float top, float bottom, float left, float right)
 {
 	Mtx mv;
 	Mtx44 proj;
 
+	gx_clipT = top;
+	gx_clipB = bottom;
+	gx_clipL = left;
+	gx_clipR = right;
 	guOrtho(proj, top, bottom, left, right, 0.0f, 300.0f);
 	GX_LoadProjectionMtx(proj, GX_ORTHOGRAPHIC);
 	guMtxIdentity(mv);
@@ -2583,6 +2590,18 @@ static bool gxGpuGetBlendEnable(Renderer *renderer)
 
 static void gxGpuSetFog(MAYBE_UNUSED Renderer *renderer, MAYBE_UNUSED bool enable, MAYBE_UNUSED uint32_t color) {}
 
+/* Tiles past the projection are scissored anyway; skipping them (a tile of slack each side, two on the far
+ * side for a mirrored scale) turns a room-wide background into a screen's worth of quads. */
+static void gx_tile_span(float *start, float *end, float tile, float lo, float hi)
+{
+	float skip = floorf((lo - 2 * tile - *start) / tile);
+
+	if (skip > 0)
+		*start += skip * tile;
+	if (*end > hi + 2 * tile)
+		*end = hi + 2 * tile;
+}
+
 static void gxDrawSpriteTiled(Renderer *renderer, int32_t tpagIndex, float originX, float originY, float x, float y,
 			      float xscale, float yscale, bool tileX, bool tileY, float roomW, float roomH,
 			      uint32_t color, float alpha)
@@ -2617,6 +2636,10 @@ static void gxDrawSpriteTiled(Renderer *renderer, int32_t tpagIndex, float origi
 		startY = y - originY * ay;
 		endY = startY + tileH;
 	}
+	if (tileX)
+		gx_tile_span(&startX, &endX, tileW, gx_clipL, gx_clipR);
+	if (tileY)
+		gx_tile_span(&startY, &endY, tileH, gx_clipT, gx_clipB);
 	for (cy = startY; cy < endY; cy += tileH) {
 		for (cx = startX; cx < endX; cx += tileW)
 			gxDrawSprite(renderer, tpagIndex, cx + originX * xscale, cy + originY * yscale, originX, originY,
