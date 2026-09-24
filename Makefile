@@ -79,6 +79,7 @@ patchkit:
 	python3 tools/repack_textures.py $(CU155) build/plan-repacked.win --groups $(GROUPS) --report build/plan.json
 	python3 tools/repack_plan.py $(CU155) build/plan.json dist/apps/am2r/patch/plan.bin
 	rsync -a --delete $(AUTOPATCHER)/files_to_copy/ dist/apps/am2r/patch/files/
+	cp -f $(AUTOPATCHER)/../LICENSE dist/apps/am2r/patch/LICENSE.txt
 	du -sh dist/apps/am2r/patch
 
 # Same tree, second build dir, unused/shadow warnings on for src/wii/ only (upstream's are noise).

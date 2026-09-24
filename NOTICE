@@ -8,8 +8,9 @@ No game data ships with it: the player supplies their own copy of AM2R 1.1, and 
 1.5.5 from it with the AM2R Community Developers' patch. AM2R GX is not affiliated with Nintendo,
 YoYo Games, DoctorM64 or the AM2R Community Developers.
 
-The patch/ folder holds the AM2R Community Developers' 1.5.5 patch data, as distributed with their
-AM2R Autopatcher. The delta is re-encoded to fit the console's memory; it yields the same 1.5.5 data.win.
+The patch/ folder holds the AM2R Community Developers' 1.5.5 patch data from their AM2R Autopatcher,
+which they distribute under the GNU General Public License v3.0 (patch/LICENSE.txt). The delta is
+re-encoded to fit the console's memory; it yields the same 1.5.5 data.win.
 
 The boot.dol in this folder contains the following software, under these licences:
 
