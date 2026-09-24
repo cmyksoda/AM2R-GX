@@ -157,7 +157,7 @@ static bool gx_wide_filter = true; /* [Screen] WiiWideFilter; 0 = the plain 2,1,
 
 /* Per-frame accounting for the hardware profile: what the draw phase costs outside GML scripts. */
 static struct {
-	u32 quads, tiles, sprites, copies, binds, targets, skipped, n;
+	u32 quads, tiles, sprites, copies, binds, targets, skipped, culled, n;
 	double area; /* target pixels covered by the quads: fill, the thing a GPU-bound room pays for */
 	double *areaByTpag; /* the same per texture page item, to name what a GPU-bound room is filling with */
 	uint32_t *drawsByTpag;
@@ -1520,6 +1520,12 @@ static void gx_draw_tpag(GxRenderer *gx, int32_t tpagIndex, float x0, float y0, 
 		gx_stat.skipped++;
 		return;
 	}
+	/* Fully outside the projection: the scissor would drop it, but only after the bind and the emit. */
+	if (fmaxf(fmaxf(x0, x1), fmaxf(x2, x3)) <= gx_clipL || fminf(fminf(x0, x1), fminf(x2, x3)) >= gx_clipR ||
+	    fmaxf(fmaxf(y0, y1), fmaxf(y2, y3)) <= gx_clipT || fminf(fminf(y0, y1), fminf(y2, y3)) >= gx_clipB) {
+		gx_stat.culled++;
+		return;
+	}
 	if (!gx_stat.fillChecked) {
 		FILE *f = fopen(WII_GAME_DIR "/GXFILL", "r"); /* Dolphin-only: name the fillers, every 200 frames */
 
@@ -1985,15 +1991,15 @@ static void gxEndFrameEnd(Renderer *renderer)
 	gx_stat.lastEnd = gettime();
 	gx_stat.drawUs += ticks_to_microsecs(gx_stat.lastEnd - gx_stat.frameStart);
 	if (++gx_stat.n == 200) {
-		logInfo("GXSTAT draw %.2f ms/frame: emit %.2f ms in %u quads (%u tiles, %u sprites, %u skipped), %u copies %.2f ms, "
-			"%u binds, %u targets; between draws %.2f ms; fill %.2f Mpx\n",
+		logInfo("GXSTAT draw %.2f ms/frame: emit %.2f ms in %u quads (%u tiles, %u sprites, %u skipped, %u culled), "
+			"%u copies %.2f ms, %u binds, %u targets; between draws %.2f ms; fill %.2f Mpx\n",
 			gx_stat.drawUs / 200000.0, gx_stat.emitUs / 200000.0, gx_stat.quads / 200, gx_stat.tiles / 200,
-			gx_stat.sprites / 200, gx_stat.skipped / 200, gx_stat.copies / 200, gx_stat.copyUs / 200000.0,
+			gx_stat.sprites / 200, gx_stat.skipped / 200, gx_stat.culled / 200, gx_stat.copies / 200, gx_stat.copyUs / 200000.0,
 			gx_stat.binds / 200, gx_stat.targets / 200, gx_stat.otherUs / 200000.0, gx_stat.area / 200e6);
 		gx_stat.area = 0;
 		gx_report_fill(renderer->dataWin);
 		gx_stat.quads = gx_stat.tiles = gx_stat.sprites = gx_stat.copies = gx_stat.binds = gx_stat.targets = 0;
-		gx_stat.skipped = 0;
+		gx_stat.skipped = gx_stat.culled = 0;
 		gx_stat.emitUs = gx_stat.copyUs = gx_stat.drawUs = gx_stat.otherUs = 0;
 		gx_stat.n = 0;
 	}
