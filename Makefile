@@ -20,7 +20,7 @@ WII_CMAKE_FLAGS := \
 	-DBUTTERSCOTCH_COMMIT_HASH="$(SHA)" \
 	-DBUTTERSCOTCH_COMMIT_DATE="2026-09-10"
 
-.PHONY: all hello run run-wii clean wii wii-warn wii-sd sd-pack patchkit host-smoke
+.PHONY: check check-bless all hello run run-wii clean wii wii-warn wii-sd sd-pack patchkit host-smoke
 
 all: hello
 
@@ -100,6 +100,16 @@ wii-sd:
 # after that, iterate with 'make wii && make run-wii'. Never commits data.win.
 sd-pack:
 	tools/sd-pack.sh "$(CURDIR)/$(AM2R_DATA)" "$(CURDIR)/dist/sd"
+
+# Regression check in Dolphin: two tapes shot against a blessed reference DOL, then a short room sweep.
+# The harness lives in project-notes/research/scripts (untracked); bless a build you trust first.
+CHECK := project-notes/research/scripts/check.py
+check: wii
+	@test -f $(CHECK) || { echo "no $(CHECK): the Dolphin harness is not on this machine"; exit 1; }
+	python3 $(CHECK) --dol $(WII_BUILD)/boot.dol
+
+check-bless: wii
+	python3 $(CHECK) --dol $(WII_BUILD)/boot.dol --bless
 
 host-smoke: $(BUTTER)/CMakeLists.txt
 	cmake -B $(HOST_BUILD) -S $(BUTTER) \
