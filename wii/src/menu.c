@@ -8,6 +8,7 @@
 #include "stb_ds.h"
 #include "vm.h"
 #include "warp.h"
+#include "wii_log.h"
 #include "wii_paths.h"
 
 #include <stdio.h>
@@ -26,7 +27,10 @@ typedef struct {
 	bool landing;        /* ...in the landing room */
 	bool retry;          /* screens that ignore early presses: press again until the next step's screen is up */
 	int settle;          /* frames to let the screen finish sliding in */
-	const char *keys;    /* 'D' Down, 'U' Up, 'Z' Z, 'S' Enter+Z, 'E' Esc, '.' shoot; one per KEY_HOLD + KEY_GAP frames */
+	const char *keys;    /* 'D' Down, 'U' Up, 'L' Left, 'R' Right, 'Z' Z, 'S' Enter+Z, 'E' Esc, '.' shoot, '_' nothing;
+	                        one per KEY_HOLD + KEY_GAP frames. Held directions: lowercase d u l r hold one, a digit
+	                        holds a set (1 Down, 2 Up, 4 Left, 8 Right, added up); the set stays held across taps
+	                        and changes only at the next hold, '_' or '.'. */
 	const char *skipIf;  /* a screen the game may show instead (modifiers.ini skips the game-type box) */
 } MenuStep;
 
@@ -63,7 +67,39 @@ static const MenuStep landing[] = {
 	{ "oCharacter", false, false, 30, "", NULL },
 	{ NULL, false, false, 0, "", NULL },
 };
+/* Jaxi's repro (session 10): walk right over the first little hill by the ship, morph, roll left and keep
+ * rolling. "morph R L [how]" in the marker = R slots of Right, the morph, then L slots of Left, 32 frames
+ * each. how: "still" Down Down standing; "thumb" tap Down, hold Down, Down+Left, Left (a D-pad thumb rolling
+ * from Down to Left); "jump J" J jumps with Right held, then a standing morph (over a taller hill); "air J"
+ * jumps and morphs in the air; default Down Down with Left already held. A fifth number G replaces KEY_GAP
+ * for taps and idles only (G=6: Down Down Left 8 frames apart, a human's speed; holds keep their 32).
+ * "morph keys <slots> [G]" spells the slots out by hand instead; a trailing "pause" on either form pauses first. */
+static char morphKeys[80] = "rrrrrrrr_lDDllllllllllll.";
+static const MenuStep morph[] = {
+	{ "oPressStart", false, true, 30, "S", NULL },
+	{ "oGameSelMenu", false, false, 300, "Z", NULL },
+	{ "oSlotMenu1", false, false, 30, "Z", "oSlotMenu_normal_only" },
+	{ "oSlotMenu_normal_only", false, false, 30, "Z", "oCharacter" },
+	{ "oSlotMenu2", false, false, 30, "Z", "oCharacter" },
+	{ "oIntroCutscene", false, true, 60, "S", "oCharacter" },
+	{ "oCharacter", true, false, 120, morphKeys, NULL },
+	{ NULL, false, false, 0, "", NULL },
+};
+/* The same with a pause menu opened and closed first: Jaxi had just left the pause menu when she fell. */
+static const MenuStep morphPause[] = {
+	{ "oPressStart", false, true, 30, "S", NULL },
+	{ "oGameSelMenu", false, false, 300, "Z", NULL },
+	{ "oSlotMenu1", false, false, 30, "Z", "oSlotMenu_normal_only" },
+	{ "oSlotMenu_normal_only", false, false, 30, "Z", "oCharacter" },
+	{ "oSlotMenu2", false, false, 30, "Z", "oCharacter" },
+	{ "oIntroCutscene", false, true, 60, "S", "oCharacter" },
+	{ "oCharacter", true, true, 320, "E", NULL },
+	{ "oPauseOption", false, false, 60, "Z", NULL }, /* Continue is the row the cursor starts on */
+	{ "oCharacter", true, false, 60, morphKeys, NULL },
+	{ NULL, false, false, 0, "", NULL },
+};
 static const MenuStep *steps = extras;
+static int keyGap = KEY_GAP;
 #define CENSUS_EVERY 120
 #define CENSUS_MAX 14
 
@@ -136,7 +172,14 @@ static void var_census(Runner *runner, const char *object, const char *when)
 
 static int key_vk(int key)
 {
-	return key == 'D' ? VK_DOWN : key == 'U' ? VK_UP : key == 'E' ? VK_ESCAPE : 'Z';
+	switch (key) {
+	case 'D': case 'd': return VK_DOWN;
+	case 'U': case 'u': return VK_UP;
+	case 'L': case 'l': return VK_LEFT;
+	case 'R': case 'r': return VK_RIGHT;
+	case 'E': return VK_ESCAPE;
+	default: return 'Z';
+	}
 }
 
 static void press(Runner *runner, char key, int *held)
@@ -155,6 +198,38 @@ static void release(Runner *runner, int *held)
 	if (*held == 'S')
 		RunnerKeyboard_onKeyUp(runner->keyboard, VK_ENTER);
 	*held = -1;
+}
+
+/* The direction set a hold character asks for, or -1 for a tap / idle / shot. */
+static int hold_mask(char c)
+{
+	switch (c) {
+	case 'd': return 1;
+	case 'u': return 2;
+	case 'l': return 4;
+	case 'r': return 8;
+	default: return (c >= '0' && c <= '9') ? c - '0' : -1;
+	}
+}
+
+/* Held slots keep the walk's 32 frames; taps, idles and shots take the script's gap. */
+static int slot_len(char c)
+{
+	return hold_mask(c) >= 0 ? KEY_HOLD + KEY_GAP : KEY_HOLD + keyGap;
+}
+
+static void set_holds(Runner *runner, int *held, int want)
+{
+	static const int vk[4] = { VK_DOWN, VK_UP, VK_LEFT, VK_RIGHT };
+	int b;
+
+	for (b = 0; b < 4; b++) {
+		if ((want & (1 << b)) && !(*held & (1 << b)))
+			RunnerKeyboard_onKeyDown(runner->keyboard, vk[b]);
+		else if (!(want & (1 << b)) && (*held & (1 << b)))
+			RunnerKeyboard_onKeyUp(runner->keyboard, vk[b]);
+	}
+	*held = want;
 }
 
 static bool step_ready(Runner *runner, const MenuStep *s)
@@ -194,9 +269,83 @@ static void key_trace(Runner *runner)
 	        named_var(runner, vm->globalScopeInstance, "curropt"), named_var(runner, vm->globalScopeInstance, "controltype"));
 }
 
+static Instance *samus_instance(Runner *runner)
+{
+	const Am2rIds *ids = Wii_am2rIds(runner);
+	Instance **list;
+	int32_t i, n;
+
+	if (ids->character < 0 || !runner->instancesByExactObject)
+		return NULL;
+	list = runner->instancesByExactObject[ids->character];
+	n = (int32_t)arrlen(list);
+	for (i = 0; i < n; i++)
+		if (list[i] && !list[i]->destroyed)
+			return list[i];
+	return NULL;
+}
+
+/* Samus every frame of the gameplay script: a fall through the floor shows as y running away
+ * in the log, no eyes needed. */
+static void pos_trace(Runner *runner, char key, char tap)
+{
+	Instance *samus = samus_instance(runner);
+
+	if (!samus)
+		return;
+	logInfo("MENU pos frame=%d key=%c%c x=%.2f y=%.2f hs=%.2f vs=%.2f morph=%g state=%g mask=%d\n", runner->frameCount, key, tap,
+	        samus->x, samus->y, samus->hspeed, samus->vspeed, named_var(runner, samus, "morphball"),
+	        named_var(runner, samus, "statetype"), (int)samus->maskIndex);
+}
+
+/* The held state lives under keyboard_set_map's translation of the key. */
+static bool key_down(RunnerKeyboardState *kb, int key)
+{
+	return kb->keyDown[kb->keyMap[key]];
+}
+
+/* TRACE marker: for a bug only Jaxi's hands on the Wii trigger. One line whenever Samus, her mask or the
+ * pad changes; keys = 1 Down 2 Up 4 Left 8 Right 16 Z 32 X. Synced to the card once a second. */
+void Wii_traceTick(Runner *runner)
+{
+	static int armed, lines, lroom = -1, lmask = -1, lkeys = -1;
+	static float lx, ly;
+	RunnerKeyboardState *kb;
+	Instance *samus;
+	FILE *f;
+	int keys;
+
+	if (armed < 0 || !runner || !runner->keyboard)
+		return;
+	if (armed == 0) {
+		f = fopen(WII_GAME_DIR "/TRACE", "r");
+		armed = f ? 1 : -1;
+		if (!f)
+			return;
+		fclose(f);
+		logInfo("TRACE armed\n");
+	}
+	samus = samus_instance(runner);
+	if (!samus)
+		return;
+	kb = runner->keyboard;
+	keys = (key_down(kb, VK_DOWN) ? 1 : 0) | (key_down(kb, VK_UP) ? 2 : 0) | (key_down(kb, VK_LEFT) ? 4 : 0) |
+	       (key_down(kb, VK_RIGHT) ? 8 : 0) | (key_down(kb, 'Z') ? 16 : 0) | (key_down(kb, 'X') ? 32 : 0);
+	if (runner->currentRoomIndex == lroom && samus->x == lx && samus->y == ly && samus->maskIndex == lmask && keys == lkeys)
+		return;
+	lroom = runner->currentRoomIndex;
+	lx = samus->x;
+	ly = samus->y;
+	lmask = samus->maskIndex;
+	lkeys = keys;
+	logInfo("TRACE frame=%d room=%d x=%.2f y=%.2f mask=%d keys=%d\n", runner->frameCount, lroom, lx, ly, lmask, keys);
+	if (++lines % 60 == 0)
+		WiiLog_sync();
+}
+
 void Wii_menuTick(Runner *runner)
 {
-	static int armed, step, since = -1, heldKey = -1, waited;
+	static int armed, step, since = -1, heldKey = -1, holdMask, waited;
 	const MenuStep *s;
 	FILE *f;
 	char word[16] = "";
@@ -214,14 +363,40 @@ void Wii_menuTick(Runner *runner)
 			steps = pausetips;
 		else if (strcmp(word, "landing") == 0)
 			steps = landing;
-		else if (fscanf(f, "%d", &t) == 1 && t >= 0 && t < 12) {
+		else if (strcmp(word, "morph") == 0) {
+			int r, l, j = 0, g = 0, n;
+			char how[16] = "", then[16] = "", rest[160] = "";
+
+			if (!fgets(rest, sizeof rest, f))
+				rest[0] = '\0';
+			/* The slots spelled out by hand, or built from the counts. */
+			if (sscanf(rest, " keys %79s %d %15s", morphKeys, &g, then) < 1 &&
+			    sscanf(rest, "%d %d %15s %d %d %15s", &r, &l, how, &j, &g, then) >= 2 && r >= 0 && l >= 0 && j >= 0 && j < 8 &&
+			    r + l + 2 * j < (int)sizeof morphKeys - 6) {
+				memset(morphKeys, 'r', (size_t)r);
+				n = r;
+				for (t = 0; t < j && (strcmp(how, "jump") == 0 || strcmp(how, "air") == 0); t++) {
+					morphKeys[n++] = 'Z';
+					if (strcmp(how, "jump") == 0)
+						morphKeys[n++] = 'r'; /* stay on Right through the jump and land walking */
+				}
+				memcpy(morphKeys + n, strcmp(how, "still") == 0 || strcmp(how, "jump") == 0 ? "_DD_" :
+				                      strcmp(how, "air") == 0 ? "DD__" : strcmp(how, "thumb") == 0 ? "_D15" : "_lDD", 4);
+				memset(morphKeys + n + 4, 'l', (size_t)l);
+				strcpy(morphKeys + n + 4 + l, ".");
+			}
+			if (g > 0)
+				keyGap = g;
+			steps = strcmp(then, "pause") == 0 ? morphPause : morph;
+		} else if (fscanf(f, "%d", &t) == 1 && t >= 0 && t < 12) {
 			memset(fileSelectKeys, 'D', (size_t)t);
 			fileSelectKeys[t] = 'Z';
 			fileSelectKeys[t + 1] = '\0';
 		}
 		fclose(f);
 		armed = 1;
-		logInfo("MENU armed script=%s\n", steps == pausetips ? "pausetips" : steps == landing ? "landing" : "extras");
+		logInfo("MENU armed script=%s keys=%s gap=%d\n", steps == pausetips ? "pausetips" : steps == landing ? "landing" :
+		        steps == morph ? "morph" : steps == morphPause ? "morph+pause" : "extras", steps == morph || steps == morphPause ? morphKeys : "", keyGap);
 	}
 	s = &steps[step];
 	if (!s->object)
@@ -253,17 +428,29 @@ void Wii_menuTick(Runner *runner)
 		return;
 	if (step == 1 && t < (int)strlen(s->keys) * (KEY_HOLD + KEY_GAP) + 60)
 		key_trace(runner);
-	k = t / (KEY_HOLD + KEY_GAP);
-	if (k < (int)strlen(s->keys)) {
-		if (t % (KEY_HOLD + KEY_GAP) >= KEY_HOLD)
+	for (k = 0; s->keys[k] && t >= slot_len(s->keys[k]); k++)
+		t -= slot_len(s->keys[k]);
+	if (s->keys[k]) {
+		char c = s->keys[k];
+		int phase = t;
+
+		if ((steps == morph || steps == morphPause) && s->landing)
+			pos_trace(runner, holdMask ? (char)('0' + holdMask) : '-', heldKey < 0 ? c : (char)heldKey);
+		if (hold_mask(c) >= 0)
+			set_holds(runner, &holdMask, hold_mask(c));
+		else if (c == '_' || c == '.') {
+			set_holds(runner, &holdMask, 0);
 			release(runner, &heldKey);
-		else if (s->keys[k] == '.' && t % (KEY_HOLD + KEY_GAP) == 0)
-			Wii_requestShot(runner->frameCount, "menu", s->keys[k + 1] == '\0' && !steps[step + 1].object);
-		else if (s->keys[k] != '.' && heldKey < 0)
-			press(runner, s->keys[k], &heldKey);
+			if (c == '.' && phase == 0)
+				Wii_requestShot(runner->frameCount, "menu", s->keys[k + 1] == '\0' && !steps[step + 1].object);
+		} else if (phase >= KEY_HOLD)
+			release(runner, &heldKey);
+		else if (heldKey < 0)
+			press(runner, c, &heldKey);
 		return;
 	}
 	release(runner, &heldKey);
+	set_holds(runner, &holdMask, 0);
 	if (s->retry && !step_ready(runner, &steps[step + 1])) {
 		since = s->settle > 60 ? s->settle - 60 : 0; /* not through yet: press again in a moment */
 		return;
@@ -273,4 +460,9 @@ void Wii_menuTick(Runner *runner)
 	step++;
 	since = -1;
 	waited = 0;
+	/* A gameplay script quits at its end so the Wii runner gets its log back. */
+	if ((steps == morph || steps == morphPause) && !steps[step].object) {
+		logInfo("MENU script done, quitting\n");
+		runner->shouldExit = true;
+	}
 }

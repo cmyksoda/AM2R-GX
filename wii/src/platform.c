@@ -250,6 +250,7 @@ bool platformHandleEvents(void)
 {
 	WiiInput_poll(g_runner);
 	Wii_menuTick(g_runner);
+	Wii_traceTick(g_runner);
 	return WiiInput_shouldQuit() || Wii_sweepFinished();
 }
 

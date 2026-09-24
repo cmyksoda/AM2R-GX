@@ -17,6 +17,8 @@ void Wii_efbDump(void);
 void Wii_jukeboxTick(struct Runner *runner);
 /* MENU marker: reach the Extras menu by menu state, not frame numbers, and shoot it. */
 void Wii_menuTick(struct Runner *runner);
+/* TRACE marker: Samus's position, mask and the pad every frame something changes, synced to the card. */
+void Wii_traceTick(struct Runner *runner);
 /* A hook's own shot, announced like a tape shot so the host grabs (and EFB-dumps) it. */
 void Wii_requestShot(int frame, const char *what, bool last);
 

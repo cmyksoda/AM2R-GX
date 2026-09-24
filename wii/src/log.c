@@ -5,6 +5,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 static FILE *g_log;
 static bool g_gecko;
@@ -17,6 +18,13 @@ bool WiiLog_open(const char *path)
 	setvbuf(g_log, NULL, _IONBF, 0);
 	fprintf(g_log, "=== AM2R GX log ===\n");
 	return true;
+}
+
+/* Push the log through libfat's cache onto the card, for a run that may end in a power-off. */
+void WiiLog_sync(void)
+{
+	if (g_log)
+		fsync(fileno(g_log));
 }
 
 void WiiLog_close(void)
