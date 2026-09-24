@@ -42,10 +42,8 @@
 /* RGB565 has no alpha; gui_surface needs draw_clear_alpha(0,0) to stay transparent. */
 #define SURF_TEX_FMT GX_TF_RGBA8
 #define SURF_BPP 4
-/* 1 = pillarbox 4:3 on a 16:9 TV (480 wide, centred); 0 = stretch. */
-#ifndef WII_WIDE_PILLARBOX
-#define WII_WIDE_PILLARBOX 0
-#endif
+/* A 4:3 game frame on a 16:9 console: 480 wide, centred, instead of stretched. */
+static bool gx_pillarbox;
 
 typedef struct {
 	float x, y, u, v;
@@ -168,6 +166,13 @@ static struct {
 void GxRenderer_setWideFilter(bool on)
 {
 	gx_wide_filter = on;
+}
+
+void GxRenderer_setPillarbox(bool on)
+{
+	if (on != gx_pillarbox)
+		logInfo("GX: pillarbox %s\n", on ? "on" : "off");
+	gx_pillarbox = on;
 }
 static void gxSurfaceResize(Renderer *renderer, int32_t surfaceID, int32_t width, int32_t height);
 
@@ -1149,7 +1154,7 @@ static void gx_bind_host(GxRenderer *gx)
 	 * (EFB clears full each present, and the scissor clips to the viewport). */
 	int oh = Overscan_h();
 	int ov = Overscan_v();
-	if (WII_WIDE_PILLARBOX && WiiVideo_isWide()) {
+	if (gx_pillarbox && WiiVideo_isWide()) {
 		int pw = (w * 3) / 4;
 
 		gx_viewport((w - pw) / 2 + oh, ov, pw - 2 * oh, h - 2 * ov);
