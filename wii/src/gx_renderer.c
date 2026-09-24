@@ -36,7 +36,7 @@
 #define SURF_IDLE_FRAMES 600
 #define SURF_RECLAIM_BELOW (12u << 20)
 #define HOST_TARGET (-1)
-/* A 512×512 tile would be taller than the 480-line EFB, so tiles are 512×256 (s_map: 4×4). */
+/* Surfaces larger than the EFB are rasterized on the CPU in 512×256 tiles (s_map: 4×4). */
 #define SURF_TILE_W 512
 #define SURF_TILE_H 256
 /* RGB565 has no alpha; gui_surface needs draw_clear_alpha(0,0) to stay transparent. */
@@ -95,7 +95,6 @@ typedef struct {
 	uint32_t surfCount;
 	int32_t currentTarget;
 	bool targetBound;
-	int32_t tileCol, tileRow;
 	GXTexObj *boundTex;
 	GxPage *boundPage;
 
@@ -481,7 +480,6 @@ static void gx_unbind_tex(GxRenderer *gx)
 	gx->boundPage = NULL;
 }
 
-static void gx_bind_tile(GxRenderer *gx, GxSurf *s, int col, int row, bool restore);
 static void emit_quad_raw(float x0, float y0, float x1, float y1, float x2, float y2, float x3, float y3,
 			  float u0, float v0, float u1, float v1, float u2, float v2, float u3, float v3,
 			  u8 r0, u8 g0, u8 b0, u8 a0, u8 r1, u8 g1, u8 b1, u8 a1,
@@ -1040,75 +1038,6 @@ static void gx_restore_surface(GxRenderer *gx, int32_t id)
 	GX_SetAlphaUpdate(gx->colorWriteA);
 }
 
-static void gx_restore_tile(GxRenderer *gx, GxSurf *s, int col, int row)
-{
-	GxTile *t = gx_tile_at(s, col, row);
-	int ox, oy, tw, th;
-	float u1, v1;
-	GXTexObj *saved = gx->boundTex;
-	bool wasBound = gx->texBound;
-
-	if (!t->texels)
-		return;
-	gx_tile_rect(s, col, row, &ox, &oy, &tw, &th);
-	gx_prep_tile_obj(t);
-	GX_LoadTexObj(&t->obj, GX_TEXMAP0);
-	GX_SetTevOp(GX_TEVSTAGE0, GX_MODULATE);
-	gx->texBound = false;
-	GX_SetAlphaCompare(GX_ALWAYS, 0, GX_AOP_AND, GX_ALWAYS, 0);
-	GX_SetZMode(GX_FALSE, GX_ALWAYS, GX_FALSE);
-	GX_SetColorUpdate(GX_TRUE);
-	GX_SetAlphaUpdate(GX_TRUE);
-	GX_SetBlendMode(GX_BM_NONE, GX_BL_ONE, GX_BL_ZERO, GX_LO_CLEAR);
-	u1 = (float)t->pixelW / (float)t->texW;
-	v1 = (float)t->pixelH / (float)t->texH;
-	emit_quad_raw((float)ox, (float)oy, (float)(ox + tw), (float)oy, (float)(ox + tw), (float)(oy + th),
-		      (float)ox, (float)(oy + th), 0, 0, u1, 0, u1, v1, 0, v1,
-		      255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255);
-	if (wasBound && saved)
-		gx_bind_tex(gx, saved);
-	else
-		gx_unbind_tex(gx);
-	gx_apply_blend(gx);
-	GX_SetColorUpdate(gx->colorWriteR || gx->colorWriteG || gx->colorWriteB);
-	GX_SetAlphaUpdate(gx->colorWriteA);
-	gx->targetDirty = false;
-}
-
-static void gx_setup_tile_view(const GxSurf *s, int col, int row)
-{
-	int ox, oy, tw, th;
-
-	gx_tile_rect(s, col, row, &ox, &oy, &tw, &th);
-	gx_viewport(0, 0, tw, th);
-	gx_ortho((float)oy, (float)(oy + th), (float)ox, (float)(ox + tw));
-}
-
-static void gx_bind_tile(GxRenderer *gx, GxSurf *s, int col, int row, bool restore)
-{
-	if (col < 0 || row < 0 || col >= s->tilesX || row >= s->tilesY)
-		return;
-	gx_cur = gx;
-	if (gx->targetBound && gx->currentTarget >= 0 &&
-	    (uint32_t)gx->currentTarget < gx->surfCount &&
-	    &gx->surfs[gx->currentTarget] == s && gx->tileCol == col && gx->tileRow == row) {
-		gx_setup_tile_view(s, col, row);
-		return;
-	}
-	if (gx->targetBound && gx->currentTarget >= 0 &&
-	    (uint32_t)gx->currentTarget < gx->surfCount &&
-	    &gx->surfs[gx->currentTarget] == s)
-		gx_flush_target(gx);
-	gx->tileCol = col;
-	gx->tileRow = row;
-	gx->targetBound = true;
-	gx_draw_state(gx);
-	gx_setup_tile_view(s, col, row);
-	gx->targetDirty = false;
-	if (restore)
-		gx_restore_tile(gx, s, col, row);
-}
-
 static bool gx_bind_surface(GxRenderer *gx, int32_t id, bool restore);
 
 /* The composed frame stands in for the host framebuffer until present. */
@@ -1147,8 +1076,6 @@ static void gx_bind_host(GxRenderer *gx)
 	gx->currentTarget = HOST_TARGET;
 	gx->targetBound = true;
 	gx->targetDirty = false;
-	gx->tileCol = -1;
-	gx->tileRow = -1;
 	gx_cur = gx;
 	/* Overscan: squeeze everything into the safe area; the border stays black
 	 * (EFB clears full each present, and the scissor clips to the viewport). */
@@ -1191,14 +1118,6 @@ static bool gx_bind_surface(GxRenderer *gx, int32_t id, bool restore)
 	gx->base.CPortY = 0;
 	gx->base.CPortW = s->w;
 	gx->base.CPortH = s->h;
-	if (s->tiles) {
-		gx->tileCol = -1;
-		gx->tileRow = -1;
-		gx_bind_tile(gx, s, 0, 0, restore);
-		return true;
-	}
-	gx->tileCol = 0;
-	gx->tileRow = 0;
 	vw = s->w;
 	vh = s->h;
 	if (vw > WII_FB_W)
@@ -1207,7 +1126,9 @@ static bool gx_bind_surface(GxRenderer *gx, int32_t id, bool restore)
 		vh = WII_FB_H;
 	gx_viewport(0, 0, vw, vh);
 	gx_ortho(0, (float)s->h, 0, (float)s->w);
-	if (restore)
+	/* A tiled surface is rasterized on the CPU (emit_quad) and needs no restore; the projection still
+	 * has to cover the whole surface, because the culls and the tiled-sprite spans read it. */
+	if (restore && !s->tiles)
 		gx_restore_surface(gx, id);
 	return true;
 }
@@ -1616,8 +1537,6 @@ static void gxInit(Renderer *renderer, DataWin *dataWin)
 		}
 	}
 	logInfo("GX: shaders shPaletteSwap=%d shGameBoy=%d\n", (int)gx->shPal, (int)gx->shGB);
-	gx->tileCol = -1;
-	gx->tileRow = -1;
 	gx->boundTex = NULL;
 	gx->boundPage = NULL;
 	gx->viewActive = false;
