@@ -730,7 +730,8 @@ static u8 unorm(float a)
 	return (u8)(a * 255.0f + 0.5f);
 }
 
-static bool gx_evict_page(GxRenderer *gx)
+/* The least recently drawn resident page that this frame has not touched, or UINT32_MAX. */
+static uint32_t gx_evict_victim(GxRenderer *gx)
 {
 	uint32_t i;
 	uint32_t victim = UINT32_MAX;
@@ -746,6 +747,13 @@ static bool gx_evict_page(GxRenderer *gx)
 			victim = i;
 		}
 	}
+	return victim;
+}
+
+static bool gx_evict_page(GxRenderer *gx)
+{
+	uint32_t victim = gx_evict_victim(gx);
+
 	if (victim == UINT32_MAX)
 		return false;
 	WiiMem_texFree(gx->pages[victim].texels);
@@ -1696,6 +1704,86 @@ static void gx_setup_compose(GxRenderer *gx, int32_t windowW, int32_t windowH)
 	gx->compose = true;
 }
 
+#define PRELOAD_MAX_PAGES 2048
+
+static void gx_want_tpag(DataWin *dw, u8 *want, int32_t tpagIndex)
+{
+	int16_t page;
+
+	if (tpagIndex < 0 || (uint32_t)tpagIndex >= dw->tpag.count)
+		return;
+	page = dw->tpag.items[tpagIndex].texturePageId;
+	if (page >= 0 && page < PRELOAD_MAX_PAGES)
+		want[page >> 3] |= (u8)(1 << (page & 7));
+}
+
+static void gx_want_sprite(DataWin *dw, u8 *want, int32_t spriteIndex)
+{
+	Sprite *sprite;
+	uint32_t f;
+
+	if (spriteIndex < 0 || (uint32_t)spriteIndex >= dw->sprt.count)
+		return;
+	sprite = &dw->sprt.sprites[spriteIndex];
+	for (f = 0; sprite->tpagIndices && f < sprite->textureCount; f++)
+		gx_want_tpag(dw, want, sprite->tpagIndices[f]);
+}
+
+static void gx_want_bgnd(DataWin *dw, u8 *want, int32_t bgIndex)
+{
+	if (bgIndex >= 0 && (uint32_t)bgIndex < dw->bgnd.count)
+		gx_want_tpag(dw, want, dw->bgnd.backgrounds[bgIndex].tpagIndex);
+}
+
+/* Every page the room's backgrounds, tiles and placed objects sit on, loaded before its first frame:
+ * a page pulled mid-play is a quarter-second hitch. Objects spawned later still load on demand. */
+static void gx_preload_room(GxRenderer *gx)
+{
+	static int32_t lastRoom = -1;
+	Runner *runner = gx->base.runner;
+	DataWin *dw = gx->base.dataWin;
+	Room *room;
+	u8 want[PRELOAD_MAX_PAGES / 8] = { 0 };
+	uint32_t i, n = 0;
+	u64 t0 = gettime();
+
+	if (!runner || runner->currentRoomIndex == lastRoom)
+		return;
+	lastRoom = runner->currentRoomIndex;
+	if (lastRoom < 0 || (uint32_t)lastRoom >= dw->room.count || !dw->room.rooms[lastRoom].payloadLoaded)
+		return;
+	room = &dw->room.rooms[lastRoom];
+	for (i = 0; i < 8; i++)
+		if (runner->backgrounds[i].visible)
+			gx_want_bgnd(dw, want, runner->backgrounds[i].backgroundIndex);
+	for (i = 0; i < room->tileCount; i++) {
+		if (room->tiles[i].useSpriteDefinition)
+			gx_want_sprite(dw, want, room->tiles[i].backgroundDefinition);
+		else
+			gx_want_bgnd(dw, want, room->tiles[i].backgroundDefinition);
+	}
+	for (i = 0; i < room->gameObjectCount; i++) {
+		int32_t obj = room->gameObjects[i].objectDefinition;
+
+		if (obj >= 0 && (uint32_t)obj < dw->objt.count)
+			gx_want_sprite(dw, want, dw->objt.objects[obj].spriteId);
+	}
+	for (i = 0; i < gx->pageCount && i < PRELOAD_MAX_PAGES; i++) {
+		if (!(want[i >> 3] & (1 << (i & 7))) || gx->pages[i].loaded)
+			continue;
+		/* Nothing left to evict but this frame's own pages: the rest load on demand as before. */
+		if ((WiiMem_texturesInHeap() ? WiiMem_room() : WiiMem_texFreeBytes()) < PAGE_LOAD_NEED &&
+		    gx_evict_victim(gx) == UINT32_MAX)
+			break;
+		if (gx_load_page(gx, i))
+			gx->pages[i].lastUsed = gx->frameCounter;
+		n++;
+	}
+	if (n)
+		logInfo("GX: preload room %d: %u pages in %.1f ms\n", lastRoom, n,
+			ticks_to_microsecs(gettime() - t0) / 1000.0);
+}
+
 static void gxBeginFrame(Renderer *renderer, int32_t gameW, int32_t gameH, int32_t windowW, int32_t windowH)
 {
 	GxRenderer *gx = (GxRenderer *)renderer;
@@ -1720,6 +1808,7 @@ static void gxBeginFrame(Renderer *renderer, int32_t gameW, int32_t gameH, int32
 		gx_lose_surfaces(gx);
 	if ((gx->frameCounter % 60) == 0)
 		gx_make_room(gx, MEM_RESERVE);
+	gx_preload_room(gx);
 	gx_setup_compose(gx, windowW, windowH);
 	Wii_tryWarp(renderer->runner);
 	Wii_tryFusion(renderer->runner);
