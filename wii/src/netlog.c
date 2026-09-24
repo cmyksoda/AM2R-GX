@@ -95,6 +95,7 @@ void NetLog_send(void)
 	bool ok;
 	u8 *buf;
 	DIR *d;
+	FILE *f;
 
 	colon = strchr(g_target, ':');
 	if (!g_netUp || !colon)
@@ -137,4 +138,9 @@ void NetLog_send(void)
 	net_deinit();
 	free(buf);
 	logInfo("LOGTO %s:%s: %s (%d grabs)\n", g_target, colon + 1, ok ? "sent" : "failed", count);
+	/* profile.txt is closed by now: the outcome goes to its own file, for the run that did not arrive. */
+	if ((f = fopen(WII_APP_DIR "/netlog.txt", "w"))) {
+		fprintf(f, "%s:%s socket=%d %s, %d grabs\n", g_target, colon + 1, (int)s, ok ? "sent" : "failed", count);
+		fclose(f);
+	}
 }
