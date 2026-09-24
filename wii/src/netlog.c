@@ -3,7 +3,6 @@
 #include "wii_paths.h"
 
 #include <dirent.h>
-#include <errno.h>
 #include <malloc.h>
 #include <network.h>
 #include <stdio.h>
@@ -16,34 +15,31 @@
 #define MAX_GRABS 16
 
 static char g_target[40];
+static bool g_netUp;
 
 void NetLog_setTarget(const char *ipport)
 {
 	snprintf(g_target, sizeof g_target, "%s", ipport);
 }
 
-static s32 init_done(s32 result, void *usr)
+/* Bring the IOS network up at boot, synchronously, the way every networked homebrew does: the exit path then
+ * only opens a socket. An async init aborted at exit froze a real Wii (session 11). */
+void NetLog_init(void)
 {
-	(void)result;
-	(void)usr;
-	return 0;
-}
+	s32 rc;
 
-/* The IOS network module brings the link up on its own clock (DHCP included): give it 20 s. */
-static bool wait_net(void)
-{
-	int i;
+	if (!g_target[0]) {
+		FILE *f = fopen(WII_GAME_DIR "/LOGTO", "r");
 
-	if (net_init_async(init_done, NULL) < 0)
-		return false;
-	for (i = 0; i < 200; i++) {
-		s32 st = net_get_status();
-
-		if (st != -EBUSY)
-			return st >= 0;
-		usleep(100000);
+		if (!f)
+			return;
+		if (fgets(g_target, sizeof g_target, f))
+			g_target[strcspn(g_target, "\r\n")] = 0;
+		fclose(f);
 	}
-	return false;
+	rc = net_init();
+	g_netUp = rc >= 0;
+	logInfo("LOGTO %s: net_init %d\n", g_target, (int)rc);
 }
 
 static bool send_all(s32 s, const void *data, int n)
@@ -100,17 +96,8 @@ void NetLog_send(void)
 	u8 *buf;
 	DIR *d;
 
-	if (!g_target[0]) {
-		FILE *f = fopen(WII_GAME_DIR "/LOGTO", "r");
-
-		if (!f)
-			return;
-		if (fgets(g_target, sizeof g_target, f))
-			g_target[strcspn(g_target, "\r\n")] = 0;
-		fclose(f);
-	}
 	colon = strchr(g_target, ':');
-	if (!colon)
+	if (!g_netUp || !colon)
 		return;
 	*colon = 0;
 	memset(&sa, 0, sizeof sa);
@@ -120,7 +107,7 @@ void NetLog_send(void)
 	sa.sin_addr.s_addr = inet_addr(g_target);
 
 	buf = memalign(32, CHUNK);
-	ok = buf && wait_net();
+	ok = buf != NULL;
 	if (ok) {
 		s = net_socket(AF_INET, SOCK_STREAM, IPPROTO_IP);
 		ok = s >= 0 && net_connect(s, (struct sockaddr *)&sa, sizeof sa) >= 0;
