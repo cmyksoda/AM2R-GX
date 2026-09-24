@@ -186,7 +186,8 @@ static void poll_gcpad(GamepadSlot *slot, u16 held)
 }
 
 /* L + D-pad Down + Y opens the overscan overlay; any face button (A/B/X/Y) closes it.
- * While it's up the d-pad drives the H/V sliders and the game gets neutral input. */
+ * While it's up the d-pad drives the H/V sliders (with R held, Up/Down shift the picture
+ * instead) and the game gets neutral input. */
 static void overscan_input(u32 wheld, u16 gcheld)
 {
 	static bool prev_combo;
@@ -195,6 +196,8 @@ static void overscan_input(u32 wheld, u16 gcheld)
 	static unsigned rate;
 	bool lheld = (wheld & (WPAD_CLASSIC_BUTTON_FULL_L | WPAD_CLASSIC_BUTTON_ZL)) ||
 		     (gcheld & PAD_TRIGGER_L) || PAD_TriggerL(0) > 64;
+	bool rheld = (wheld & (WPAD_CLASSIC_BUTTON_FULL_R | WPAD_CLASSIC_BUTTON_ZR)) ||
+		     (gcheld & PAD_TRIGGER_R) || PAD_TriggerR(0) > 64;
 	bool down = (wheld & WPAD_CLASSIC_BUTTON_DOWN) || (gcheld & PAD_BUTTON_DOWN);
 	bool combo = lheld && down &&
 		     ((wheld & WPAD_CLASSIC_BUTTON_Y) || (gcheld & PAD_BUTTON_Y));
@@ -223,9 +226,9 @@ static void overscan_input(u32 wheld, u16 gcheld)
 	if ((wheld & WPAD_CLASSIC_BUTTON_RIGHT) || (gcheld & PAD_BUTTON_RIGHT))
 		Overscan_adjustH(1);
 	if ((wheld & WPAD_CLASSIC_BUTTON_UP) || (gcheld & PAD_BUTTON_UP))
-		Overscan_adjustV(-1);
+		(rheld ? Overscan_adjustY : Overscan_adjustV)(-1);
 	if (down)
-		Overscan_adjustV(1);
+		(rheld ? Overscan_adjustY : Overscan_adjustV)(1);
 }
 
 void WiiInput_init(void)
