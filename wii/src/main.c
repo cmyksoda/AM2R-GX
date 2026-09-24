@@ -11,6 +11,7 @@
 #include <fat.h>
 #include <gccore.h>
 #include <malloc.h>
+#include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -49,13 +50,51 @@ static void poison_arenas(void)
 	logInfo("POISON sentinel found -- unused arenas filled with 0xA5\n");
 }
 
+/* wiiload can hand the DOL "NAME=text" arguments: each becomes game/NAME for this run only (a marker such as
+ * MENU=landing or "warp.txt=241 16 1856 1200"), so the host needs no FTP transfer to arm a hands-free run. */
+static char argMarkers[8][32];
+static int argMarkerCount;
+
+static void markers_from_args(int argc, char **argv)
+{
+	int i;
+
+	for (i = 1; i < argc && argMarkerCount < 8; i++) {
+		const char *eq = strchr(argv[i], '=');
+		char path[96];
+		FILE *f;
+
+		if (!eq || eq == argv[i] || eq - argv[i] >= (int)sizeof argMarkers[0] || strchr(argv[i], '/') || strstr(argv[i], ".."))
+			continue;
+		memcpy(argMarkers[argMarkerCount], argv[i], eq - argv[i]);
+		argMarkers[argMarkerCount][eq - argv[i]] = 0;
+		snprintf(path, sizeof path, WII_GAME_DIR "/%s", argMarkers[argMarkerCount]);
+		f = fopen(path, "w");
+		if (!f)
+			continue;
+		fprintf(f, "%s\n", eq + 1);
+		fclose(f);
+		logInfo("marker from args: %s = %s\n", argMarkers[argMarkerCount], eq + 1);
+		argMarkerCount++;
+	}
+}
+
+static void markers_from_args_remove(void)
+{
+	int i;
+	char path[96];
+
+	for (i = 0; i < argMarkerCount; i++) {
+		snprintf(path, sizeof path, WII_GAME_DIR "/%s", argMarkers[i]);
+		unlink(path);
+	}
+}
+
 int main(int argc, char **argv)
 {
 	CommandLineArgs args;
 	bool playback;
 	int rc;
-
-	(void)argc;
 
 	WiiMem_init();
 	WiiInput_init();
@@ -80,6 +119,7 @@ int main(int argc, char **argv)
 
 	if (!WiiLog_open(WII_LOG_PATH))
 		logWarn("could not open %s — console only\n", WII_LOG_PATH);
+	markers_from_args(argc, argv);
 
 	Overscan_load();
 	WiiVideo_setActiveWidth(Overscan_viWidth());
@@ -130,6 +170,7 @@ int main(int argc, char **argv)
 	log_mallinfo("exit");
 	logInfo("loop returned %d\n", rc);
 	freeCommandLineArgs(&args);
+	markers_from_args_remove();
 	WiiLog_close();
 	return rc;
 }
