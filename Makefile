@@ -62,6 +62,9 @@ wii: $(BUTTER)/CMakeLists.txt
 	cp -f $(WII_BUILD)/boot.dol dist/apps/am2r/boot.dol
 	cp -f wii/hbc/meta.xml dist/apps/am2r/meta.xml
 	cp -f wii/hbc/icon.png dist/apps/am2r/icon.png
+	cp -f LICENSE dist/apps/am2r/LICENSE.txt
+	cp -f NOTICE dist/apps/am2r/NOTICE.txt
+	cp -f wii/src/xdelta3/LICENSE dist/apps/am2r/LICENSE-xdelta3.txt
 
 # The first-boot patch kit: the community 1.1 -> 1.5.5 delta, the texture plan the console follows, and
 # the loose 1.5.5 files (no game data inside). Ends up next to boot.dol as apps/am2r/patch/.
