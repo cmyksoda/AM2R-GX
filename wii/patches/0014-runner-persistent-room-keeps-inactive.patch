@@ -1,0 +1,29 @@
+Reason: Leaving a persistent room freed every instance that was inactive at that moment. AM2R deactivates everything outside the view each step, so each pause deleted the floors, slopes and walls that were off-screen - Samus fell through the world wherever she had not been looking when she paused (session 1's walk-through-walls after pause, session 9/10's morph-ball fall).
+Upstream: Engine bug on every platform (the native runner keeps deactivated instances with a persistent room) - to offer upstream as a fork branch. Retires this patch when merged.
+
+--- a/src/runner.c
++++ b/src/runner.c
+@@ -3697,7 +3697,9 @@
+     state->tileLayerMap = nullptr;
+     freeRuntimeLayersArray(&state->runtimeLayers);
+ 
+-    // Separate persistent instances (travel with player) from room instances (saved)
++    // Separate persistent instances (travel with player) from room instances (saved).
++    // Deactivated instances are saved too: the native runner keeps them with the room, and a game that
++    // deactivates everything off-screen every step (AM2R) would otherwise lose its floors on every pause.
+     Instance** keptInstances = nullptr;
+     int32_t count = (int32_t) arrlen(runner->instances);
+     {
+@@ -3705,11 +3707,8 @@
+         Instance* inst = runner->instances[i];
+         if (inst->persistent) {
+             arrput(keptInstances, inst);
+-        } else if (inst->active) {
+-            arrput(state->instances, inst);
+         } else {
+-            hmdel(runner->instancesById, inst->instanceId);
+-            Instance_free(inst);
++            arrput(state->instances, inst);
+         }
+     }
+     }
