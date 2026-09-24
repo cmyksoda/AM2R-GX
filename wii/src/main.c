@@ -1,6 +1,7 @@
 #include "input.h"
 #include "log.h"
 #include "loop.h"
+#include "netlog.h"
 #include "overscan.h"
 #include "patcher.h"
 #include "wii_log.h"
@@ -64,6 +65,10 @@ static void markers_from_args(int argc, char **argv)
 		char path[96];
 		FILE *f;
 
+		if (!strncmp(argv[i], "LOGTO=", 6)) {
+			NetLog_setTarget(argv[i] + 6);
+			continue;
+		}
 		if (!eq || eq == argv[i] || eq - argv[i] >= (int)sizeof argMarkers[0] || strchr(argv[i], '/') || strstr(argv[i], ".."))
 			continue;
 		memcpy(argMarkers[argMarkerCount], argv[i], eq - argv[i]);
@@ -172,5 +177,6 @@ int main(int argc, char **argv)
 	freeCommandLineArgs(&args);
 	markers_from_args_remove();
 	WiiLog_close();
+	NetLog_send(); /* after the close: the file must be complete */
 	return rc;
 }
