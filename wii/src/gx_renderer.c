@@ -158,6 +158,10 @@ static bool gx_wide_filter = true; /* [Screen] WiiWideFilter; 0 = the plain 2,1,
 /* Per-frame accounting for the hardware profile: what the draw phase costs outside GML scripts. */
 static struct {
 	u32 quads, tiles, sprites, copies, binds, targets, skipped, n;
+	double area; /* target pixels covered by the quads: fill, the thing a GPU-bound room pays for */
+	double *areaByTpag; /* the same per texture page item, to name what a GPU-bound room is filling with */
+	uint32_t *drawsByTpag;
+	bool fillChecked;
 	u64 emitUs, copyUs, drawUs, otherUs, frameStart, lastEnd;
 } gx_stat;
 
@@ -624,6 +628,22 @@ static void emit_quad(float x0, float y0, float x1, float y1, float x2, float y2
 
 static int gx_quads;
 
+/* The part of a quad's box inside the current view: what the rasterizer fills after the scissor.
+ * Backgrounds are tiled across the whole room, so the geometric area would count mostly off-screen quads. */
+static double gx_visible_area(float x0, float y0, float x1, float y1, float x2, float y2, float x3, float y3)
+{
+	float l = fminf(fminf(x0, x1), fminf(x2, x3)), r = fmaxf(fmaxf(x0, x1), fmaxf(x2, x3));
+	float t = fminf(fminf(y0, y1), fminf(y2, y3)), b = fmaxf(fmaxf(y0, y1), fmaxf(y2, y3));
+
+	if (gx_cur) {
+		l = fmaxf(l, (float)gx_cur->viewX);
+		t = fmaxf(t, (float)gx_cur->viewY);
+		r = fminf(r, (float)(gx_cur->viewX + gx_cur->viewW));
+		b = fminf(b, (float)(gx_cur->viewY + gx_cur->viewH));
+	}
+	return (r > l && b > t) ? (double)(r - l) * (b - t) : 0.0;
+}
+
 static void emit_quad_raw(float x0, float y0, float x1, float y1, float x2, float y2, float x3, float y3,
 			  float u0, float v0, float u1, float v1, float u2, float v2, float u3, float v3,
 			  u8 r0, u8 g0, u8 b0, u8 a0, u8 r1, u8 g1, u8 b1, u8 a1,
@@ -657,7 +677,41 @@ static void emit_quad_raw(float x0, float y0, float x1, float y1, float x2, floa
 		gx_quads = 0;
 	}
 	gx_stat.quads++;
+	gx_stat.area += gx_visible_area(x0, y0, x1, y1, x2, y2, x3, y3);
 	gx_stat.emitUs += ticks_to_microsecs(gettime() - t);
+}
+
+/* The eight texture page items that filled the most target pixels over the window, named by sprite. */
+static void gx_report_fill(DataWin *dw)
+{
+	int k;
+
+	if (!gx_stat.areaByTpag)
+		return;
+	for (k = 0; k < 8; k++) {
+		uint32_t i, best = 0, s, f;
+		const char *name = "?";
+
+		for (i = 1; i < dw->tpag.count; i++)
+			if (gx_stat.areaByTpag[i] > gx_stat.areaByTpag[best])
+				best = i;
+		if (gx_stat.areaByTpag[best] < 200 * 1000.0)
+			break;
+		for (s = 0; s < dw->sprt.count && name[0] == '?'; s++)
+			for (f = 0; dw->sprt.sprites[s].tpagIndices && f < dw->sprt.sprites[s].textureCount; f++)
+				if (dw->sprt.sprites[s].tpagIndices[f] == (int32_t)best) {
+					name = dw->sprt.sprites[s].name;
+					break;
+				}
+		for (s = 0; s < dw->bgnd.count && name[0] == '?'; s++)
+			if (dw->bgnd.backgrounds[s].tpagIndex == (int32_t)best)
+				name = dw->bgnd.backgrounds[s].name;
+		logInfo("GXFILL tpag %u %s %ux%u: %.2f Mpx/frame in %.1f draws\n", best, name, dw->tpag.items[best].sourceWidth,
+			dw->tpag.items[best].sourceHeight, gx_stat.areaByTpag[best] / 200e6, gx_stat.drawsByTpag[best] / 200.0);
+		gx_stat.areaByTpag[best] = 0;
+	}
+	memset(gx_stat.areaByTpag, 0, dw->tpag.count * sizeof *gx_stat.areaByTpag);
+	memset(gx_stat.drawsByTpag, 0, dw->tpag.count * sizeof *gx_stat.drawsByTpag);
 }
 
 static u8 unorm(float a)
@@ -1459,6 +1513,20 @@ static void gx_draw_tpag(GxRenderer *gx, int32_t tpagIndex, float x0, float y0, 
 		gx_stat.skipped++;
 		return;
 	}
+	if (!gx_stat.fillChecked) {
+		FILE *f = fopen(WII_GAME_DIR "/GXFILL", "r"); /* Dolphin-only: name the fillers, every 200 frames */
+
+		gx_stat.fillChecked = true;
+		if (f) {
+			fclose(f);
+			gx_stat.areaByTpag = calloc(dw->tpag.count, sizeof *gx_stat.areaByTpag);
+			gx_stat.drawsByTpag = calloc(dw->tpag.count, sizeof *gx_stat.drawsByTpag);
+		}
+	}
+	if (gx_stat.areaByTpag && gx_stat.drawsByTpag) {
+		gx_stat.areaByTpag[tpagIndex] += gx_visible_area(x0, y0, x1, y1, x2, y2, x3, y3);
+		gx_stat.drawsByTpag[tpagIndex]++;
+	}
 	if (gx_usage && (uint32_t)tpagIndex < gx_usageCount)
 		gx_usage[tpagIndex >> 3] |= (u8)(1 << (tpagIndex & 7));
 	tpag = &dw->tpag.items[tpagIndex];
@@ -1911,10 +1979,12 @@ static void gxEndFrameEnd(Renderer *renderer)
 	gx_stat.drawUs += ticks_to_microsecs(gx_stat.lastEnd - gx_stat.frameStart);
 	if (++gx_stat.n == 200) {
 		logInfo("GXSTAT draw %.2f ms/frame: emit %.2f ms in %u quads (%u tiles, %u sprites, %u skipped), %u copies %.2f ms, "
-			"%u binds, %u targets; between draws %.2f ms\n",
+			"%u binds, %u targets; between draws %.2f ms; fill %.2f Mpx\n",
 			gx_stat.drawUs / 200000.0, gx_stat.emitUs / 200000.0, gx_stat.quads / 200, gx_stat.tiles / 200,
 			gx_stat.sprites / 200, gx_stat.skipped / 200, gx_stat.copies / 200, gx_stat.copyUs / 200000.0,
-			gx_stat.binds / 200, gx_stat.targets / 200, gx_stat.otherUs / 200000.0);
+			gx_stat.binds / 200, gx_stat.targets / 200, gx_stat.otherUs / 200000.0, gx_stat.area / 200e6);
+		gx_stat.area = 0;
+		gx_report_fill(renderer->dataWin);
 		gx_stat.quads = gx_stat.tiles = gx_stat.sprites = gx_stat.copies = gx_stat.binds = gx_stat.targets = 0;
 		gx_stat.skipped = 0;
 		gx_stat.emitUs = gx_stat.copyUs = gx_stat.drawUs = gx_stat.otherUs = 0;
