@@ -2685,16 +2685,17 @@ static bool gxGpuGetBlendEnable(Renderer *renderer)
 
 static void gxGpuSetFog(MAYBE_UNUSED Renderer *renderer, MAYBE_UNUSED bool enable, MAYBE_UNUSED uint32_t color) {}
 
-/* Tiles past the projection are scissored anyway; skipping them (a tile of slack each side, two on the far
- * side for a mirrored scale) turns a room-wide background into a screen's worth of quads. */
-static void gx_tile_span(float *start, float *end, float tile, float lo, float hi)
+/* Tiles past the projection are scissored anyway; skipping them turns a room-wide background into a
+ * screen's worth of quads. A mirrored scale draws each tile on the other side of its lattice point. */
+static void gx_tile_span(float *start, float *end, float tile, float lo, float hi, bool mirrored)
 {
-	float skip = floorf((lo - 2 * tile - *start) / tile);
+	float first = mirrored ? lo : lo - tile, last = mirrored ? hi + tile : hi;
+	float skip = floorf((first - *start) / tile) + 1;
 
 	if (skip > 0)
 		*start += skip * tile;
-	if (*end > hi + 2 * tile)
-		*end = hi + 2 * tile;
+	if (*end > last)
+		*end = last;
 }
 
 static void gxDrawSpriteTiled(Renderer *renderer, int32_t tpagIndex, float originX, float originY, float x, float y,
@@ -2732,9 +2733,9 @@ static void gxDrawSpriteTiled(Renderer *renderer, int32_t tpagIndex, float origi
 		endY = startY + tileH;
 	}
 	if (tileX)
-		gx_tile_span(&startX, &endX, tileW, gx_clipL, gx_clipR);
+		gx_tile_span(&startX, &endX, tileW, gx_clipL, gx_clipR, xscale < 0);
 	if (tileY)
-		gx_tile_span(&startY, &endY, tileH, gx_clipT, gx_clipB);
+		gx_tile_span(&startY, &endY, tileH, gx_clipT, gx_clipB, yscale < 0);
 	for (cy = startY; cy < endY; cy += tileH) {
 		for (cx = startX; cx < endX; cx += tileW)
 			gxDrawSprite(renderer, tpagIndex, cx + originX * xscale, cy + originY * yscale, originX, originY,
