@@ -1,3 +1,4 @@
+#include "gx_renderer.h"
 #include "input.h"
 #include "log.h"
 #include "loop.h"
@@ -142,7 +143,8 @@ int main(int argc, char **argv)
 		WiiLog_enableGecko(); /* Dolphin: the patcher's progress is worth watching live too */
 	WiiPatcher_run();
 	if (access(WII_DATA_WIN, R_OK) != 0) {
-		wait_home("no game data: put your AM2R_11.zip in " WII_APP_DIR "/ (with the patch/ folder) and boot again");
+		wait_home(WiiPatcher_error() ? WiiPatcher_error()
+		                             : "no game data: put your AM2R_11.zip in " WII_APP_DIR "/ (with the patch/ folder) and boot again");
 		WiiLog_close();
 		return 1;
 	}
@@ -174,6 +176,8 @@ int main(int argc, char **argv)
 		poison_arenas();
 
 	rc = loop(args, argv[0] ? argv[0] : "boot.dol");
+	if (GxRenderer_fatal())
+		wait_home(GxRenderer_fatal());
 	log_mallinfo("exit");
 	logInfo("loop returned %d\n", rc);
 	freeCommandLineArgs(&args);

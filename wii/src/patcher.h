@@ -8,4 +8,7 @@
  * files. True when game/data.win exists afterwards (or already did). */
 bool WiiPatcher_run(void);
 
+/* Why it failed, for the startup screen; NULL when it never ran or succeeded. */
+const char *WiiPatcher_error(void);
+
 #endif

@@ -10,6 +10,9 @@ void GxRenderer_memStats(uint32_t *surfCount, uint32_t *surfBytes, uint32_t *pag
 uint8_t *GxRenderer_tpagUsage(uint32_t *bytes);
 /* display_reset(): every surface is gone a few frames later, as on the real runner. */
 void GxRenderer_loseSurfaces(void);
+
+/* Set when a texture page is too big for the GPU: the game quits and the message is shown. */
+const char *GxRenderer_fatal(void);
 /* Wide mode: the composed 426×480 frame goes to the screen here, just before the display copy. */
 void GxRenderer_present(void);
 /* A loose RGBA image as a texture page of its own; returns the page id (past the TXTR pages) or -1. */

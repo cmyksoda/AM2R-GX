@@ -41,6 +41,8 @@
 
 static u8 *ioBuf;
 static u64 t0;
+static char errLine[128]; /* the last thing said before "FAILED", for the startup screen */
+static bool noSpace, ranFailed;
 /* Big buffers come from a region carved off MEM2's arena, not malloc: a heap that grows into MEM2
  * stays there, and the game would lose the MEM1 the texture arena normally claims. Ours grow down
  * from the top; xdelta gets a first-fit heap at the bottom (it reallocates per window). */
@@ -147,6 +149,20 @@ static void say(const char *fmt, ...)
 	va_end(ap);
 	printf("%s\n", line);
 	logInfo("PATCH %6u ms: %s\n", (unsigned)ticks_to_millisecs(gettime() - t0), line);
+	if (strncmp(line, "FAILED", 6) != 0)
+		memcpy(errLine, line, sizeof errLine);
+}
+
+/* fwrite that names the one failure a player can fix: a full card. */
+static size_t wr(const void *p, size_t n, FILE *f)
+{
+	size_t r = fwrite(p, 1, n, f);
+
+	if (r != n && !noSpace) {
+		noSpace = errno == ENOSPC;
+		say(noSpace ? "the SD card is full" : "write error %d", errno);
+	}
+	return r;
 }
 
 /* One line that keeps rewriting itself (row 20), for progress. */
@@ -195,7 +211,7 @@ static bool copy_range(FILE *in, FILE *out, u32 off, u32 len)
 		return false;
 	while (len) {
 		n = len < IO_CHUNK ? len : IO_CHUNK;
-		if (fread(ioBuf, 1, n, in) != n || fwrite(ioBuf, 1, n, out) != n)
+		if (fread(ioBuf, 1, n, in) != n || wr(ioBuf, n, out) != n)
 			return false;
 		len -= n;
 	}
@@ -247,7 +263,7 @@ static bool zip_inflate(FILE *zf, u32 dataOff, u32 csize, u32 usize, int method,
 		}
 		if (method == 0) {
 			have = crc32(have, z.next_in, z.avail_in);
-			ok = fwrite(z.next_in, 1, z.avail_in, out) == z.avail_in;
+			ok = wr(z.next_in, z.avail_in, out) == z.avail_in;
 			got += z.avail_in;
 			z.avail_in = 0;
 		} else {
@@ -261,7 +277,7 @@ static bool zip_inflate(FILE *zf, u32 dataOff, u32 csize, u32 usize, int method,
 				break;
 			}
 			have = crc32(have, outb, IO_CHUNK / 2 - z.avail_out);
-			ok = fwrite(outb, 1, IO_CHUNK / 2 - z.avail_out, out) == IO_CHUNK / 2 - z.avail_out;
+			ok = wr(outb, IO_CHUNK / 2 - z.avail_out, out) == IO_CHUNK / 2 - z.avail_out;
 			got += IO_CHUNK / 2 - z.avail_out;
 			if (rc == Z_STREAM_END)
 				break;
@@ -446,7 +462,7 @@ static bool apply_delta(void)
 			continue;
 		}
 		if (ret == XD3_OUTPUT) {
-			ok = fwrite(stream.next_out, 1, stream.avail_out, out) == stream.avail_out;
+			ok = wr(stream.next_out, stream.avail_out, out) == stream.avail_out;
 			written += stream.avail_out;
 			xd3_consume_output(&stream);
 			if ((written & ((8u << 20) - 1)) < (u64)stream.avail_out + 1)
@@ -595,7 +611,7 @@ static bool png_write_chunk(FILE *f, const char *kind, const u8 *body, u32 len)
 	{
 		u8 tail[4] = { (u8)(crc >> 24), (u8)(crc >> 16), (u8)(crc >> 8), (u8)crc };
 
-		return fwrite(head, 1, 8, f) == 8 && (!len || fwrite(body, 1, len, f) == len) && fwrite(tail, 1, 4, f) == 4;
+		return wr(head, 8, f) == 8 && (!len || wr(body, len, f) == len) && wr(tail, 4, f) == 4;
 	}
 }
 
@@ -610,7 +626,7 @@ static bool png_write(FILE *f, const u8 *canvas, int w, int h)
 	int y, rc;
 	bool ok;
 
-	if (fwrite(sig, 1, 8, f) != 8 || !png_write_chunk(f, "IHDR", ihdr, 13))
+	if (wr(sig, 8, f) != 8 || !png_write_chunk(f, "IHDR", ihdr, 13))
 		return false;
 	memset(&z, 0, sizeof z);
 	if (deflateInit(&z, PNG_LEVEL) != Z_OK)
@@ -754,7 +770,7 @@ static bool repack(void)
 			for (k = 0; k < len; k++)
 				if (off + k >= tpag.off && off + k < tpag.off + tpag.size)
 					ioBuf[k] = tpagBuf[off + k - tpag.off];
-			if (fwrite(ioBuf, 1, len, out) != len)
+			if (wr(ioBuf, len, out) != len)
 				goto done;
 			off += len;
 		}
@@ -766,8 +782,8 @@ static bool repack(void)
 	entryAt = 4 + 4 * newN;
 	for (i = 0; i < newN; i++)
 		wr32le(txtrHead + 4 + 4 * i, txtrBodyAt + entryAt + 8 * i);
-	fwrite("TXTR\0\0\0\0", 1, 8, out);
-	fwrite(txtrHead, 1, 4 + 12 * newN, out);
+	wr("TXTR\0\0\0\0", 8, out);
+	wr(txtrHead, 4 + 12 * newN, out);
 
 	pass.plan = &plan;
 	pass.rects = rects;
@@ -828,19 +844,19 @@ static bool repack(void)
 	outTxtrSize = (u32)ftell(out) - txtr.off;
 	/* AUDO: the pointer list shifts by the TXTR growth, the sound data is copied as is */
 	delta = outTxtrSize - txtr.size;
-	fwrite("AUDO", 1, 4, out);
+	wr("AUDO", 4, out);
 	wr32le(ioBuf, audo.size);
-	fwrite(ioBuf, 1, 4, out);
+	wr(ioBuf, 4, out);
 	fseek(in, (long)audo.off, SEEK_SET);
 	fread(ioBuf, 1, 4, in);
 	{
 		u32 an = rd32le(ioBuf), k;
 
-		fwrite(ioBuf, 1, 4, out);
+		wr(ioBuf, 4, out);
 		for (k = 0; k < an; k++) {
 			fread(ioBuf, 1, 4, in);
 			wr32le(ioBuf, rd32le(ioBuf) + delta);
-			fwrite(ioBuf, 1, 4, out);
+			wr(ioBuf, 4, out);
 		}
 		if (!copy_range(in, out, audo.off + 4 + 4 * an, audo.size - 4 - 4 * an))
 			goto done;
@@ -848,18 +864,18 @@ static bool repack(void)
 	/* back-patch: TXTR size, its entries, FORM size */
 	fseek(out, (long)txtr.off - 4, SEEK_SET);
 	wr32le(ioBuf, outTxtrSize);
-	fwrite(ioBuf, 1, 4, out);
+	wr(ioBuf, 4, out);
 	fseek(out, (long)(txtrBodyAt + entryAt), SEEK_SET);
 	for (i = 0; i < newN; i++) {
 		wr32le(ioBuf, flag);
 		wr32le(ioBuf + 4, newOff[i]);
-		fwrite(ioBuf, 1, 8, out);
+		wr(ioBuf, 8, out);
 	}
 	fseek(out, 0, SEEK_END);
 	total = (u32)ftell(out);
 	fseek(out, 4, SEEK_SET);
 	wr32le(ioBuf, total - 8);
-	fwrite(ioBuf, 1, 4, out);
+	wr(ioBuf, 4, out);
 	ok = true;
 	say("repacked: %u pages -> %u, %u MB", (unsigned)oldN, (unsigned)newN, (unsigned)(total >> 20));
 done:
@@ -950,5 +966,16 @@ bool WiiPatcher_run(void)
 		remove(WII_DATA_WIN);
 	ioBuf = NULL;
 	region_give_back();
+	ranFailed = !ok;
 	return ok;
+}
+
+const char *WiiPatcher_error(void)
+{
+	static char msg[160];
+
+	if (!ranFailed)
+		return NULL;
+	snprintf(msg, sizeof msg, "first boot failed: %s", errLine);
+	return msg;
 }
