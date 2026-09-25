@@ -1,0 +1,43 @@
+Reason: The native runner fires both sides of a colliding pair back to back. Here each side waited for its own turn, and a self that destroyed itself in its handler was skipped by the other's: AM2R's missile explodes on the Alpha Metroid (its own collision event) and the Alpha's damage event never ran, so no one could get past the first Metroid (beta 0.14.0).
+Upstream: Engine bug on every platform (0011's early break made no difference: the other's turn skipped the destroyed self anyway) - to offer upstream with 0011. Retires this patch when merged.
+
+diff --git a/src/runner.c b/src/runner.c
+index b2e697b..2266f27 100644
+--- a/src/runner.c
++++ b/src/runner.c
+@@ -3327,6 +3327,16 @@ static void dispatchCollisionEvents(Runner* runner) {
+     if (selfObjects == nullptr) return;
+     int32_t selfObjCount = (int32_t) arrlen(selfObjects);
+ 
++    // Each object's turn in the loop below, so a self that destroys itself can tell whether the other side is still to come.
++    static int32_t* turnOf = nullptr;
++    static int32_t* turnOfSource = nullptr;
++    if (turnOfSource != selfObjects) {
++        turnOf = (int32_t *)safeRealloc(turnOf, (size_t) (dataWin->objt.count > 0 ? dataWin->objt.count : 1) * sizeof(int32_t));
++        repeat(dataWin->objt.count, o) turnOf[o] = -1;
++        repeat(selfObjCount, t) turnOf[selfObjects[t]] = t;
++        turnOfSource = selfObjects;
++    }
++
+     repeat(selfObjCount, soIdx) {
+         int32_t selfObjIdx = selfObjects[soIdx];
+         Instance** selfBucket = runner->instancesByExactObject[selfObjIdx];
+@@ -3440,7 +3450,17 @@ static void dispatchCollisionEvents(Runner* runner) {
+                     if (traceThisPair) logInfo("  fire self->other: subtype=%d (%s) owner=%d (%s) codeId=%d codeName=%s\n", targetObjIndex, dataWin->objt.objects[targetObjIndex].name, evt->ownerObjectIndex, dataWin->objt.objects[evt->ownerObjectIndex].name, evt->codeId, dataWin->code.entries[evt->codeId].name);
+ #endif
+                     executeCollisionEvent(runner, self, other, targetObjIndex, evt->codeId, evt->ownerObjectIndex);
+-                    if (!self->active) break;
++                    if (!self->active) {
++                        // The native runner fires both sides of a colliding pair back to back, so the other side still sees
++                        // a self that destroyed itself (AM2R's missile explodes, the Alpha Metroid takes the hit). Only when
++                        // the other's own turn is still to come: after it, the pair has already fired both ways.
++                        FlattenedCollisionEvent* reverseEvt = nullptr;
++                        if (other->active && turnOf[other->objectIndex] > soIdx)
++                            reverseEvt = findSymmetricCollisionEvent(runner, other, self);
++                        if (reverseEvt != nullptr)
++                            executeCollisionEvent(runner, other, self, (int32_t) reverseEvt->targetObjectIndex, reverseEvt->codeId, reverseEvt->ownerObjectIndex);
++                        break;
++                    }
+ 
+                     // When both objects are colliding, we'll execute the SELF collision (which we already did) and THEN execute the OTHER collision too
+                     // Because if we don't, the OTHER collision may never happen again because

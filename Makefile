@@ -57,6 +57,7 @@ wii: $(BUTTER)/CMakeLists.txt
 	cd $(BUTTER) && git apply ../../wii/patches/0012-vm-game-id.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0013-runner-persistent-room-keeps-payload.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0014-runner-persistent-room-keeps-inactive.patch
+	cd $(BUTTER) && git apply ../../wii/patches/0015-runner-destroyed-self-still-reaches-other.patch
 	if [ -f wii/test/patches/0099-debug-collision-trace.patch ]; then cd $(BUTTER) && git apply ../../wii/test/patches/0099-debug-collision-trace.patch; fi
 	cmake -B $(WII_BUILD) -S $(BUTTER) $(WII_CMAKE_FLAGS)
 	cmake --build $(WII_BUILD) -j$(shell nproc)
