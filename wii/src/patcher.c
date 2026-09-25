@@ -18,11 +18,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/stat.h>
 #include <zlib.h>
 #include <malloc.h>
 
-#define ZIP_PATH WII_APP_DIR "/AM2R_11.zip"
 #define PATCH_DIR WII_APP_DIR "/patch"
 #define XDELTA_PATH PATCH_DIR "/data.xdelta"
 #define PLAN_PATH PATCH_DIR "/plan.bin"
@@ -232,13 +232,28 @@ static bool copy_range(FILE *in, FILE *out, u32 off, u32 len)
 
 /* ---- 1. the player's zip: data.win and the 1.1 music ---- */
 
+static char zipPath[300];  /* the player's AM2R 1.1 zip, whatever it ended up being called */
+static char zipName[128];  /* its file name, for the messages */
+static char zipPrefix[96]; /* "" or "AM2R_11/": a zip of the folder instead of its contents */
+
+static bool ends_with(const char *s, const char *tail)
+{
+	size_t n = strlen(s), t = strlen(tail);
+
+	return n >= t && strcasecmp(s + n - t, tail) == 0;
+}
+
 static bool zip_entry_out(const char *name, char *out, size_t cap)
 {
-	size_t n = strlen(name);
+	size_t p = strlen(zipPrefix), n;
 
-	if (strcmp(name, "data.win") == 0)
+	if (strncmp(name, zipPrefix, p) != 0)
+		return false;
+	name += p;
+	n = strlen(name);
+	if (strcasecmp(name, "data.win") == 0)
 		snprintf(out, cap, "%s", DATA11);
-	else if (n > 4 && strcmp(name + n - 4, ".ogg") == 0 && !strchr(name, '/'))
+	else if (n > 4 && ends_with(name, ".ogg") && !strchr(name, '/'))
 		snprintf(out, cap, WII_GAME_DIR "/%s", name);
 	else
 		return false;
@@ -301,37 +316,127 @@ static bool zip_inflate(FILE *zf, u32 dataOff, u32 csize, u32 usize, int method,
 		inflateEnd(&z);
 	fclose(out);
 	if (ok && (got != usize || have != crc)) {
-		fail("a file in AM2R_11.zip is damaged (%s: %u of %u bytes, or a bad checksum); download the zip again", dst, (unsigned)got, (unsigned)usize);
+		fail("a file in %s is damaged (%s: %u of %u bytes, or a bad checksum); download the zip again", zipName, dst, (unsigned)got, (unsigned)usize);
 		ok = false;
 	}
 	return ok;
 }
 
+/* The central directory's offset and entry count, from the end record (22 bytes, behind a comment up to 64 KB). */
+static bool zip_directory(FILE *zf, u32 *cdOff, u32 *cdN)
+{
+	u8 hdr[22];
+	long size, at;
+
+	fseek(zf, 0, SEEK_END);
+	size = ftell(zf);
+	for (at = size - 22; at >= 0 && at > size - 65600; at--) {
+		fseek(zf, at, SEEK_SET);
+		if (fread(hdr, 1, 22, zf) == 22 && rd32le(hdr) == 0x06054b50) {
+			*cdN = rd16le(hdr + 10);
+			*cdOff = rd32le(hdr + 16);
+			return true;
+		}
+	}
+	return false;
+}
+
+/* Where the zip keeps data.win: at the top, or one folder down (someone zipped the folder). */
+static bool zip_find_data(FILE *zf, u32 cdOff, u32 cdN, char *prefix, size_t cap)
+{
+	u8 hdr[46];
+	char name[256];
+	u32 i, nlen;
+
+	fseek(zf, (long)cdOff, SEEK_SET);
+	for (i = 0; i < cdN; i++) {
+		if (fread(hdr, 1, 46, zf) != 46 || rd32le(hdr) != 0x02014b50)
+			return false;
+		nlen = rd16le(hdr + 28);
+		if (nlen >= sizeof name || fread(name, 1, nlen, zf) != nlen)
+			return false;
+		name[nlen] = '\0';
+		fseek(zf, (long)(rd16le(hdr + 30) + rd16le(hdr + 32)), SEEK_CUR);
+		if (strcasecmp(name, "data.win") == 0 ||
+		    (ends_with(name, "/data.win") && strchr(name, '/') == name + nlen - 9 && nlen - 8 < cap)) {
+			snprintf(prefix, cap, "%.*s", (int)(nlen - 8), name);
+			return true;
+		}
+	}
+	return false;
+}
+
+/* Any .zip beside the app or at the card's root that holds a data.win: names get mangled on the way
+ * (AM2R_11.zip.zip, "AM2R_11 (1).zip"). With none, a zip beside the app stands in so its problem is named. */
+static bool find_zip(void)
+{
+	static const char *dirs[] = { WII_APP_DIR, "sd:" };
+	char path[300], first[300] = "";
+	struct dirent *e;
+	u32 cdOff, cdN;
+	unsigned d;
+	FILE *zf;
+	DIR *dir;
+
+	if ((zf = fopen(WII_APP_DIR "/AM2R_11.zip", "rb"))) { /* the right name wins over any other zip lying around */
+		bool ok = zip_directory(zf, &cdOff, &cdN) && zip_find_data(zf, cdOff, cdN, zipPrefix, sizeof zipPrefix);
+
+		fclose(zf);
+		snprintf(zipPath, sizeof zipPath, WII_APP_DIR "/AM2R_11.zip");
+		snprintf(zipName, sizeof zipName, "AM2R_11.zip");
+		if (ok)
+			return true;
+		snprintf(first, sizeof first, "%s", zipPath);
+	}
+	for (d = 0; d < sizeof dirs / sizeof dirs[0]; d++) {
+		if (!(dir = opendir(d == 0 ? dirs[0] : "sd:/")))
+			continue;
+		while ((e = readdir(dir))) {
+			if (e->d_name[0] == '.' || !ends_with(e->d_name, ".zip"))
+				continue;
+			snprintf(path, sizeof path, "%s/%s", dirs[d], e->d_name);
+			if (!first[0] && d == 0) /* a stranger's zip at the card's root is not worth naming */
+				snprintf(first, sizeof first, "%s", path);
+			if (!(zf = fopen(path, "rb")))
+				continue;
+			if (zip_directory(zf, &cdOff, &cdN) && zip_find_data(zf, cdOff, cdN, zipPrefix, sizeof zipPrefix)) {
+				fclose(zf);
+				closedir(dir);
+				snprintf(zipPath, sizeof zipPath, "%s", path);
+				snprintf(zipName, sizeof zipName, "%s", e->d_name);
+				return true;
+			}
+			fclose(zf);
+		}
+		closedir(dir);
+	}
+	if (!first[0])
+		return false;
+	snprintf(zipPath, sizeof zipPath, "%s", first);
+	snprintf(zipName, sizeof zipName, "%s", strrchr(first, '/') + 1);
+	return true;
+}
+
 static bool unzip_11(void)
 {
-	FILE *zf = fopen(ZIP_PATH, "rb");
+	FILE *zf = fopen(zipPath, "rb");
 	u8 hdr[46 + 512];
-	long size, at;
 	u32 cdOff, cdN, i, found = 0;
 
 	if (!zf)
 		return false;
-	fseek(zf, 0, SEEK_END);
-	size = ftell(zf);
-	/* End-of-central-directory record: 22 bytes, behind a comment of up to 65535. */
-	at = size - 22;
-	for (; at >= 0 && at > size - 65600; at--) {
-		fseek(zf, at, SEEK_SET);
-		if (fread(hdr, 1, 22, zf) == 22 && rd32le(hdr) == 0x06054b50)
-			break;
-	}
-	if (at < 0 || rd32le(hdr) != 0x06054b50) {
-		fail("AM2R_11.zip is not a zip file");
+	if (!zip_directory(zf, &cdOff, &cdN)) {
+		fail("%s is not a zip file", zipName);
 		fclose(zf);
 		return false;
 	}
-	cdN = rd16le(hdr + 10);
-	cdOff = rd32le(hdr + 16);
+	if (!zip_find_data(zf, cdOff, cdN, zipPrefix, sizeof zipPrefix)) {
+		fail("%s has no data.win in it; it should be the AM2R 1.1 download", zipName);
+		fclose(zf);
+		return false;
+	}
+	if (zipPrefix[0])
+		say("%s keeps the game in %s", zipName, zipPrefix);
 	fseek(zf, (long)cdOff, SEEK_SET);
 	for (i = 0; i < cdN; i++) {
 		u32 method, crc, csize, usize, nlen, xlen, clen, loc, dataOff;
@@ -367,9 +472,9 @@ static bool unzip_11(void)
 		fseek(zf, next, SEEK_SET);
 	}
 	fclose(zf);
-	say("unpacked %u files from AM2R_11.zip", (unsigned)found);
+	say("unpacked %u files from %s", (unsigned)found, zipName);
 	if (!file_exists(DATA11))
-		fail("AM2R_11.zip has no data.win at its top level; zip the game's files, not the folder they are in");
+		fail("could not unpack data.win from %s", zipName);
 	return file_exists(DATA11);
 }
 
@@ -485,7 +590,7 @@ static bool apply_delta(void)
 		}
 		if (ret == XD3_GOTHEADER || ret == XD3_WINSTART || ret == XD3_WINFINISH)
 			continue;
-		fail("this AM2R_11.zip is not AM2R 1.1: the 1.5.5 patch does not fit it (%s)", xd3_errstring(&stream));
+		fail("%s is not AM2R 1.1: the 1.5.5 patch does not fit it (%s)", zipName, xd3_errstring(&stream));
 		ok = false;
 	}
 	xd3_close_stream(&stream);
@@ -944,7 +1049,7 @@ bool WiiPatcher_run(void)
 
 	if (file_exists(WII_DATA_WIN))
 		return true;
-	if (!file_exists(ZIP_PATH) || !file_exists(XDELTA_PATH) || !file_exists(PLAN_PATH))
+	if (!file_exists(XDELTA_PATH) || !file_exists(PLAN_PATH) || !find_zip())
 		return false;
 	if (!region_take()) {
 		logWarn("PATCH: not enough free MEM2 for the patcher (%u MB)\n", (unsigned)(SYS_GetArena2Size() >> 20));
@@ -958,7 +1063,7 @@ bool WiiPatcher_run(void)
 	t0 = gettime();
 	logInfo("PATCH heap before: arena=%d mem1_free=%u mem2_free=%u\n", mallinfo().arena, (unsigned)SYS_GetArena1Size(),
 	        (unsigned)SYS_GetArena2Size());
-	printf("\n\n  AM2R GX -- first boot: building AM2R 1.5.5 from your AM2R_11.zip\n");
+	printf("\n\n  AM2R GX -- first boot: building AM2R 1.5.5 from %s\n", zipName);
 	printf("  This happens once and takes a few minutes. Do not turn the Wii off.\n\n");
 	ok = unzip_11();
 	if (ok)
