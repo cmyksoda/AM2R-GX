@@ -19,6 +19,7 @@
 #include <unistd.h>
 
 #define SAVE_DIR WII_APP_DIR "/save"
+#define AM2R_GX_VERSION "0.14.0" /* keep in step with wii/hbc/meta.xml */
 
 static void wait_home(const char *why, bool haveLog)
 {
@@ -77,7 +78,7 @@ int main(int argc, char **argv)
 	Overscan_load();
 	WiiVideo_setActiveWidth(Overscan_viWidth());
 
-	logInfo("AM2R GX\n");
+	logInfo("AM2R GX " AM2R_GX_VERSION "\n");
 	logInfo("mode %ux%u xfb=%u aspect=%s\n", WiiVideo_fbWidth(), WiiVideo_efbHeight(),
 		WiiVideo_rmode() ? WiiVideo_rmode()->xfbHeight : 0,
 		WiiVideo_isWide() ? "16:9 stretch" : "4:3 fill");
