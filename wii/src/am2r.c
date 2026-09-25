@@ -19,6 +19,17 @@ int32_t Wii_objectIndex(Runner *runner, const char *name)
 	return -1;
 }
 
+int32_t Wii_spriteIndex(Runner *runner, const char *name)
+{
+	DataWin *dw = runner ? runner->dataWin : NULL;
+	uint32_t i;
+
+	for (i = 0; dw && i < dw->sprt.count; i++)
+		if (dw->sprt.sprites[i].name && strcmp(dw->sprt.sprites[i].name, name) == 0)
+			return (int32_t)i;
+	return -1;
+}
+
 int32_t Wii_varId(Runner *runner, const char *name, int32_t scope)
 {
 	DataWin *dw = runner ? runner->dataWin : NULL;

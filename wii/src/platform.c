@@ -1,5 +1,6 @@
 #include "assets.h"
 #include "common.h"
+#include "controls.h"
 #include "gettime.h"
 #include "gx_renderer.h"
 #include "input.h"
@@ -195,6 +196,7 @@ static void register_stubs(VMContext *ctx)
 			if (b)
 				ctx->funcCallCache[fi].builtin = (void *)b;
 		}
+		WiiControls_hookScripts(ctx);
 	}
 }
 

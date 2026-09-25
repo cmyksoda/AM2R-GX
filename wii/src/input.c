@@ -27,6 +27,8 @@
 #define HOME_HOLD_FRAMES 60
 
 static int home_held;
+static WiiPad pad_in_use = WII_PAD_CLASSIC;
+
 static void set_btn(GamepadSlot *slot, int idx, bool down)
 {
 	if (idx < 0 || idx >= GP_BUTTON_COUNT)
@@ -302,6 +304,14 @@ static void set_global_num(VMContext *vm, const char *name, int value)
 		Instance_setSelfVar(vm->globalScopeInstance, vm->varNameMap[slot].value, RValue_makeInt32(value));
 }
 
+void WiiInput_applyLayout(VMContext *vm)
+{
+	unsigned k;
+
+	for (k = 0; k < sizeof padBindings / sizeof padBindings[0]; k++)
+		set_global_num(vm, padBindings[k].var, padBindings[k].wii);
+}
+
 /* Once per boot, when oControl has read the options. The button names: 0 (never chosen) means Xbox names;
  * AM2R's Nintendo names follow the Switch layout by position, which is how the buttons are laid out above. */
 static void wii_pad_defaults(Runner *runner)
@@ -332,10 +342,25 @@ static void wii_pad_defaults(Runner *runner)
 	        stock ? "stock -> Wii layout, one-button aim, Hold missiles" : "remapped, kept");
 	if (!stock)
 		return;
-	for (k = 0; k < sizeof padBindings / sizeof padBindings[0]; k++)
-		set_global_num(vm, padBindings[k].var, padBindings[k].wii);
+	WiiInput_applyLayout(vm);
 	set_global_num(vm, "opaimstyle", 0);
 	set_global_num(vm, "opmslstyle", 0);
+}
+
+/* Sticky: an idle frame keeps the last controller, so a GameCube player's names do not flip back when the pad rests. */
+static void note_pad(u32 wheld, u16 gcheld, const expansion_t *exp)
+{
+	if (exp->type == WPAD_EXP_CLASSIC)
+		pad_in_use = WII_PAD_CLASSIC;
+	else if (gcheld || PAD_TriggerL(0) > GC_TRIGGER_PRESS || PAD_TriggerR(0) > GC_TRIGGER_PRESS)
+		pad_in_use = WII_PAD_GAMECUBE;
+	else if (wheld & ~(u32)(WPAD_BUTTON_HOME))
+		pad_in_use = exp->type == WPAD_EXP_NUNCHUK ? WII_PAD_NUNCHUK : WII_PAD_REMOTE;
+}
+
+WiiPad WiiInput_pad(void)
+{
+	return pad_in_use;
 }
 
 void WiiInput_init(void)
@@ -378,6 +403,7 @@ void WiiInput_poll(Runner *runner)
 	slot->guid[0] = '\0';
 
 	wii_pad_defaults(runner);
+	note_pad(wheld, gcheld, &exp);
 	overscan_input(wheld, gcheld);
 	if (Overscan_active())
 		; /* overlay owns input; leave the slot neutral */
