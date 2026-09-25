@@ -100,6 +100,13 @@ static RValue wii_ini_write_real(VMContext *ctx, RValue *args, int32_t argCount)
 	return engineIniWriteReal(ctx, args, argCount);
 }
 
+static RValue wii_gamepad_set_vibration(MAYBE_UNUSED VMContext *ctx, RValue *args, int32_t argCount)
+{
+	if (argCount >= 3)
+		WiiInput_rumble((float)RValue_toReal(args[1]), (float)RValue_toReal(args[2]));
+	return RValue_makeReal(0.0);
+}
+
 static RValue stub_fullscreen_off(MAYBE_UNUSED VMContext *ctx, MAYBE_UNUSED RValue *args, MAYBE_UNUSED int32_t argCount)
 {
 	return RValue_makeReal(0.0);
@@ -114,7 +121,6 @@ static RValue wii_display_reset(MAYBE_UNUSED VMContext *ctx, MAYBE_UNUSED RValue
 static void register_stubs(VMContext *ctx)
 {
 	static const char *zeros[] = {
-		"gamepad_set_vibration",
 		"joystick_zpos",
 		"joystick_rpos",
 		"joystick_upos",
@@ -147,6 +153,8 @@ static void register_stubs(VMContext *ctx)
 		if (VM_findBuiltin(ctx, zeros[i]) == NULL)
 			VM_registerBuiltin(ctx, zeros[i], stub_zero);
 	}
+	if (VM_findBuiltin(ctx, "gamepad_set_vibration") == NULL)
+		VM_registerBuiltin(ctx, "gamepad_set_vibration", wii_gamepad_set_vibration);
 	if (VM_findBuiltin(ctx, "display_reset") == NULL)
 		VM_registerBuiltin(ctx, "display_reset", wii_display_reset);
 	if (VM_findBuiltin(ctx, "sprite_replace") == NULL)

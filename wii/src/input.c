@@ -28,6 +28,8 @@
 
 static int home_held;
 static WiiPad pad_in_use = WII_PAD_CLASSIC;
+static float rumble_level;
+static bool rumble_fresh, motor_on;
 
 static void set_btn(GamepadSlot *slot, int idx, bool down)
 {
@@ -359,6 +361,49 @@ WiiPad WiiInput_pad(void)
 	return pad_in_use;
 }
 
+/* AM2R calls gamepad_set_vibration every step while its Vibration option is on, so a step without a call stops. */
+void WiiInput_rumble(float left, float right)
+{
+	float level = left > right ? left : right;
+
+	rumble_level = level < 0.0f ? 0.0f : level > 1.0f ? 1.0f : level;
+	rumble_fresh = true;
+}
+
+/* Only the GameCube pad has a motor the game can reach, and it is on or off: a level is a share of frames. */
+static void drive_rumble(void)
+{
+	static float acc;
+	static bool active;
+	float level = rumble_fresh && pad_in_use == WII_PAD_GAMECUBE ? rumble_level : 0.0f;
+	bool on;
+
+	rumble_fresh = false;
+	if ((level > 0.0f) != active) {
+		active = level > 0.0f;
+		acc = 1.0f; /* a new rumble starts with a pulse */
+		if (active)
+			logInfo("rumble on (%.2f)\n", level);
+		else
+			logInfo("rumble off\n");
+	} else {
+		acc += level;
+	}
+	on = active && acc >= 1.0f;
+	if (on)
+		acc -= 1.0f;
+	if (on != motor_on) {
+		PAD_ControlMotor(PAD_CHAN0, on ? PAD_MOTOR_RUMBLE : PAD_MOTOR_STOP);
+		motor_on = on;
+	}
+}
+
+void WiiInput_stopRumble(void)
+{
+	PAD_ControlMotor(PAD_CHAN0, PAD_MOTOR_STOP_HARD);
+	motor_on = false;
+}
+
 void WiiInput_init(void)
 {
 	WPAD_Init();
@@ -402,6 +447,7 @@ void WiiInput_poll(Runner *runner)
 
 	wii_pad_defaults(runner);
 	note_pad(wheld, gcheld, csticky, &exp);
+	drive_rumble();
 	overscan_input(wheld, gcheld);
 	if (Overscan_active())
 		; /* overlay owns input; leave the slot neutral */
