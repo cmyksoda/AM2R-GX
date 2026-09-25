@@ -19,7 +19,7 @@
 #include <unistd.h>
 
 #define SAVE_DIR WII_APP_DIR "/save"
-#define AM2R_GX_VERSION "0.14.0" /* keep in step with wii/hbc/meta.xml */
+#define AM2R_GX_VERSION "0.14.3" /* keep in step with wii/hbc/meta.xml */
 
 static void wait_home(const char *why, bool haveLog)
 {
