@@ -43,16 +43,13 @@ static const Name gcNames[10] = {
 static const Name nunchukNames[10] = {
 	T("A"), T("C"), T("B"), T("-"), W("Up", "Down"), T("Z"), W("Left", "Right"), W("Down", NULL), T(""), T("+"),
 };
-static const Name remoteNames[10] = {
-	T("2"), T("A"), T("1"), T("-"), T(""), T("B"), T(""), T(""), T(""), T("+"),
-};
 #undef T
 #undef W
 
 /* Glyphs the data lacks, built by the rules of AM2R's own (these rebuild its "LB" and "B" pixel for pixel): a grey
  * pill with 3x5 dark letters, each pill pixel under a letter pixel a shade darker; or a dark disc with white letters. */
-enum { G_L, G_R, G_ZL, G_ZR, G_Z, G_PLUS, G_MINUS, G_C, G_1, G_2, G_COUNT, G_DISC = G_C };
-static const char *const glyphText[G_COUNT] = { "L", "R", "ZL", "ZR", "Z", "+", "-", "C", "1", "2" };
+enum { G_L, G_R, G_ZL, G_ZR, G_Z, G_PLUS, G_MINUS, G_C, G_COUNT, G_DISC = G_C };
+static const char *const glyphText[G_COUNT] = { "L", "R", "ZL", "ZR", "Z", "+", "-", "C" };
 static const struct {
 	char ch;
 	const char *rows[5];
@@ -60,7 +57,6 @@ static const struct {
 	{ 'L', { "#..", "#..", "#..", "#..", "###" } }, { 'R', { "##.", "#.#", "##.", "#.#", "#.#" } },
 	{ 'Z', { "###", "..#", ".#.", "#..", "###" } }, { '+', { "...", ".#.", "###", ".#.", "..." } },
 	{ '-', { "...", "...", "###", "...", "..." } }, { 'C', { "###", "#..", "#..", "#..", "###" } },
-	{ '1', { ".#.", "##.", ".#.", ".#.", "###" } }, { '2', { "##.", "..#", ".#.", "#..", "###" } },
 };
 /* The game's own glyphs used for Wii buttons. */
 enum { N_A, N_B, N_X, N_Y, N_DPAD, N_UP, N_DOWN, N_COUNT };
@@ -76,8 +72,6 @@ static const signed char gcGlyphs[10] = { GAME(N_A), GAME(N_X), GAME(N_B), GAME(
 					  KEEP, KEEP, KEEP };
 static const signed char nunchukGlyphs[10] = { GAME(N_A), OURS(G_C), GAME(N_B), OURS(G_MINUS), GAME(N_DPAD), OURS(G_Z),
 					       GAME(N_DPAD), GAME(N_DOWN), KEEP, OURS(G_PLUS) };
-static const signed char remoteGlyphs[10] = { OURS(G_2), GAME(N_A), OURS(G_1), OURS(G_MINUS), KEEP, GAME(N_B), KEEP,
-					      KEEP, KEEP, OURS(G_PLUS) };
 
 /* Looked up by scope: canedit, for one, is also a global somewhere in the data, listed first. */
 static int32_t var_id(Runner *runner, const char *name, int32_t scope)
@@ -285,8 +279,7 @@ static RValue wii_set_default_xjoypad(VMContext *ctx, RValue *args, int32_t argC
 static RValue wii_get_xjoybtnname(VMContext *ctx, RValue *args, int32_t argCount)
 {
 	WiiPad pad = WiiInput_pad();
-	const Name *names = pad == WII_PAD_GAMECUBE ? gcNames : pad == WII_PAD_NUNCHUK ? nunchukNames :
-			    pad == WII_PAD_REMOTE ? remoteNames : NULL;
+	const Name *names = pad == WII_PAD_GAMECUBE ? gcNames : pad == WII_PAD_NUNCHUK ? nunchukNames : NULL;
 	int32_t i = argCount > 0 ? RValue_toInt32(args[0]) - GP_FACE1 : -1;
 	Name n;
 
@@ -306,8 +299,7 @@ static RValue wii_get_xjoybtnsprite(VMContext *ctx, RValue *args, int32_t argCou
 	static int32_t ours[G_COUNT], game[N_COUNT];
 	static bool built;
 	WiiPad pad = WiiInput_pad();
-	const signed char *table = pad == WII_PAD_GAMECUBE ? gcGlyphs : pad == WII_PAD_NUNCHUK ? nunchukGlyphs :
-				   pad == WII_PAD_REMOTE ? remoteGlyphs : classicGlyphs;
+	const signed char *table = pad == WII_PAD_GAMECUBE ? gcGlyphs : pad == WII_PAD_NUNCHUK ? nunchukGlyphs : classicGlyphs;
 	int32_t i = argCount > 0 ? RValue_toInt32(args[0]) - GP_FACE1 : -1, sprite = -1;
 	int g, k;
 

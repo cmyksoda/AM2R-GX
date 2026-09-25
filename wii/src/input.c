@@ -128,13 +128,6 @@ static const ButtonMap nunchukMap[] = {
 	{ WPAD_BUTTON_HOME, SLOT_HOME },
 	{ 0, 0 },
 };
-/* A Wii Remote alone: the d-pad moves, so only the main actions fit. */
-static const ButtonMap remoteMap[] = {
-	{ WPAD_BUTTON_2, SLOT_FACE1 }, { WPAD_BUTTON_1, SLOT_FACE3 }, { WPAD_BUTTON_A, SLOT_FACE2 },
-	{ WPAD_BUTTON_B, SLOT_RB }, { WPAD_BUTTON_MINUS, SLOT_FACE4 }, { WPAD_BUTTON_PLUS, SLOT_START },
-	{ WPAD_BUTTON_HOME, SLOT_HOME }, { 0, 0 },
-};
-
 static void apply_map(GamepadSlot *slot, const ButtonMap *map, u32 held)
 {
 	for (; map->mask; map++)
@@ -185,22 +178,18 @@ static void nunchuk_xy(const joystick_t *js, float *lx, float *ly)
 
 static void poll_nunchuk(GamepadSlot *slot, u32 held, const expansion_t *exp, bool twoAim)
 {
-	float lx = 0.0f, ly = 0.0f;
+	float lx, ly;
 
-	if (exp->type == WPAD_EXP_NUNCHUK) {
-		nunchuk_xy(&exp->nunchuk.js, &lx, &ly);
-		/* One-button aim: the d-pad holds the aim button and says which diagonal. */
-		apply_move(slot, lx, ly, !twoAim && (held & WPAD_BUTTON_UP), !twoAim && (held & WPAD_BUTTON_DOWN), false, false);
-		apply_map(slot, nunchukMap, held);
-		if (held & WPAD_BUTTON_UP)
-			set_btn(slot, SLOT_LB, true);
-		if (held & WPAD_BUTTON_DOWN)
-			set_btn(slot, twoAim ? SLOT_RT : SLOT_LB, true);
-	} else {
-		apply_move(slot, lx, ly, held & WPAD_BUTTON_UP, held & WPAD_BUTTON_DOWN,
-			   held & WPAD_BUTTON_LEFT, held & WPAD_BUTTON_RIGHT);
-		apply_map(slot, remoteMap, held);
-	}
+	if (exp->type != WPAD_EXP_NUNCHUK)
+		return; /* a Remote alone is not a controller for this game (Jaxi) */
+	nunchuk_xy(&exp->nunchuk.js, &lx, &ly);
+	/* One-button aim: the d-pad holds the aim button and says which diagonal. */
+	apply_move(slot, lx, ly, !twoAim && (held & WPAD_BUTTON_UP), !twoAim && (held & WPAD_BUTTON_DOWN), false, false);
+	apply_map(slot, nunchukMap, held);
+	if (held & WPAD_BUTTON_UP)
+		set_btn(slot, SLOT_LB, true);
+	if (held & WPAD_BUTTON_DOWN)
+		set_btn(slot, twoAim ? SLOT_RT : SLOT_LB, true);
 }
 
 /* Held partway down: a long hold of a GameCube trigger to its click is tiring. */
@@ -354,8 +343,8 @@ static void note_pad(u32 wheld, u16 gcheld, const expansion_t *exp)
 		pad_in_use = WII_PAD_CLASSIC;
 	else if (gcheld || PAD_TriggerL(0) > GC_TRIGGER_PRESS || PAD_TriggerR(0) > GC_TRIGGER_PRESS)
 		pad_in_use = WII_PAD_GAMECUBE;
-	else if (wheld & ~(u32)(WPAD_BUTTON_HOME))
-		pad_in_use = exp->type == WPAD_EXP_NUNCHUK ? WII_PAD_NUNCHUK : WII_PAD_REMOTE;
+	else if ((wheld & ~(u32)(WPAD_BUTTON_HOME)) && exp->type == WPAD_EXP_NUNCHUK)
+		pad_in_use = WII_PAD_NUNCHUK;
 }
 
 WiiPad WiiInput_pad(void)
