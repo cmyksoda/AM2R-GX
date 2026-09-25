@@ -8,7 +8,7 @@
 #include "runner.h"
 #include "runner_mouse.h"
 #include "rvalue.h"
-#include "sweep.h"
+#include "hooks.h"
 #include "utils.h"
 #include "vm.h"
 #include "wii_video.h"
@@ -268,9 +268,9 @@ void platformGetMousePos(double *xPos, double *yPos)
 void platformSwapBuffers(void)
 {
 	GxRenderer_present();
-	Wii_efbDump();
+	Wii_hooksBeforeCopy();
 	WiiVideo_present();
-	Wii_shotHold();
+	Wii_hooksAfterPresent();
 }
 
 void *platformGetProcAddress(const char *name)
@@ -282,9 +282,7 @@ void *platformGetProcAddress(const char *name)
 bool platformHandleEvents(void)
 {
 	WiiInput_poll(g_runner);
-	Wii_menuTick(g_runner);
-	Wii_traceTick(g_runner);
-	return WiiInput_shouldQuit() || Wii_sweepFinished();
+	return Wii_hooksEvents(g_runner) || WiiInput_shouldQuit();
 }
 
 void platformSleepUntil(uint64_t time)

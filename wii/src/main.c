@@ -2,7 +2,7 @@
 #include "input.h"
 #include "log.h"
 #include "loop.h"
-#include "netlog.h"
+#include "hooks.h"
 #include "overscan.h"
 #include "patcher.h"
 #include "wii_log.h"
@@ -43,64 +43,10 @@ static void log_mallinfo(const char *when)
 	        when, (unsigned)SYS_GetArena1Size(), (unsigned)SYS_GetArena2Size());
 }
 
-/* Dolphin hands out zeroed RAM; a real Wii doesn't. Dirtying the unused arenas makes
- * uninitialised reads misbehave in the emulator the way they would on hardware. */
-static void poison_arenas(void)
-{
-	memset(SYS_GetArena1Lo(), 0xA5, SYS_GetArena1Size());
-	memset(SYS_GetArena2Lo(), 0xA5, SYS_GetArena2Size());
-	logInfo("POISON sentinel found -- unused arenas filled with 0xA5\n");
-}
-
-/* wiiload can hand the DOL "NAME=text" arguments: each becomes game/NAME for this run only (a marker such as
- * MENU=landing or "warp.txt=241 16 1856 1200"), so the host needs no FTP transfer to arm a hands-free run.
- * HBC passes the first argument as argv[0] (no program name in front); an SD launch has the DOL path there. */
-static char argMarkers[8][32];
-static int argMarkerCount;
-
-static void markers_from_args(int argc, char **argv)
-{
-	int i;
-
-	for (i = 0; i < argc && argMarkerCount < 8; i++) {
-		const char *eq = strchr(argv[i], '=');
-		char path[96];
-		FILE *f;
-
-		if (!strncmp(argv[i], "LOGTO=", 6)) {
-			NetLog_setTarget(argv[i] + 6);
-			continue;
-		}
-		if (!eq || eq == argv[i] || eq - argv[i] >= (int)sizeof argMarkers[0] || strchr(argv[i], '/') || strstr(argv[i], ".."))
-			continue;
-		memcpy(argMarkers[argMarkerCount], argv[i], eq - argv[i]);
-		argMarkers[argMarkerCount][eq - argv[i]] = 0;
-		snprintf(path, sizeof path, WII_GAME_DIR "/%s", argMarkers[argMarkerCount]);
-		f = fopen(path, "w");
-		if (!f)
-			continue;
-		fprintf(f, "%s\n", eq + 1);
-		fclose(f);
-		logInfo("marker from args: %s = %s\n", argMarkers[argMarkerCount], eq + 1);
-		argMarkerCount++;
-	}
-}
-
-static void markers_from_args_remove(void)
-{
-	int i;
-	char path[96];
-
-	for (i = 0; i < argMarkerCount; i++) {
-		snprintf(path, sizeof path, WII_GAME_DIR "/%s", argMarkers[i]);
-		unlink(path);
-	}
-}
-
 int main(int argc, char **argv)
 {
 	CommandLineArgs args;
-	bool playback;
+	const char *tape;
 	int rc;
 
 	WiiMem_init();
@@ -126,8 +72,7 @@ int main(int argc, char **argv)
 
 	if (!WiiLog_open(WII_LOG_PATH))
 		logWarn("could not open %s — console only\n", WII_LOG_PATH);
-	markers_from_args(argc, argv);
-	NetLog_init();
+	Wii_hooksBoot(argc, argv);
 
 	Overscan_load();
 	WiiVideo_setActiveWidth(Overscan_viWidth());
@@ -138,9 +83,6 @@ int main(int argc, char **argv)
 		WiiVideo_isWide() ? "16:9 stretch" : "4:3 fill");
 	log_mallinfo("boot");
 
-	playback = access(WII_GAME_DIR "/PLAYBACK", R_OK) == 0;
-	if (playback)
-		WiiLog_enableGecko(); /* Dolphin: the patcher's progress is worth watching live too */
 	WiiPatcher_run();
 	if (access(WII_DATA_WIN, R_OK) != 0) {
 		wait_home(WiiPatcher_error() ? WiiPatcher_error()
@@ -166,16 +108,13 @@ int main(int argc, char **argv)
 	args.dataWinPath = WII_DATA_WIN;
 	args.saveFolder = SAVE_DIR;
 
-	/* Dolphin-only tape replay: a PLAYBACK sentinel beside the game enables it.
-	 * Never present on real SD cards, so hardware keeps live controller input. */
-	if (playback) {
-		args.playbackInputsPath = WII_GAME_DIR "/am2r_inputs.json";
+	if ((tape = Wii_hooksTape())) {
+		args.playbackInputsPath = tape;
 		/* 1.5.5 calls randomize() at boot; a tape only replays if that stays a no-op. */
 		args.hasSeed = true;
-		logInfo("PLAYBACK sentinel found -- replaying %s\n", args.playbackInputsPath);
+		logInfo("replaying %s\n", tape);
 	}
-	if (access(WII_GAME_DIR "/POISON", R_OK) == 0)
-		poison_arenas();
+	Wii_hooksBeforeLoop();
 
 	rc = loop(args, argv[0] ? argv[0] : "boot.dol");
 	if (GxRenderer_fatal())
@@ -183,8 +122,7 @@ int main(int argc, char **argv)
 	log_mallinfo("exit");
 	logInfo("loop returned %d\n", rc);
 	freeCommandLineArgs(&args);
-	markers_from_args_remove();
 	WiiLog_close();
-	NetLog_send(); /* after the close: the file must be complete */
+	Wii_hooksExit(); /* after the close: the log file must be complete */
 	return rc;
 }

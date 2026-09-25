@@ -1,8 +1,8 @@
 #include "gx_renderer.h"
 #include "overscan.h"
 #include "png_stream.h"
-#include "sweep.h"
-#include "warp.h"
+#include "am2r.h"
+#include "hooks.h"
 #include "wii_mem.h"
 #include "wii_paths.h"
 #include "wii_video.h"
@@ -156,10 +156,6 @@ static bool gx_wide_filter = true; /* [Screen] WiiWideFilter; 0 = the plain 2,1,
 static struct {
 	u32 quads, tiles, sprites, copies, binds, targets, skipped, culled, n;
 	double area; /* target pixels covered by the quads: fill, the thing a GPU-bound room pays for */
-	double *areaByTpag; /* the same per texture page item, to name what a GPU-bound room is filling with */
-	uint32_t *drawsByTpag;
-	uint32_t fillCount; /* items the two tables cover */
-	bool fillChecked, fillWanted;
 	u64 emitUs, copyUs, drawUs, otherUs, frameStart, lastEnd;
 } gx_stat;
 
@@ -692,37 +688,11 @@ static void emit_quad_raw(float x0, float y0, float x1, float y1, float x2, floa
 	gx_stat.emitUs += ticks_to_microsecs(gettime() - t);
 }
 
-/* The eight texture page items that filled the most target pixels over the window, named by sprite. */
-static void gx_report_fill(DataWin *dw)
+static GxFillProbe gx_fill_probe; /* NULL unless a test asks: fill per page item, to name a GPU-bound room's filler */
+
+void GxRenderer_setFillProbe(GxFillProbe probe)
 {
-	int k;
-
-	if (!gx_stat.areaByTpag)
-		return;
-	for (k = 0; k < 8; k++) {
-		uint32_t i, best = 0, s, f;
-		const char *name = "?";
-
-		for (i = 1; i < gx_stat.fillCount; i++)
-			if (gx_stat.areaByTpag[i] > gx_stat.areaByTpag[best])
-				best = i;
-		if (gx_stat.areaByTpag[best] < 200 * 1000.0)
-			break;
-		for (s = 0; s < dw->sprt.count && name[0] == '?'; s++)
-			for (f = 0; dw->sprt.sprites[s].tpagIndices && f < dw->sprt.sprites[s].textureCount; f++)
-				if (dw->sprt.sprites[s].tpagIndices[f] == (int32_t)best) {
-					name = dw->sprt.sprites[s].name;
-					break;
-				}
-		for (s = 0; s < dw->bgnd.count && name[0] == '?'; s++)
-			if (dw->bgnd.backgrounds[s].tpagIndex == (int32_t)best)
-				name = dw->bgnd.backgrounds[s].name;
-		logInfo("GXFILL tpag %u %s %ux%u: %.2f Mpx/frame in %.1f draws\n", best, name, dw->tpag.items[best].sourceWidth,
-			dw->tpag.items[best].sourceHeight, gx_stat.areaByTpag[best] / 200e6, gx_stat.drawsByTpag[best] / 200.0);
-		gx_stat.areaByTpag[best] = 0;
-	}
-	memset(gx_stat.areaByTpag, 0, gx_stat.fillCount * sizeof *gx_stat.areaByTpag);
-	memset(gx_stat.drawsByTpag, 0, gx_stat.fillCount * sizeof *gx_stat.drawsByTpag);
+	gx_fill_probe = probe;
 }
 
 static u8 unorm(float a)
@@ -1474,32 +1444,8 @@ static void gx_draw_tpag(GxRenderer *gx, int32_t tpagIndex, float x0, float y0, 
 		gx_stat.culled++;
 		return;
 	}
-	if (!gx_stat.fillChecked) {
-		FILE *f = fopen(WII_GAME_DIR "/GXFILL", "r"); /* Dolphin-only: name the fillers, every 200 frames */
-
-		gx_stat.fillChecked = true;
-		gx_stat.fillWanted = f != NULL;
-		if (f)
-			fclose(f);
-	}
-	if (gx_stat.fillWanted && dw->tpag.count > gx_stat.fillCount) {
-		/* Loose PNGs and sprite_add append page items after the first draw; tables sized then overran
-		 * the heap at the first report (the 4:3 title-screen corruption of sessions 10-11). */
-		uint32_t n = dw->tpag.count, old = gx_stat.fillCount;
-
-		gx_stat.areaByTpag = realloc(gx_stat.areaByTpag, n * sizeof *gx_stat.areaByTpag);
-		gx_stat.drawsByTpag = realloc(gx_stat.drawsByTpag, n * sizeof *gx_stat.drawsByTpag);
-		if (gx_stat.areaByTpag && gx_stat.drawsByTpag) {
-			memset(gx_stat.areaByTpag + old, 0, (n - old) * sizeof *gx_stat.areaByTpag);
-			memset(gx_stat.drawsByTpag + old, 0, (n - old) * sizeof *gx_stat.drawsByTpag);
-			gx_stat.fillCount = n;
-		} else
-			gx_stat.fillWanted = false;
-	}
-	if (gx_stat.areaByTpag && gx_stat.drawsByTpag && (uint32_t)tpagIndex < gx_stat.fillCount) {
-		gx_stat.areaByTpag[tpagIndex] += gx_visible_area(x0, y0, x1, y1, x2, y2, x3, y3);
-		gx_stat.drawsByTpag[tpagIndex]++;
-	}
+	if (gx_fill_probe)
+		gx_fill_probe(dw, tpagIndex, gx_visible_area(x0, y0, x1, y1, x2, y2, x3, y3));
 	if (gx_usage && (uint32_t)tpagIndex < gx_usageCount)
 		gx_usage[tpagIndex >> 3] |= (u8)(1 << (tpagIndex & 7));
 	tpag = &dw->tpag.items[tpagIndex];
@@ -1760,9 +1706,7 @@ static void gxBeginFrame(Renderer *renderer, int32_t gameW, int32_t gameH, int32
 		gx_make_room(gx, MEM_RESERVE);
 	gx_preload_room(gx);
 	gx_setup_compose(gx, windowW, windowH);
-	Wii_tryWarp(renderer->runner);
-	Wii_tryFusion(renderer->runner);
-	Wii_sweepTick(renderer->runner);
+	Wii_hooksFrame(renderer->runner);
 	Wii_forceGamepadProfile(renderer->runner);
 	appId = renderer->runner->applicationSurfaceId;
 	if (appId >= 0)
@@ -2038,7 +1982,8 @@ static void gxEndFrameEnd(Renderer *renderer)
 			gx_stat.sprites / 200, gx_stat.skipped / 200, gx_stat.culled / 200, gx_stat.copies / 200, gx_stat.copyUs / 200000.0,
 			gx_stat.binds / 200, gx_stat.targets / 200, gx_stat.otherUs / 200000.0, gx_stat.area / 200e6);
 		gx_stat.area = 0;
-		gx_report_fill(renderer->dataWin);
+		if (gx_fill_probe)
+			gx_fill_probe(renderer->dataWin, -1, 0.0);
 		gx_stat.quads = gx_stat.tiles = gx_stat.sprites = gx_stat.copies = gx_stat.binds = gx_stat.targets = 0;
 		gx_stat.skipped = gx_stat.culled = 0;
 		gx_stat.emitUs = gx_stat.copyUs = gx_stat.drawUs = gx_stat.otherUs = 0;
@@ -3279,20 +3224,17 @@ static bool gxShaderIsCompiled(Renderer *renderer, int32_t shader)
 	return shader >= 0 && (shader == gx->shPal || shader == gx->shGB);
 }
 
-/* The game wants both of its shaders "compiled" before it uses either. NOSHADERS marker (Dolphin
- * only): answer no, to capture what the game does without them. */
+static bool gx_shaders_off;
+
+void GxRenderer_setShadersOff(bool off)
+{
+	gx_shaders_off = off;
+}
+
+/* The game wants both of its shaders "compiled" before it uses either. */
 static bool gxShadersSupported(void)
 {
-	static int noShaders = -1;
-
-	if (noShaders < 0) {
-		FILE *f = fopen(WII_GAME_DIR "/NOSHADERS", "r");
-
-		noShaders = f != NULL;
-		if (f)
-			fclose(f);
-	}
-	return !noShaders && gx_cur && gx_cur->shPal >= 0 && gx_cur->shGB >= 0;
+	return !gx_shaders_off && gx_cur && gx_cur->shPal >= 0 && gx_cur->shGB >= 0;
 }
 
 static void gxSetMatrix(Renderer *renderer, int32_t matrixType, Matrix4f matrix)

@@ -1,12 +1,13 @@
 #include "input.h"
 
 #include "input_recording.h"
-#include "warp.h"
+#include "am2r.h"
 #include "vm.h"
 #include "stb_ds.h"
 #include "log.h"
 #include "instance.h"
 #include "overscan.h"
+#include "hooks.h"
 #include "platformdefs.h"
 #include "runner.h"
 #include "runner_gamepad.h"
@@ -297,6 +298,7 @@ void WiiInput_poll(Runner *runner)
 	wheld = WPAD_ButtonsHeld(0);
 	gcheld = PAD_ButtonsHeld(0);
 	WPAD_Expansion(0, &exp);
+	Wii_hooksPad(runner, &wheld, &gcheld, &exp.type);
 
 	memset(want_vk, 0, sizeof(want_vk));
 	slot = &runner->gamepads->slots[0];

@@ -21,5 +21,11 @@ bool GxRenderer_surfacePixel(int32_t surfaceID, int x, int y, uint8_t rgba[4]);
 void GxRenderer_setWideFilter(bool on);
 /* The game's Widescreen is off on a 16:9 console: draw 4:3 centred with black sides. */
 void GxRenderer_setPillarbox(bool on);
+/* Instrumentation: called with the fill of every drawn page item, and with tpagIndex -1 every 200 frames. */
+struct DataWin;
+typedef void (*GxFillProbe)(struct DataWin *dw, int32_t tpagIndex, double area);
+void GxRenderer_setFillProbe(GxFillProbe probe);
+/* Answer "no shaders" to the game, to see what it does without them. */
+void GxRenderer_setShadersOff(bool off);
 
 #endif
