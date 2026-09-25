@@ -198,11 +198,11 @@ static void poll_nunchuk(GamepadSlot *slot, u32 held, const expansion_t *exp, bo
 #define GC_TRIGGER_PRESS 96
 
 /* The C-stick aims like the Nunchuk's d-pad: up/down with the aim button, or Aim Up / Aim Down with two-button aim. */
-static void poll_gcpad(GamepadSlot *slot, u16 held, s8 csticky, bool twoAim)
+static void poll_gcpad(GamepadSlot *slot, u16 held, const s8 *sticks, bool twoAim)
 {
-	float lx = gc_axis(PAD_StickX(0));
-	float ly = -gc_axis(PAD_StickY(0));
-	bool cup = gc_axis(csticky) > STICK_DIGITAL, cdown = gc_axis(csticky) < -STICK_DIGITAL;
+	float lx = gc_axis(sticks[0]);
+	float ly = -gc_axis(sticks[1]);
+	bool cup = gc_axis(sticks[2]) > STICK_DIGITAL, cdown = gc_axis(sticks[2]) < -STICK_DIGITAL;
 
 	if (PAD_TriggerL(0) > GC_TRIGGER_PRESS)
 		held |= PAD_TRIGGER_L;
@@ -417,7 +417,7 @@ void WiiInput_poll(Runner *runner)
 	GamepadSlot *slot;
 	u32 wheld;
 	u16 gcheld;
-	s8 csticky;
+	s8 sticks[3];
 	int i;
 	expansion_t exp;
 
@@ -428,9 +428,11 @@ void WiiInput_poll(Runner *runner)
 	PAD_ScanPads();
 	wheld = WPAD_ButtonsHeld(0);
 	gcheld = PAD_ButtonsHeld(0);
-	csticky = PAD_SubStickY(0);
+	sticks[0] = PAD_StickX(0);
+	sticks[1] = PAD_StickY(0);
+	sticks[2] = PAD_SubStickY(0);
 	WPAD_Expansion(0, &exp);
-	Wii_hooksPad(runner, &wheld, &gcheld, &exp.type, &csticky);
+	Wii_hooksPad(runner, &wheld, &gcheld, &exp, sticks);
 
 	slot = &runner->gamepads->slots[0];
 	memcpy(slot->buttonDownPrev, slot->buttonDown, sizeof(slot->buttonDown));
@@ -446,16 +448,16 @@ void WiiInput_poll(Runner *runner)
 	slot->guid[0] = '\0';
 
 	wii_pad_defaults(runner);
-	note_pad(wheld, gcheld, csticky, &exp);
+	note_pad(wheld, gcheld, sticks[2], &exp);
 	drive_rumble();
 	overscan_input(wheld, gcheld);
 	if (Overscan_active())
 		; /* overlay owns input; leave the slot neutral */
 	else if (exp.type == WPAD_EXP_CLASSIC)
 		poll_classic(slot, wheld, &exp, two_button_aim(runner));
-	else if (gcheld || PAD_StickX(0) || PAD_StickY(0) || gc_axis(csticky) != 0.0f || PAD_TriggerL(0) > GC_TRIGGER_PRESS ||
+	else if (gcheld || sticks[0] || sticks[1] || gc_axis(sticks[2]) != 0.0f || PAD_TriggerL(0) > GC_TRIGGER_PRESS ||
 		 PAD_TriggerR(0) > GC_TRIGGER_PRESS)
-		poll_gcpad(slot, gcheld, csticky, two_button_aim(runner));
+		poll_gcpad(slot, gcheld, sticks, two_button_aim(runner));
 	else
 		poll_nunchuk(slot, wheld, &exp, two_button_aim(runner));
 

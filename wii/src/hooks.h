@@ -4,6 +4,7 @@
 #include <stdbool.h>
 
 struct Runner;
+struct expansion_t;
 
 /* Test hooks: weak no-ops in hooks.c. A local test folder (not part of the repository) supplies real ones,
  * so a clean checkout builds the game exactly as it ships. */
@@ -15,6 +16,7 @@ void Wii_hooksFrame(struct Runner *runner);   /* each frame, before the room is 
 bool Wii_hooksEvents(struct Runner *runner);  /* each frame, after the controllers are read; true quits */
 void Wii_hooksBeforeCopy(void);               /* the frame is drawn, not yet copied out */
 void Wii_hooksAfterPresent(void);
-void Wii_hooksPad(struct Runner *runner, unsigned int *wheld, unsigned short *gcheld, int *exptype, signed char *csticky);
+/* what the pads read this frame; sticks = GameCube main X, main Y, C-stick Y */
+void Wii_hooksPad(struct Runner *runner, unsigned int *wheld, unsigned short *gcheld, struct expansion_t *exp, signed char *sticks);
 
 #endif
