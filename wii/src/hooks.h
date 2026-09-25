@@ -15,6 +15,6 @@ void Wii_hooksFrame(struct Runner *runner);   /* each frame, before the room is 
 bool Wii_hooksEvents(struct Runner *runner);  /* each frame, after the controllers are read; true quits */
 void Wii_hooksBeforeCopy(void);               /* the frame is drawn, not yet copied out */
 void Wii_hooksAfterPresent(void);
-void Wii_hooksPad(struct Runner *runner, unsigned int *wheld, unsigned short *gcheld, int *exptype);
+void Wii_hooksPad(struct Runner *runner, unsigned int *wheld, unsigned short *gcheld, int *exptype, signed char *csticky);
 
 #endif

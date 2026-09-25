@@ -195,18 +195,24 @@ static void poll_nunchuk(GamepadSlot *slot, u32 held, const expansion_t *exp, bo
 /* Held partway down: a long hold of a GameCube trigger to its click is tiring. */
 #define GC_TRIGGER_PRESS 96
 
-static void poll_gcpad(GamepadSlot *slot, u16 held)
+/* The C-stick aims like the Nunchuk's d-pad: up/down with the aim button, or Aim Up / Aim Down with two-button aim. */
+static void poll_gcpad(GamepadSlot *slot, u16 held, s8 csticky, bool twoAim)
 {
 	float lx = gc_axis(PAD_StickX(0));
 	float ly = -gc_axis(PAD_StickY(0));
+	bool cup = gc_axis(csticky) > STICK_DIGITAL, cdown = gc_axis(csticky) < -STICK_DIGITAL;
 
 	if (PAD_TriggerL(0) > GC_TRIGGER_PRESS)
 		held |= PAD_TRIGGER_L;
 	if (PAD_TriggerR(0) > GC_TRIGGER_PRESS)
 		held |= PAD_TRIGGER_R;
-	apply_move(slot, lx, ly, held & PAD_BUTTON_UP, held & PAD_BUTTON_DOWN,
+	apply_move(slot, lx, ly, (held & PAD_BUTTON_UP) || (!twoAim && cup), (held & PAD_BUTTON_DOWN) || (!twoAim && cdown),
 		   held & PAD_BUTTON_LEFT, held & PAD_BUTTON_RIGHT);
 	apply_map(slot, gcMap, held);
+	if (cup)
+		set_btn(slot, SLOT_LB, true);
+	if (cdown)
+		set_btn(slot, twoAim ? SLOT_RT : SLOT_LB, true);
 }
 
 /* L + D-pad Down + Y opens the overscan overlay; any face button (A/B/X/Y) closes it.
@@ -337,11 +343,12 @@ static void wii_pad_defaults(Runner *runner)
 }
 
 /* Sticky: an idle frame keeps the last controller, so a GameCube player's names do not flip back when the pad rests. */
-static void note_pad(u32 wheld, u16 gcheld, const expansion_t *exp)
+static void note_pad(u32 wheld, u16 gcheld, s8 csticky, const expansion_t *exp)
 {
 	if (exp->type == WPAD_EXP_CLASSIC)
 		pad_in_use = WII_PAD_CLASSIC;
-	else if (gcheld || PAD_TriggerL(0) > GC_TRIGGER_PRESS || PAD_TriggerR(0) > GC_TRIGGER_PRESS)
+	else if (gcheld || fabsf(gc_axis(csticky)) > STICK_DIGITAL || PAD_TriggerL(0) > GC_TRIGGER_PRESS ||
+		 PAD_TriggerR(0) > GC_TRIGGER_PRESS)
 		pad_in_use = WII_PAD_GAMECUBE;
 	else if ((wheld & ~(u32)(WPAD_BUTTON_HOME)) && exp->type == WPAD_EXP_NUNCHUK)
 		pad_in_use = WII_PAD_NUNCHUK;
@@ -365,6 +372,7 @@ void WiiInput_poll(Runner *runner)
 	GamepadSlot *slot;
 	u32 wheld;
 	u16 gcheld;
+	s8 csticky;
 	int i;
 	expansion_t exp;
 
@@ -375,8 +383,9 @@ void WiiInput_poll(Runner *runner)
 	PAD_ScanPads();
 	wheld = WPAD_ButtonsHeld(0);
 	gcheld = PAD_ButtonsHeld(0);
+	csticky = PAD_SubStickY(0);
 	WPAD_Expansion(0, &exp);
-	Wii_hooksPad(runner, &wheld, &gcheld, &exp.type);
+	Wii_hooksPad(runner, &wheld, &gcheld, &exp.type, &csticky);
 
 	slot = &runner->gamepads->slots[0];
 	memcpy(slot->buttonDownPrev, slot->buttonDown, sizeof(slot->buttonDown));
@@ -392,14 +401,15 @@ void WiiInput_poll(Runner *runner)
 	slot->guid[0] = '\0';
 
 	wii_pad_defaults(runner);
-	note_pad(wheld, gcheld, &exp);
+	note_pad(wheld, gcheld, csticky, &exp);
 	overscan_input(wheld, gcheld);
 	if (Overscan_active())
 		; /* overlay owns input; leave the slot neutral */
 	else if (exp.type == WPAD_EXP_CLASSIC)
 		poll_classic(slot, wheld, &exp, two_button_aim(runner));
-	else if (gcheld || PAD_StickX(0) || PAD_StickY(0) || PAD_TriggerL(0) > GC_TRIGGER_PRESS || PAD_TriggerR(0) > GC_TRIGGER_PRESS)
-		poll_gcpad(slot, gcheld);
+	else if (gcheld || PAD_StickX(0) || PAD_StickY(0) || gc_axis(csticky) != 0.0f || PAD_TriggerL(0) > GC_TRIGGER_PRESS ||
+		 PAD_TriggerR(0) > GC_TRIGGER_PRESS)
+		poll_gcpad(slot, gcheld, csticky, two_button_aim(runner));
 	else
 		poll_nunchuk(slot, wheld, &exp, two_button_aim(runner));
 

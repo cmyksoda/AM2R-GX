@@ -10,7 +10,8 @@ __attribute__((weak)) void Wii_hooksFrame(struct Runner *runner) { (void)runner;
 __attribute__((weak)) bool Wii_hooksEvents(struct Runner *runner) { (void)runner; return false; }
 __attribute__((weak)) void Wii_hooksBeforeCopy(void) {}
 __attribute__((weak)) void Wii_hooksAfterPresent(void) {}
-__attribute__((weak)) void Wii_hooksPad(struct Runner *runner, unsigned int *wheld, unsigned short *gcheld, int *exptype)
+__attribute__((weak)) void Wii_hooksPad(struct Runner *runner, unsigned int *wheld, unsigned short *gcheld, int *exptype,
+					 signed char *csticky)
 {
-	(void)runner; (void)wheld; (void)gcheld; (void)exptype;
+	(void)runner; (void)wheld; (void)gcheld; (void)exptype; (void)csticky;
 }

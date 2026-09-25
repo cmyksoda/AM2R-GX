@@ -29,7 +29,8 @@ enum { SCR_DEFAULTS, SCR_NAME, SCR_SPRITE, SCR_TEXT, SCR_COUNT };
 static const char *const scriptNames[SCR_COUNT] = { "set_default_xjoypad", "get_xjoybtnname", "get_xjoybtnsprite", "get_text" };
 static int32_t scriptCode[SCR_COUNT] = { -1, -1, -1, -1 };
 
-/* key/key2: [Buttons] strings, so the words stay in the player's language; key2 joins as "key/key2". */
+/* key/key2: [Buttons] strings, so the words stay in the player's language; key2 joins as "key/key2", text before a
+ * key as a prefix. */
 typedef struct {
 	const char *text, *key, *key2;
 } Name;
@@ -38,7 +39,8 @@ typedef struct {
 #define W(key, key2) { NULL, key, key2 }
 /* By GameMaker constant from gp_face1: face1-4, LB, RB, LT, RT, select, start; see the maps in input.c. */
 static const Name gcNames[10] = {
-	T("A"), T("X"), T("B"), T("Y"), W("LeftShoulder", NULL), W("RightShoulder", NULL), T("Z"), T(""), T(""), W("Start", NULL),
+	T("A"), T("X"), T("B"), T("Y"), W("LeftShoulder", NULL), W("RightShoulder", NULL), T("Z"), { "C-", "Down", NULL }, T(""),
+	W("Start", NULL),
 };
 static const Name nunchukNames[10] = {
 	T("A"), T("C"), T("B"), T("-"), W("Up", "Down"), T("Z"), W("Left", "Right"), W("Down", NULL), T(""), T("+"),
@@ -48,8 +50,8 @@ static const Name nunchukNames[10] = {
 
 /* Button glyphs built by the rules of AM2R's own (they rebuild its "LB" pixel for pixel): a grey pill with 3x5 dark
  * letters, each pill pixel under a letter pixel a shade darker. One style for every Wii button (Jaxi). */
-enum { G_A, G_B, G_X, G_Y, G_C, G_L, G_R, G_ZL, G_ZR, G_Z, G_PLUS, G_MINUS, G_COUNT };
-static const char *const glyphText[G_COUNT] = { "A", "B", "X", "Y", "C", "L", "R", "ZL", "ZR", "Z", "+", "-" };
+enum { G_A, G_B, G_X, G_Y, G_C, G_L, G_R, G_ZL, G_ZR, G_Z, G_PLUS, G_MINUS, G_CDOWN, G_COUNT };
+static const char *const glyphText[G_COUNT] = { "A", "B", "X", "Y", "C", "L", "R", "ZL", "ZR", "Z", "+", "-", "Cv" };
 static const struct {
 	char ch;
 	const char *rows[5];
@@ -59,6 +61,7 @@ static const struct {
 	{ 'L', { "#..", "#..", "#..", "#..", "###" } }, { 'R', { "##.", "#.#", "##.", "#.#", "#.#" } },
 	{ 'Z', { "###", "..#", ".#.", "#..", "###" } }, { '+', { "...", ".#.", "###", ".#.", "..." } },
 	{ '-', { "...", "...", "###", "...", "..." } }, { 'C', { "###", "#..", "#..", "#..", "###" } },
+	{ 'v', { "...", "...", "###", ".#.", "..." } },
 };
 /* The game's own d-pad glyphs, for the Remote's d-pad. */
 enum { N_DPAD, N_UP, N_DOWN, N_COUNT };
@@ -70,7 +73,7 @@ static const char *const gameGlyphs[N_COUNT] = { "sDPadBtn", "sBtnUp", "sBtnDown
 static const signed char classicGlyphs[10] = { OURS(G_B), OURS(G_A), OURS(G_Y), OURS(G_X), OURS(G_L), OURS(G_R), OURS(G_ZL),
 					       OURS(G_ZR), OURS(G_MINUS), OURS(G_PLUS) };
 static const signed char gcGlyphs[10] = { OURS(G_A), OURS(G_X), OURS(G_B), OURS(G_Y), OURS(G_L), OURS(G_R), OURS(G_Z),
-					  KEEP, KEEP, KEEP };
+					  OURS(G_CDOWN), KEEP, KEEP };
 static const signed char nunchukGlyphs[10] = { OURS(G_A), OURS(G_C), OURS(G_B), OURS(G_MINUS), GAME(N_DPAD), OURS(G_Z),
 					       GAME(N_DPAD), GAME(N_DOWN), KEEP, OURS(G_PLUS) };
 
@@ -151,18 +154,17 @@ static char *button_word(VMContext *ctx, const char *key)
 
 static char *name_text(VMContext *ctx, const Name *n)
 {
+	const char *pre = n->text ? n->text : "";
 	char *a, *b, *both;
 	size_t len;
 
-	if (n->text)
-		return safeStrdup(n->text);
+	if (!n->key)
+		return safeStrdup(pre);
 	a = button_word(ctx, n->key);
-	if (!n->key2)
-		return a;
-	b = button_word(ctx, n->key2);
-	len = strlen(a) + strlen(b) + 2;
+	b = n->key2 ? button_word(ctx, n->key2) : safeStrdup("");
+	len = strlen(pre) + strlen(a) + strlen(b) + 2;
 	both = safeMalloc(len);
-	snprintf(both, len, "%s/%s", a, b);
+	snprintf(both, len, "%s%s%s%s", pre, a, *b ? "/" : "", b);
 	free(a);
 	free(b);
 	return both;
