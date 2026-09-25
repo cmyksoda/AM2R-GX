@@ -77,14 +77,71 @@ static void apply_move(GamepadSlot *slot, float lx, float ly, bool up, bool down
 	set_btn(slot, 13, down);
 	set_btn(slot, 14, left);
 	set_btn(slot, 15, right);
-	if (up)
-		want(VK_UP);
-	if (down)
-		want(VK_DOWN);
-	if (left)
-		want(VK_LEFT);
-	if (right)
-		want(VK_RIGHT);
+}
+
+/* Every controller reaches the game only as its gamepad, each button where AM2R's own pad layout puts the action:
+ * keyboard keys alongside doubled some actions and left Aim Down unreachable (session 12). */
+typedef struct {
+	u32 mask;
+	int slot;
+} ButtonMap;
+
+enum { SLOT_FACE1, SLOT_FACE2, SLOT_FACE3, SLOT_FACE4, SLOT_LB, SLOT_RB, SLOT_LT, SLOT_RT, SLOT_SELECT, SLOT_START,
+       SLOT_HOME = 16 };
+
+/* By position: B bottom, A right, Y left, X top; L/R/ZL/ZR are the pad's LB/RB/LT/RT. */
+static const ButtonMap classicMap[] = {
+	{ WPAD_CLASSIC_BUTTON_B, SLOT_FACE1 },      /* jump, menu accept */
+	{ WPAD_CLASSIC_BUTTON_A, SLOT_FACE2 },      /* weapon select, menu back */
+	{ WPAD_CLASSIC_BUTTON_Y, SLOT_FACE3 },      /* fire */
+	{ WPAD_CLASSIC_BUTTON_X, SLOT_FACE4 },      /* weapon cancel */
+	{ WPAD_CLASSIC_BUTTON_FULL_L, SLOT_LB },    /* aim up */
+	{ WPAD_CLASSIC_BUTTON_FULL_R, SLOT_RB },    /* aim lock */
+	{ WPAD_CLASSIC_BUTTON_ZL, SLOT_LT },        /* aim down */
+	{ WPAD_CLASSIC_BUTTON_ZR, SLOT_RT },        /* morph */
+	{ WPAD_CLASSIC_BUTTON_MINUS, SLOT_SELECT }, /* and Esc: the options menu */
+	{ WPAD_CLASSIC_BUTTON_PLUS, SLOT_START },
+	{ WPAD_CLASSIC_BUTTON_HOME, SLOT_HOME },
+	{ 0, 0 },
+};
+static const ButtonMap gcMap[] = {
+	{ PAD_BUTTON_A, SLOT_FACE1 },     /* jump, menu accept */
+	{ PAD_BUTTON_X, SLOT_FACE2 },     /* weapon select, menu back */
+	{ PAD_BUTTON_B, SLOT_FACE3 },     /* fire */
+	{ PAD_BUTTON_Y, SLOT_FACE4 },     /* weapon cancel */
+	{ PAD_TRIGGER_R, SLOT_LB },       /* aim up */
+	{ PAD_TRIGGER_Z, SLOT_RB },       /* aim lock */
+	{ PAD_TRIGGER_L, SLOT_LT },       /* aim down */
+	{ PAD_BUTTON_START, SLOT_START },
+	{ 0, 0 },
+};
+/* The stick moves, so the Wii Remote's d-pad is free for the aim and weapon buttons. */
+static const ButtonMap nunchukMap[] = {
+	{ WPAD_BUTTON_A, SLOT_FACE1 },         /* jump, menu accept */
+	{ WPAD_BUTTON_LEFT, SLOT_FACE2 },      /* weapon select, menu back */
+	{ WPAD_BUTTON_B, SLOT_FACE3 },         /* fire */
+	{ WPAD_BUTTON_RIGHT, SLOT_FACE4 },     /* weapon cancel */
+	{ WPAD_BUTTON_UP, SLOT_LB },           /* aim up */
+	{ WPAD_NUNCHUK_BUTTON_Z, SLOT_RB },    /* aim lock */
+	{ WPAD_BUTTON_DOWN, SLOT_LT },         /* aim down */
+	{ WPAD_NUNCHUK_BUTTON_C, SLOT_RT },    /* morph */
+	{ WPAD_BUTTON_MINUS, SLOT_SELECT },
+	{ WPAD_BUTTON_PLUS, SLOT_START },
+	{ WPAD_BUTTON_HOME, SLOT_HOME },
+	{ 0, 0 },
+};
+/* A Wii Remote alone: the d-pad moves, so weapon select and the triggers' actions have no button. */
+static const ButtonMap remoteMap[] = {
+	{ WPAD_BUTTON_A, SLOT_FACE1 }, { WPAD_BUTTON_B, SLOT_FACE3 }, { WPAD_BUTTON_1, SLOT_LB },
+	{ WPAD_BUTTON_2, SLOT_FACE4 }, { WPAD_BUTTON_MINUS, SLOT_SELECT }, { WPAD_BUTTON_PLUS, SLOT_START },
+	{ WPAD_BUTTON_HOME, SLOT_HOME }, { 0, 0 },
+};
+
+static void apply_map(GamepadSlot *slot, const ButtonMap *map, u32 held)
+{
+	for (; map->mask; map++)
+		if (held & map->mask)
+			set_btn(slot, map->slot, true);
 }
 
 static void poll_classic(GamepadSlot *slot, u32 held, const expansion_t *exp)
@@ -95,61 +152,26 @@ static void poll_classic(GamepadSlot *slot, u32 held, const expansion_t *exp)
 		joy_xy(&exp->classic.ljs, &lx, &ly);
 	apply_move(slot, lx, ly, held & WPAD_CLASSIC_BUTTON_UP, held & WPAD_CLASSIC_BUTTON_DOWN,
 		   held & WPAD_CLASSIC_BUTTON_LEFT, held & WPAD_CLASSIC_BUTTON_RIGHT);
-	if (held & WPAD_CLASSIC_BUTTON_B)
-		want('Z');
-	if (held & WPAD_CLASSIC_BUTTON_Y)
-		want('X');
-	if (held & WPAD_CLASSIC_BUTTON_A)
-		want(VK_CONTROL);
-	if (held & WPAD_CLASSIC_BUTTON_X)
-		want('S');
-	if (held & (WPAD_CLASSIC_BUTTON_FULL_R | WPAD_CLASSIC_BUTTON_ZR))
-		want(VK_SHIFT);
-	if (held & (WPAD_CLASSIC_BUTTON_FULL_L | WPAD_CLASSIC_BUTTON_ZL))
-		want('A');
-	if (held & WPAD_CLASSIC_BUTTON_PLUS)
-		want(VK_ENTER);
+	apply_map(slot, classicMap, held);
 	if (held & WPAD_CLASSIC_BUTTON_MINUS)
 		want(VK_ESCAPE);
-	set_btn(slot, 0, held & WPAD_CLASSIC_BUTTON_B);
-	set_btn(slot, 1, held & WPAD_CLASSIC_BUTTON_A);
-	set_btn(slot, 2, held & WPAD_CLASSIC_BUTTON_Y);
-	set_btn(slot, 3, held & WPAD_CLASSIC_BUTTON_X);
-	set_btn(slot, 4, held & (WPAD_CLASSIC_BUTTON_FULL_L | WPAD_CLASSIC_BUTTON_ZL));
-	set_btn(slot, 5, held & (WPAD_CLASSIC_BUTTON_FULL_R | WPAD_CLASSIC_BUTTON_ZR));
-	set_btn(slot, 8, held & WPAD_CLASSIC_BUTTON_MINUS);
-	set_btn(slot, 9, held & WPAD_CLASSIC_BUTTON_PLUS);
-	set_btn(slot, 16, held & WPAD_CLASSIC_BUTTON_HOME);
 }
 
 static void poll_nunchuk(GamepadSlot *slot, u32 held, const expansion_t *exp)
 {
 	float lx = 0.0f, ly = 0.0f;
 
-	if (exp->type == WPAD_EXP_NUNCHUK)
+	if (exp->type == WPAD_EXP_NUNCHUK) {
 		joy_xy(&exp->nunchuk.js, &lx, &ly);
-	apply_move(slot, lx, ly, held & WPAD_BUTTON_UP, held & WPAD_BUTTON_DOWN,
-		   held & WPAD_BUTTON_LEFT, held & WPAD_BUTTON_RIGHT);
-	if (held & WPAD_BUTTON_A)
-		want('Z');
-	if (held & WPAD_BUTTON_B)
-		want('X');
-	if (held & WPAD_NUNCHUK_BUTTON_C)
-		want(VK_CONTROL);
-	if (held & WPAD_BUTTON_1)
-		want(VK_SHIFT);
-	if (held & WPAD_NUNCHUK_BUTTON_Z)
-		want('A');
-	if (held & WPAD_BUTTON_2)
-		want('S');
-	if (held & WPAD_BUTTON_PLUS)
-		want(VK_ENTER);
+		apply_move(slot, lx, ly, false, false, false, false);
+		apply_map(slot, nunchukMap, held);
+	} else {
+		apply_move(slot, lx, ly, held & WPAD_BUTTON_UP, held & WPAD_BUTTON_DOWN,
+			   held & WPAD_BUTTON_LEFT, held & WPAD_BUTTON_RIGHT);
+		apply_map(slot, remoteMap, held);
+	}
 	if (held & WPAD_BUTTON_MINUS)
 		want(VK_ESCAPE);
-	set_btn(slot, 0, held & WPAD_BUTTON_A);
-	set_btn(slot, 1, held & WPAD_BUTTON_B);
-	set_btn(slot, 9, held & WPAD_BUTTON_PLUS);
-	set_btn(slot, 16, held & WPAD_BUTTON_HOME);
 }
 
 static void poll_gcpad(GamepadSlot *slot, u16 held)
@@ -159,30 +181,9 @@ static void poll_gcpad(GamepadSlot *slot, u16 held)
 
 	apply_move(slot, lx, ly, held & PAD_BUTTON_UP, held & PAD_BUTTON_DOWN,
 		   held & PAD_BUTTON_LEFT, held & PAD_BUTTON_RIGHT);
-	if (held & PAD_BUTTON_A)
-		want('Z');
-	if (held & PAD_BUTTON_B)
-		want('X');
-	if (held & PAD_BUTTON_Y)
-		want(VK_CONTROL);
-	if (held & PAD_TRIGGER_R)
-		want(VK_SHIFT);
-	if (held & PAD_TRIGGER_L)
-		want('A');
-	if (held & PAD_BUTTON_X)
-		want('S');
-	if (held & PAD_BUTTON_START)
-		want(VK_ENTER);
-	if (held & PAD_TRIGGER_Z)
-		want(VK_ESCAPE);
-	set_btn(slot, 0, held & PAD_BUTTON_A);
-	set_btn(slot, 1, held & PAD_BUTTON_B);
-	set_btn(slot, 2, held & PAD_BUTTON_X);
-	set_btn(slot, 3, held & PAD_BUTTON_Y);
-	set_btn(slot, 4, held & PAD_TRIGGER_L);
-	set_btn(slot, 5, held & PAD_TRIGGER_R);
-	set_btn(slot, 8, held & PAD_TRIGGER_Z);
-	set_btn(slot, 9, held & PAD_BUTTON_START);
+	apply_map(slot, gcMap, held);
+	if (gc_axis(PAD_SubStickY(0)) < -STICK_DIGITAL) /* C-stick down: morph (a double tap of Down also works) */
+		set_btn(slot, SLOT_RT, true);
 }
 
 /* L + D-pad Down + Y opens the overscan overlay; any face button (A/B/X/Y) closes it.
