@@ -217,25 +217,41 @@ static void poll_gcpad(GamepadSlot *slot, u16 held, const s8 *sticks, bool twoAi
 		set_btn(slot, twoAim ? SLOT_RT : SLOT_LB, true);
 }
 
-/* L + D-pad Down + Y opens the overscan overlay; any face button (A/B/X/Y) closes it.
- * While it's up the d-pad drives the H/V sliders (with R held, Up/Down shift the picture
- * instead) and the game gets neutral input. */
-static void overscan_input(u32 wheld, u16 gcheld)
+/* Opens with L + Down + Y (Classic, GameCube) or 1 + 2 held (Remote + Nunchuk); a face button closes it. While it is up
+ * Left/Right and Up/Down set the width and height, and the game gets neutral input. The shifts move the picture
+ * instead: L (Nunchuk C) with Left/Right, R (Nunchuk Z) with Up/Down. Sticks count as the d-pad. */
+static void overscan_input(u32 wheld, u16 gcheld, const s8 *sticks, const expansion_t *exp)
 {
 	static bool prev_combo;
 	static bool prev_face;
 	static bool guard;
 	static unsigned rate;
-	bool lheld = (wheld & (WPAD_CLASSIC_BUTTON_FULL_L | WPAD_CLASSIC_BUTTON_ZL)) ||
-		     (gcheld & PAD_TRIGGER_L) || PAD_TriggerL(0) > 64;
-	bool rheld = (wheld & (WPAD_CLASSIC_BUTTON_FULL_R | WPAD_CLASSIC_BUTTON_ZR)) ||
-		     (gcheld & PAD_TRIGGER_R) || PAD_TriggerR(0) > 64;
-	bool down = (wheld & WPAD_CLASSIC_BUTTON_DOWN) || (gcheld & PAD_BUTTON_DOWN);
-	bool combo = lheld && down &&
-		     ((wheld & WPAD_CLASSIC_BUTTON_Y) || (gcheld & PAD_BUTTON_Y));
-	bool face = (wheld & (WPAD_CLASSIC_BUTTON_A | WPAD_CLASSIC_BUTTON_B |
-			      WPAD_CLASSIC_BUTTON_X | WPAD_CLASSIC_BUTTON_Y)) ||
-		    (gcheld & (PAD_BUTTON_A | PAD_BUTTON_B | PAD_BUTTON_X | PAD_BUTTON_Y));
+	float sx = gc_axis(sticks[0]), sy = -gc_axis(sticks[1]), wx = 0.0f, wy = 0.0f;
+	/* the Nunchuk's Z and C share their bits with the Classic's Up and Left */
+	u32 classic = exp->type == WPAD_EXP_CLASSIC ? wheld : 0, nunchuk = exp->type == WPAD_EXP_NUNCHUK ? wheld : 0;
+	bool up, down, left, right, lheld, rheld, face, combo;
+
+	if (exp->type == WPAD_EXP_CLASSIC)
+		joy_xy(&exp->classic.ljs, &wx, &wy);
+	else if (exp->type == WPAD_EXP_NUNCHUK)
+		joy_xy(&exp->nunchuk.js, &wx, &wy);
+	up = (classic & WPAD_CLASSIC_BUTTON_UP) || (wheld & WPAD_BUTTON_UP) || (gcheld & PAD_BUTTON_UP) ||
+	     wy < -STICK_DIGITAL || sy < -STICK_DIGITAL;
+	down = (classic & WPAD_CLASSIC_BUTTON_DOWN) || (wheld & WPAD_BUTTON_DOWN) || (gcheld & PAD_BUTTON_DOWN) ||
+	       wy > STICK_DIGITAL || sy > STICK_DIGITAL;
+	left = (classic & WPAD_CLASSIC_BUTTON_LEFT) || (wheld & WPAD_BUTTON_LEFT) || (gcheld & PAD_BUTTON_LEFT) ||
+	       wx < -STICK_DIGITAL || sx < -STICK_DIGITAL;
+	right = (classic & WPAD_CLASSIC_BUTTON_RIGHT) || (wheld & WPAD_BUTTON_RIGHT) || (gcheld & PAD_BUTTON_RIGHT) ||
+		wx > STICK_DIGITAL || sx > STICK_DIGITAL;
+	lheld = (classic & (WPAD_CLASSIC_BUTTON_FULL_L | WPAD_CLASSIC_BUTTON_ZL)) || (gcheld & PAD_TRIGGER_L) ||
+		PAD_TriggerL(0) > 64 || (nunchuk & WPAD_NUNCHUK_BUTTON_C);
+	rheld = (classic & (WPAD_CLASSIC_BUTTON_FULL_R | WPAD_CLASSIC_BUTTON_ZR)) || (gcheld & PAD_TRIGGER_R) ||
+		PAD_TriggerR(0) > 64 || (nunchuk & WPAD_NUNCHUK_BUTTON_Z);
+	face = (classic & (WPAD_CLASSIC_BUTTON_A | WPAD_CLASSIC_BUTTON_B | WPAD_CLASSIC_BUTTON_X | WPAD_CLASSIC_BUTTON_Y)) ||
+	       (wheld & (WPAD_BUTTON_A | WPAD_BUTTON_B | WPAD_BUTTON_1 | WPAD_BUTTON_2)) ||
+	       (gcheld & (PAD_BUTTON_A | PAD_BUTTON_B | PAD_BUTTON_X | PAD_BUTTON_Y));
+	combo = (lheld && down && ((classic & WPAD_CLASSIC_BUTTON_Y) || (gcheld & PAD_BUTTON_Y))) ||
+		(wheld & (WPAD_BUTTON_1 | WPAD_BUTTON_2)) == (WPAD_BUTTON_1 | WPAD_BUTTON_2);
 
 	if (!Overscan_active()) {
 		if (combo && !prev_combo) {
@@ -253,11 +269,11 @@ static void overscan_input(u32 wheld, u16 gcheld)
 
 	if (!Overscan_active() || guard || (++rate & 1))
 		return;
-	if ((wheld & WPAD_CLASSIC_BUTTON_LEFT) || (gcheld & PAD_BUTTON_LEFT))
-		Overscan_adjustH(-1);
-	if ((wheld & WPAD_CLASSIC_BUTTON_RIGHT) || (gcheld & PAD_BUTTON_RIGHT))
-		Overscan_adjustH(1);
-	if ((wheld & WPAD_CLASSIC_BUTTON_UP) || (gcheld & PAD_BUTTON_UP))
+	if (left)
+		(lheld ? Overscan_adjustX : Overscan_adjustH)(-1);
+	if (right)
+		(lheld ? Overscan_adjustX : Overscan_adjustH)(1);
+	if (up)
 		(rheld ? Overscan_adjustY : Overscan_adjustV)(-1);
 	if (down)
 		(rheld ? Overscan_adjustY : Overscan_adjustV)(1);
@@ -450,7 +466,7 @@ void WiiInput_poll(Runner *runner)
 	wii_pad_defaults(runner);
 	note_pad(wheld, gcheld, sticks[2], &exp);
 	drive_rumble();
-	overscan_input(wheld, gcheld);
+	overscan_input(wheld, gcheld, sticks, &exp);
 	if (Overscan_active())
 		; /* overlay owns input; leave the slot neutral */
 	else if (exp.type == WPAD_EXP_CLASSIC)

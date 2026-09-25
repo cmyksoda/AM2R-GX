@@ -16,9 +16,11 @@ void Overscan_toggle(void);
 int Overscan_h(void);
 int Overscan_v(void);
 int Overscan_y(void); /* vertical shift, + = down (overscan.txt's fourth number) */
+int Overscan_x(void); /* horizontal shift, + = right (the fifth) */
 int Overscan_viWidth(void);
 void Overscan_adjustH(int delta);
 void Overscan_adjustV(int delta);
 void Overscan_adjustY(int delta);
+void Overscan_adjustX(int delta);
 
 #endif

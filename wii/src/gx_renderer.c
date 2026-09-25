@@ -1070,9 +1070,9 @@ static void gx_bind_host(GxRenderer *gx)
 	if (gx_pillarbox && WiiVideo_isWide()) {
 		int pw = (w * 3) / 4;
 
-		gx_viewport((w - pw) / 2 + oh, ov + Overscan_y(), pw - 2 * oh, h - 2 * ov);
+		gx_viewport((w - pw) / 2 + oh + Overscan_x(), ov + Overscan_y(), pw - 2 * oh, h - 2 * ov);
 	} else {
-		gx_viewport(oh, ov + Overscan_y(), w - 2 * oh, h - 2 * ov);
+		gx_viewport(oh + Overscan_x(), ov + Overscan_y(), w - 2 * oh, h - 2 * ov);
 	}
 	gx->base.CPortX = 0;
 	gx->base.CPortY = 0;
@@ -1965,8 +1965,9 @@ static void gx_draw_overscan_overlay(GxRenderer *gx)
 	gx_ov_rect(LW - cl, LH - ct, cl, ct, 255, 225, 40, 255);
 	gx_ov_rect(LW - ct, LH - cl, ct, cl, 255, 225, 40, 255);
 
-	/* Centre line: R + Up/Down shifts the whole picture; the line shows where its middle sits. */
+	/* Centre lines: R + Up/Down and L + Left/Right shift the whole picture; the lines show where its middle sits. */
 	gx_ov_rect(0, cy + (float)Overscan_y() - 1, LW, 2, 255, 255, 255, 200);
+	gx_ov_rect(cx + (float)Overscan_x() - 1, 0, 2, LH, 255, 255, 255, 200);
 	/* H slider (Left/Right) above center, V slider (Up/Down) below */
 	gx_ov_rect(cx - tlen * 0.5f, cy - 40, tlen, tthk, 30, 30, 40, 230);
 	gx_ov_rect(cx - tlen * 0.5f, cy - 40, tlen * hf, tthk, 90, 200, 255, 255);
