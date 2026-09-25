@@ -2219,6 +2219,29 @@ static void gxDrawSpritePart(Renderer *renderer, int32_t tpagIndex, int32_t srcO
 		     r, g, b, a, r, g, b, a, r, g, b, a, r, g, b, a);
 }
 
+/* A GameMaker 1 room keeps every tile in the draw list (rm_a5h04: 2,256, about 60 on screen); this drops the ones
+ * outside the projection before the engine's generic path resolves and clips each, then steps aside for the rest. */
+static void gxDrawTile(Renderer *renderer, RoomTile *tile, float offsetX, float offsetY)
+{
+	GxRenderer *gx = (GxRenderer *)renderer;
+	float x0 = (float)tile->x + offsetX, y0 = (float)tile->y + offsetY;
+	float x1 = x0 + (float)tile->width * tile->scaleX, y1 = y0 + (float)tile->height * tile->scaleY;
+
+	if (gx->skipView && gx->currentTarget == gx->appSurfId) {
+		gx_stat.sprites++;
+		gx_stat.skipped++;
+		return;
+	}
+	if (fmaxf(x0, x1) <= gx_clipL || fminf(x0, x1) >= gx_clipR || fmaxf(y0, y1) <= gx_clipT || fminf(y0, y1) >= gx_clipB) {
+		gx_stat.sprites++;
+		gx_stat.culled++;
+		return;
+	}
+	renderer->vtable->drawTile = NULL;
+	Renderer_drawTile(renderer, tile, offsetX, offsetY);
+	renderer->vtable->drawTile = gxDrawTile;
+}
+
 static void gxDrawSpritePartColor(Renderer *renderer, int32_t tpagIndex, int32_t srcOffX, int32_t srcOffY, int32_t srcW,
 				  int32_t srcH, float x, float y, float xscale, float yscale, float angleDeg,
 				  float pivotX, float pivotY, uint32_t c1, uint32_t c2, uint32_t c3, uint32_t c4, float alpha)
@@ -3455,7 +3478,7 @@ Renderer *GxRenderer_create(void)
 	gxVtable.gpuGetColorWriteEnable = gxGpuGetColorWriteEnable;
 	gxVtable.gpuGetBlendEnable = gxGpuGetBlendEnable;
 	gxVtable.gpuSetFog = gxGpuSetFog;
-	gxVtable.drawTile = NULL;
+	gxVtable.drawTile = gxDrawTile;
 	gxVtable.drawSpriteTiled = gxDrawSpriteTiled;
 	gxVtable.createSurface = gxCreateSurface;
 	gxVtable.surfaceExists = gxSurfaceExists;
