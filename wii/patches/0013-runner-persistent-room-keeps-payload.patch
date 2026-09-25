@@ -1,9 +1,11 @@
 Reason: Lazy room loading freed a persistent room's tile array on leave while its saved layers still pointed into it; back from AM2R's pause screen the ground was drawn from the pause room's tileset.
 Upstream: Engine bug (lazyLoadRooms + persistent rooms) on every platform - to offer upstream as a fork branch. Retires this patch when merged.
 
+diff --git a/src/runner.c b/src/runner.c
+index 656be25..b66369d 100644
 --- a/src/runner.c
 +++ b/src/runner.c
-@@ -3780,7 +3780,8 @@
+@@ -3803,7 +3803,8 @@ void Runner_handlePendingRoomChange(Runner* runner) {
          }
  
          // Free the outgoing room's payload under lazyLoadRooms, unless it's eagerly pinned or we're restarting the same room (initRoom would just re-load it).

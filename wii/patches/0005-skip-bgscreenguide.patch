@@ -2,7 +2,7 @@ Reason: bgScreenGuide is GameMaker editor chrome (a blue 16 px grid + crosshair,
 Upstream: Game-specific; stays here.
 
 diff --git a/src/runner.c b/src/runner.c
-index a17f0d5..245143b 100644
+index 0e43a3c..ca91d07 100644
 --- a/src/runner.c
 +++ b/src/runner.c
 @@ -635,6 +635,10 @@ static void drawGMS1Backgrounds(Runner* runner, bool foreground) {

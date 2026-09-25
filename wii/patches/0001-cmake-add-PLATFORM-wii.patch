@@ -2,7 +2,7 @@ Reason: Add PLATFORM=wii to the CMake build: our src/wii/ tree, libogc + portlib
 Upstream: Port scaffolding. Goes upstream with the whole src/wii/ tree, not before.
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 8de80db..c2c1bb9 100644
+index 0cb2834..40c5db4 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -26,6 +26,13 @@ endif()
@@ -64,7 +64,7 @@ index 8de80db..c2c1bb9 100644
      else()
          set(VM_GML_PROFILER_DEFAULT ON)
          set(VM_TRACING_DEFAULT ON)
-@@ -286,23 +305,34 @@ if(PLATFORM STREQUAL "cli" OR PLATFORM STREQUAL "vita" OR PLATFORM STREQUAL "swi
+@@ -286,28 +305,38 @@ if(PLATFORM STREQUAL "cli" OR PLATFORM STREQUAL "vita" OR PLATFORM STREQUAL "swi
          set(VM_STUB_LOGS_DEFAULT ON)
      endif()
      # Matches the GitHub Actions container flags (FORTIFY requires building with optimizations enabled!)
@@ -97,6 +97,10 @@ index 8de80db..c2c1bb9 100644
 +        target_include_directories(butterscotch PRIVATE ${CMAKE_SOURCE_DIR}/src/gl)
 +        target_include_directories(butterscotch PRIVATE ${CMAKE_SOURCE_DIR}/src/gl_common)
 +        target_include_directories(butterscotch PRIVATE ${CMAKE_SOURCE_DIR}/src/image)
++
++        file(GLOB DEBUG_FONT_SOURCES src/debug_font/*.c)
++        target_sources(butterscotch PRIVATE ${DEBUG_FONT_SOURCES})
++        target_include_directories(butterscotch PRIVATE ${CMAKE_SOURCE_DIR}/src/debug_font)
      endif()
 -    if(ENABLE_MODERN_GL)
 -        file(GLOB GL_SOURCES ${GL_SOURCES} src/gl/*.c)
@@ -109,10 +113,15 @@ index 8de80db..c2c1bb9 100644
 -    target_include_directories(butterscotch PRIVATE ${CMAKE_SOURCE_DIR}/src/gl)
 -    target_include_directories(butterscotch PRIVATE ${CMAKE_SOURCE_DIR}/src/gl_common)
 -    target_include_directories(butterscotch PRIVATE ${CMAKE_SOURCE_DIR}/src/image)
+-
+-    file(GLOB DEBUG_FONT_SOURCES src/debug_font/*.c)
+-    target_sources(butterscotch PRIVATE ${DEBUG_FONT_SOURCES})
+-    target_include_directories(butterscotch PRIVATE ${CMAKE_SOURCE_DIR}/src/debug_font)
+-
      if (MSVC)
          target_include_directories(butterscotch PRIVATE ${CMAKE_SOURCE_DIR}/compat/getopt)
          add_compile_definitions(NO_STRTOK_R)
-@@ -337,7 +367,7 @@ if(PLATFORM STREQUAL "cli" OR PLATFORM STREQUAL "vita" OR PLATFORM STREQUAL "swi
+@@ -342,7 +371,7 @@ if(PLATFORM STREQUAL "cli" OR PLATFORM STREQUAL "vita" OR PLATFORM STREQUAL "swi
      target_include_directories(butterscotch PUBLIC vendor/stb/image)
  
      set(PLATFORM_LIBRARIES bzip2 stb_ds sha1 stb_vorbis)
@@ -121,7 +130,7 @@ index 8de80db..c2c1bb9 100644
          # GLAD
          add_library(glad STATIC vendor/glad/src/glad.c)
          target_include_directories(glad PUBLIC vendor/glad/include)
-@@ -349,7 +379,7 @@ if(PLATFORM STREQUAL "cli" OR PLATFORM STREQUAL "vita" OR PLATFORM STREQUAL "swi
+@@ -354,7 +383,7 @@ if(PLATFORM STREQUAL "cli" OR PLATFORM STREQUAL "vita" OR PLATFORM STREQUAL "swi
      endif()
      if(WIN32)
          set(PLATFORM_LIBRARIES ${PLATFORM_LIBRARIES} opengl32 gdi32 winmm)
@@ -130,10 +139,10 @@ index 8de80db..c2c1bb9 100644
          set(PLATFORM_LIBRARIES ${PLATFORM_LIBRARIES} ${CMAKE_DL_LIBS})
      endif()
  
-@@ -440,9 +470,31 @@ if(PLATFORM STREQUAL "cli" OR PLATFORM STREQUAL "vita" OR PLATFORM STREQUAL "swi
-             target_link_libraries(butterscotch PRIVATE GLESv2 stdc++)
-             nx_generate_nacp(OUTPUT Butterscotch.nacp NAME "Butterscotch" AUTHOR "Butterscotch" VERSION "1.0.0")
-             nx_create_nro(butterscotch NACP Butterscotch.nacp)
+@@ -450,9 +479,31 @@ if(PLATFORM STREQUAL "cli" OR PLATFORM STREQUAL "vita" OR PLATFORM STREQUAL "swi
+             else()
+                 nx_create_nro(butterscotch NACP Butterscotch.nacp)
+             endif()
 +        elseif(PLATFORM STREQUAL "wii")
 +            target_include_directories(butterscotch PRIVATE $ENV{DEVKITPRO}/libogc/include $ENV{DEVKITPRO}/portlibs/ppc/include/freetype2)
 +            target_link_directories(butterscotch PRIVATE $ENV{DEVKITPRO}/libogc/lib/wii)
@@ -163,7 +172,7 @@ index 8de80db..c2c1bb9 100644
          target_sources(butterscotch PRIVATE src/backends/${BACKEND}.m)
      else()
          target_sources(butterscotch PRIVATE src/backends/${BACKEND}.c)
-@@ -455,7 +507,7 @@ if(PLATFORM STREQUAL "cli" OR PLATFORM STREQUAL "vita" OR PLATFORM STREQUAL "swi
+@@ -465,7 +516,7 @@ if(PLATFORM STREQUAL "cli" OR PLATFORM STREQUAL "vita" OR PLATFORM STREQUAL "swi
          set(ENABLE_ASAN_DEFAULT OFF)
      endif()
      set(ENABLE_ASAN ${ENABLE_ASAN_DEFAULT} CACHE BOOL "Enable AddressSanitizer")

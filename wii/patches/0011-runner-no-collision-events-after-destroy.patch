@@ -1,9 +1,11 @@
 Reason: A collision handler that destroys self must not keep firing for everything else self overlapped this frame: AM2R's water drips multiplied and the room went to ~5 fps.
 Upstream: Engine bug on every platform - offered upstream from the session 8 fork branch. Retires this patch when merged.
 
+diff --git a/src/runner.c b/src/runner.c
+index ca91d07..656be25 100644
 --- a/src/runner.c
 +++ b/src/runner.c
-@@ -3331,6 +3331,9 @@
+@@ -3351,6 +3351,9 @@ static void dispatchCollisionEvents(Runner* runner) {
                  FlattenedCollisionEvent* evt = &eventList->events[evtIdx];
                  int32_t targetObjIndex = (int32_t) evt->targetObjectIndex;
  
@@ -13,7 +15,7 @@ Upstream: Engine bug on every platform - offered upstream from the session 8 for
                  if (0 > evt->codeId)
                      continue;
  
-@@ -3414,6 +3417,7 @@
+@@ -3437,6 +3440,7 @@ static void dispatchCollisionEvents(Runner* runner) {
                      if (traceThisPair) logInfo("  fire self->other: subtype=%d (%s) owner=%d (%s) codeId=%d codeName=%s\n", targetObjIndex, dataWin->objt.objects[targetObjIndex].name, evt->ownerObjectIndex, dataWin->objt.objects[evt->ownerObjectIndex].name, evt->codeId, dataWin->code.entries[evt->codeId].name);
  #endif
                      executeCollisionEvent(runner, self, other, targetObjIndex, evt->codeId, evt->ownerObjectIndex);

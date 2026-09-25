@@ -2,10 +2,10 @@ Reason: file_copy() builtin: AM2R writes each save to a temp file and file_copy(
 Upstream: Missing builtin, platform-neutral - offer upstream (session 8 fork branch).
 
 diff --git a/src/vm_builtins.c b/src/vm_builtins.c
-index 6d2de37..c688763 100644
+index 497b4c3..55362ce 100644
 --- a/src/vm_builtins.c
 +++ b/src/vm_builtins.c
-@@ -7984,6 +7984,22 @@ static RValue builtin_file_text_eof(VMContext* ctx, RValue* args, int32_t argCou
+@@ -8214,6 +8214,22 @@ static RValue builtin_file_text_eof(VMContext* ctx, RValue* args, int32_t argCou
      return RValue_makeBool(file->readPos >= file->contentLen);
  }
  
@@ -28,7 +28,7 @@ index 6d2de37..c688763 100644
  static RValue builtin_file_delete(VMContext* ctx, RValue* args, int32_t argCount) {
      REQUIRE_ARGC_AT_LEAST("file_delete", 1, RValue_makeUndefined());
      const char* path = (args[0].type == RVALUE_STRING ? args[0].string : "");
-@@ -21514,6 +21530,7 @@ void VMBuiltins_registerAll(VMContext* ctx) {
+@@ -21847,6 +21863,7 @@ void VMBuiltins_registerAll(VMContext* ctx) {
      VM_registerBuiltin(ctx, "file_text_write_real", builtin_file_text_write_real);
      VM_registerBuiltin(ctx, "file_text_eof", builtin_file_text_eof);
      VM_registerBuiltin(ctx, "file_delete", builtin_file_delete);

@@ -3,7 +3,7 @@
 BUTTER := third_party/butterscotch
 WII_BUILD := build/wii
 HOST_BUILD := build/host
-SHA := aee2c4b1e50d7fe9ae6d8ee78abdd92234cc3d80
+SHA := d05526846e75449295ed2596bd86e9db0108408a
 AM2R_DATA ?= working/extracted/win11
 SD_GAME := dist/apps/am2r/game
 DOLPHIN_USER := project-notes/research/evidence-I/dolphin-user
@@ -18,7 +18,7 @@ WII_CMAKE_FLAGS := \
 	-DENABLE_VM_GML_PROFILER=ON -DENABLE_VM_STUB_LOGS=ON -DENABLE_VM_TRACING=OFF \
 	-DENABLE_ASAN=OFF \
 	-DBUTTERSCOTCH_COMMIT_HASH="$(SHA)" \
-	-DBUTTERSCOTCH_COMMIT_DATE="2026-09-10"
+	-DBUTTERSCOTCH_COMMIT_DATE="2026-09-23"
 
 .PHONY: check check-bless all hello run run-wii clean wii wii-warn wii-sd sd-pack patchkit host-smoke
 

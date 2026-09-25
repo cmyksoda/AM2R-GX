@@ -1,9 +1,11 @@
 Reason: The loop creates our Wii audio system (streamed OGG + DSP mixing) when there is no miniaudio/OpenAL.
 Upstream: Port scaffolding, with the port.
 
+diff --git a/src/loop.c b/src/loop.c
+index 6a3da9e..6cbccb6 100644
 --- a/src/loop.c
 +++ b/src/loop.c
-@@ -58,6 +58,9 @@
+@@ -61,6 +61,9 @@
  #elif defined(USE_MINIAUDIO)
  #include "ma_audio_system.h"
  #endif
@@ -13,7 +15,7 @@ Upstream: Port scaffolding, with the port.
  #include "noop_audio_system.h"
  #include "stb_ds.h"
  #include "stb_image_write.h"
-@@ -580,7 +583,7 @@
+@@ -588,7 +591,7 @@ int loop(CommandLineArgs args, const char *argv0) {
              options.parseTxtr = false;
          } while(0);
  #endif
@@ -22,7 +24,7 @@ Upstream: Port scaffolding, with the port.
          if (!args.headless)
              options.parseAudo = true;
  #endif
-@@ -933,6 +936,8 @@
+@@ -941,6 +944,8 @@ int loop(CommandLineArgs args, const char *argv0) {
              audioSystem = (AudioSystem*) AlAudioSystem_create();
  #elif defined(USE_MINIAUDIO)
              audioSystem = (AudioSystem*) MaAudioSystem_create(dataWin);

@@ -2,10 +2,10 @@ Reason: The loop creates our GX renderer instead of a GL one on the Wii.
 Upstream: Port scaffolding, with the port.
 
 diff --git a/src/loop.c b/src/loop.c
-index 7a365c5..e56258f 100644
+index 2b3d959..516a5e9 100644
 --- a/src/loop.c
 +++ b/src/loop.c
-@@ -49,6 +49,9 @@
+@@ -52,6 +52,9 @@
  #ifdef ENABLE_NOOP_RENDERER
  #include "noop_renderer.h"
  #endif
@@ -15,7 +15,7 @@ index 7a365c5..e56258f 100644
  #include "overlay_file_system.h"
  #if defined(USE_OPENAL)
  #include "al_audio_system.h"
-@@ -829,11 +832,13 @@ int loop(CommandLineArgs args, const char *argv0) {
+@@ -837,11 +840,13 @@ int loop(CommandLineArgs args, const char *argv0) {
          }
  #endif
  #ifndef ENABLE_NOOP_RENDERER
@@ -29,7 +29,7 @@ index 7a365c5..e56258f 100644
  
  #ifdef ENABLE_SCREENSHOTS
          if (gfx != MODERN_GL && hmlen(args.screenshotSurfacesFrames)) {
-@@ -886,6 +891,9 @@ int loop(CommandLineArgs args, const char *argv0) {
+@@ -894,6 +899,9 @@ int loop(CommandLineArgs args, const char *argv0) {
          // NOTE: headless mode keeps rendering active (hidden window + normal renderer).
          // NOOP is a separate renderer that stubs all draw calls.
          Renderer* renderer = nullptr;
