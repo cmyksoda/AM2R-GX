@@ -19,6 +19,20 @@ int32_t Wii_objectIndex(Runner *runner, const char *name)
 	return -1;
 }
 
+int32_t Wii_varId(Runner *runner, const char *name, int32_t scope)
+{
+	DataWin *dw = runner ? runner->dataWin : NULL;
+	uint32_t i;
+
+	for (i = 0; dw && i < dw->vari.variableCount; i++) {
+		Variable *v = &dw->vari.variables[i];
+
+		if (v->instanceType == scope && v->varID >= 0 && v->name && strcmp(v->name, name) == 0)
+			return v->varID;
+	}
+	return -1;
+}
+
 /* global.controltype picks the prompt glyph set: 0 keyboard, 1 numbered pad, 2 named A/B pad.
  * check_keys resets it every step from the last input seen. Pin it to 2 after the step so prompts
  * stay the named-button set on a controller-only console. Gameplay unaffected. */

@@ -2,6 +2,7 @@
 #include "overscan.h"
 #include "png_stream.h"
 #include "am2r.h"
+#include "controls.h"
 #include "hooks.h"
 #include "wii_mem.h"
 #include "wii_paths.h"
@@ -1764,6 +1765,7 @@ static void gxBeginFrame(Renderer *renderer, int32_t gameW, int32_t gameH, int32
 	gx_setup_compose(gx, windowW, windowH);
 	Wii_hooksFrame(renderer->runner);
 	Wii_forceGamepadProfile(renderer->runner);
+	WiiControls_frame(renderer->runner);
 	appId = renderer->runner->applicationSurfaceId;
 	if (appId >= 0)
 		gx_bind_surface(gx, appId, false);

@@ -7,6 +7,8 @@ struct Runner;
 
 /* Object index by name, -1 if the data has none: 1.1 and 1.5.5 number objects differently. */
 int32_t Wii_objectIndex(struct Runner *runner, const char *name);
+/* A variable's id in one scope (-1 self, -5 global): the VM's name map keeps whichever scope the data lists first. */
+int32_t Wii_varId(struct Runner *runner, const char *name, int32_t scope);
 
 /* Pin AM2R's control-prompt profile to gamepad: the Wii is controller-only. */
 void Wii_forceGamepadProfile(struct Runner *runner);
