@@ -9,6 +9,7 @@
 
 static FILE *g_log;
 static bool g_gecko;
+static bool g_echo = true; /* stdout is the text console once one is up: the patcher's screen */
 
 bool WiiLog_open(const char *path)
 {
@@ -63,9 +64,11 @@ void platformLog(const logType type, const char *format, va_list va)
 
 	va_copy(copy, va);
 	va_copy(gecko, va);
-	fputs(prefix, stdout);
-	vfprintf(stdout, format, va);
-	fflush(stdout);
+	if (g_echo) {
+		fputs(prefix, stdout);
+		vfprintf(stdout, format, va);
+		fflush(stdout);
+	}
 
 	if (g_log) {
 		fputs(prefix, g_log);
@@ -86,4 +89,9 @@ void platformLog(const logType type, const char *format, va_list va)
 			usb_sendbuffer_safe(1, line, n);
 	}
 	va_end(gecko);
+}
+
+void WiiLog_setEcho(bool on)
+{
+	g_echo = on;
 }
