@@ -1,6 +1,11 @@
 #include "input.h"
 
 #include "input_recording.h"
+#include "warp.h"
+#include "vm.h"
+#include "stb_ds.h"
+#include "log.h"
+#include "instance.h"
 #include "overscan.h"
 #include "platformdefs.h"
 #include "runner.h"
@@ -232,6 +237,40 @@ static void overscan_input(u32 wheld, u16 gcheld)
 		(rheld ? Overscan_adjustY : Overscan_adjustV)(1);
 }
 
+/* AM2R names pad buttons by its [Extras] Controller setting, where 0 (never chosen) means Xbox names. The layouts
+ * above are exactly its Nintendo names (B bottom, A right, Y left, X top, L R ZL ZR), so 0 becomes 2 once per boot. */
+static void nintendo_names(Runner *runner)
+{
+	static bool done;
+	VMContext *vm = runner->vmContext;
+	int32_t idx = vm ? Wii_objectIndex(runner, "oControl") : -1;
+	Instance *ctl;
+	ptrdiff_t slot;
+	RValue v;
+
+	if (done || idx < 0 || !runner->instancesByExactObject || arrlen(runner->instancesByExactObject[idx]) == 0)
+		return;
+	ctl = runner->instancesByExactObject[idx][0];
+	slot = shgeti(vm->varNameMap, "mod_buttonsconfig");
+	if (slot < 0) {
+		done = true;
+		return;
+	}
+	v = Instance_getSelfVar(ctl, vm->varNameMap[slot].value);
+	if (v.type == RVALUE_UNDEFINED) { /* oControl reads the options a few frames in */
+		if (runner->frameCount > 600) {
+			logInfo("controller names: oControl.mod_buttonsconfig never set\n");
+			done = true;
+		}
+		return;
+	}
+	done = true;
+	logInfo("controller names: mod_buttonsconfig %g at frame %d%s\n", (double)RValue_toReal(v), runner->frameCount,
+	        RValue_toReal(v) == 0 ? " -> 2 (Nintendo)" : "");
+	if (RValue_toReal(v) == 0)
+		Instance_setSelfVar(ctl, vm->varNameMap[slot].value, RValue_makeInt32(2));
+}
+
 void WiiInput_init(void)
 {
 	WPAD_Init();
@@ -273,6 +312,7 @@ void WiiInput_poll(Runner *runner)
 	slot->description[sizeof(slot->description) - 1] = '\0';
 	slot->guid[0] = '\0';
 
+	nintendo_names(runner);
 	overscan_input(wheld, gcheld);
 	if (Overscan_active())
 		; /* overlay owns input; leave the slot neutral */
