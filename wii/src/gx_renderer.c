@@ -22,6 +22,7 @@
 #include <stdio.h>
 #include <math.h>
 #include <string.h>
+#include <strings.h>
 #include <ogc/lwp_watchdog.h>
 
 #define MEM_RESERVE (4u << 20) /* headroom kept free for room loads */
@@ -1680,6 +1681,60 @@ static void gx_preload_room(GxRenderer *gx)
 			ticks_to_microsecs(gettime() - t0) / 1000.0);
 }
 
+/* The effect sprites (explosions, smoke, splashes, sparks): drawn in every area but rarely, so a room's first
+ * explosion pulled their page mid-play. tools/effects_group.py packs them onto one page; keep that resident. */
+static const char *const GX_EFFECT_WORDS[] = { "expl", "smoke", "splash", "spark", "debris", "impact", "blast" };
+#define GX_EFFECT_PAGES_MAX 2 /* an older pack scatters them over ~20 pages: pinning those would starve the arena */
+
+static bool gx_contains_nocase(const char *s, const char *word)
+{
+	size_t n = strlen(word);
+
+	for (; *s; s++)
+		if (strncasecmp(s, word, n) == 0)
+			return true;
+	return false;
+}
+
+static bool gx_is_effect(const char *name)
+{
+	unsigned k;
+
+	if (!name || name[0] != 's' || gx_contains_nocase(name, "door")) /* area 4's blast door is scenery */
+		return false;
+	for (k = 0; k < sizeof GX_EFFECT_WORDS / sizeof GX_EFFECT_WORDS[0]; k++)
+		if (gx_contains_nocase(name, GX_EFFECT_WORDS[k]))
+			return true;
+	return false;
+}
+
+static void gx_pin_effects(GxRenderer *gx)
+{
+	static bool done;
+	DataWin *dw = gx->base.dataWin;
+	u8 want[PRELOAD_MAX_PAGES / 8] = { 0 };
+	uint32_t s, i, n = 0;
+
+	if (done || !dw)
+		return;
+	done = true;
+	for (s = 0; s < dw->sprt.count; s++)
+		if (gx_is_effect(dw->sprt.sprites[s].name))
+			gx_want_sprite(dw, want, (int32_t)s);
+	for (i = 0; i < gx->pageCount && i < PRELOAD_MAX_PAGES; i++)
+		n += (want[i >> 3] >> (i & 7)) & 1;
+	if (n > GX_EFFECT_PAGES_MAX) {
+		logInfo("GX: effects on %u pages, not pinned (an older texture pack)\n", n);
+		return;
+	}
+	for (i = 0; i < gx->pageCount && i < PRELOAD_MAX_PAGES; i++) {
+		if (!(want[i >> 3] & (1 << (i & 7))))
+			continue;
+		gx->pages[i].pinned = gx->pages[i].loaded || gx_load_page(gx, i);
+		logInfo("GX: effects page %u %s\n", i, gx->pages[i].pinned ? "resident" : "could not load");
+	}
+}
+
 static void gxBeginFrame(Renderer *renderer, int32_t gameW, int32_t gameH, int32_t windowW, int32_t windowH)
 {
 	GxRenderer *gx = (GxRenderer *)renderer;
@@ -1704,6 +1759,7 @@ static void gxBeginFrame(Renderer *renderer, int32_t gameW, int32_t gameH, int32
 		gx_lose_surfaces(gx);
 	if ((gx->frameCounter % 60) == 0)
 		gx_make_room(gx, MEM_RESERVE);
+	gx_pin_effects(gx);
 	gx_preload_room(gx);
 	gx_setup_compose(gx, windowW, windowH);
 	Wii_hooksFrame(renderer->runner);
