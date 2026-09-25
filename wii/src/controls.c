@@ -19,7 +19,9 @@
 /* AM2R's Control Options rows (oOptionsControl): 6 is Keyboard Settings, 7 and 9 are Android-only and already hidden. */
 #define ROW_KEYBOARD 6
 #define ROW_EXIT 10
-#define XJOY_TITLE 50 /* oOptionsXJoypad's op[] slot for its title */
+#define XJOY_VIBRATION 0 /* oOptionsXJoypad's rows */
+#define XJOY_EXIT 15
+#define XJOY_TITLE 50 /* its op[] slot for the title */
 #define GP_FACE1 32769
 #define GP_SHOULDERL 32773
 #define GP_START 32778
@@ -345,26 +347,42 @@ void WiiControls_hookScripts(VMContext *ctx)
 }
 
 /* Hidden the way the game hides its Android rows (invisible, never selected); the rows below move up a line. */
-static void hide_keyboard_row(Runner *runner, Instance *menu)
+static bool hide_row(Runner *runner, Instance *menu, int32_t hidden, int32_t last)
 {
-	RValue *edit = array_slot(runner, menu, "canedit", ROW_KEYBOARD);
+	RValue *edit = array_slot(runner, menu, "canedit", hidden);
 	float sep = (float)var_num(runner, menu, "sep", INSTANCE_SELF, 16);
 	Instance *row;
 	int32_t i;
 
 	if (!edit)
-		return;
+		return false;
 	RValue_free(edit);
 	*edit = RValue_makeInt32(0);
-	if ((row = op_row(runner, menu, ROW_KEYBOARD)))
+	if ((row = op_row(runner, menu, hidden)))
 		row->visible = false;
-	for (i = ROW_KEYBOARD + 1; i <= ROW_EXIT; i++)
+	for (i = hidden + 1; i <= last; i++)
 		if ((row = op_row(runner, menu, i))) {
 			row->y -= sep;
 			if (runner->spatialGrid)
 				SpatialGrid_markInstanceAsDirty(runner->spatialGrid, row);
 		}
-	logInfo("controls: Keyboard Settings hidden\n");
+	return true;
+}
+
+/* Rumble reaches only a GameCube pad. The cursor starts on row 0, where Left/Right would still flip the option. */
+static void hide_vibration_row(Runner *runner, Instance *menu)
+{
+	Instance *global = runner->vmContext->globalScopeInstance;
+	RValue *tip = array_slot(runner, menu, "tip", XJOY_VIBRATION + 1);
+	int32_t curropt = var_id(runner, "curropt", INSTANCE_GLOBAL), tiptext = var_id(runner, "tiptext", INSTANCE_GLOBAL);
+
+	if (!hide_row(runner, menu, XJOY_VIBRATION, XJOY_EXIT))
+		return;
+	if (curropt >= 0)
+		Instance_setSelfVar(global, curropt, RValue_makeInt32(XJOY_VIBRATION + 1));
+	if (tip && tiptext >= 0)
+		Instance_setSelfVar(global, tiptext, *tip);
+	logInfo("controls: Vibration hidden (no GameCube pad in use)\n");
 }
 
 /* "Joypad Configuration": the title the game already has, in every language, for its other pad screen. */
@@ -395,10 +413,13 @@ void WiiControls_frame(Runner *runner)
 		return;
 	if ((menu = first_instance(runner, "oOptionsControl")) && menu->instanceId != controlMenu) {
 		controlMenu = menu->instanceId;
-		hide_keyboard_row(runner, menu);
+		if (hide_row(runner, menu, ROW_KEYBOARD, ROW_EXIT))
+			logInfo("controls: Keyboard Settings hidden\n");
 	}
 	if ((menu = first_instance(runner, "oOptionsXJoypad")) && menu->instanceId != joypadMenu) {
 		joypadMenu = menu->instanceId;
 		retitle_joypad(runner, menu);
+		if (WiiInput_pad() != WII_PAD_GAMECUBE)
+			hide_vibration_row(runner, menu);
 	}
 }
