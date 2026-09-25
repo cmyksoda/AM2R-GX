@@ -46,31 +46,32 @@ static const Name nunchukNames[10] = {
 #undef T
 #undef W
 
-/* Glyphs the data lacks, built by the rules of AM2R's own (these rebuild its "LB" and "B" pixel for pixel): a grey
- * pill with 3x5 dark letters, each pill pixel under a letter pixel a shade darker; or a dark disc with white letters. */
-enum { G_L, G_R, G_ZL, G_ZR, G_Z, G_PLUS, G_MINUS, G_C, G_COUNT, G_DISC = G_C };
-static const char *const glyphText[G_COUNT] = { "L", "R", "ZL", "ZR", "Z", "+", "-", "C" };
+/* Button glyphs built by the rules of AM2R's own (they rebuild its "LB" pixel for pixel): a grey pill with 3x5 dark
+ * letters, each pill pixel under a letter pixel a shade darker. One style for every Wii button (Jaxi). */
+enum { G_A, G_B, G_X, G_Y, G_C, G_L, G_R, G_ZL, G_ZR, G_Z, G_PLUS, G_MINUS, G_COUNT };
+static const char *const glyphText[G_COUNT] = { "A", "B", "X", "Y", "C", "L", "R", "ZL", "ZR", "Z", "+", "-" };
 static const struct {
 	char ch;
 	const char *rows[5];
 } font3x5[] = {
+	{ 'A', { ".#.", "#.#", "###", "#.#", "#.#" } }, { 'B', { "##.", "#.#", "##.", "#.#", "###" } },
+	{ 'X', { "#.#", "#.#", ".#.", "#.#", "#.#" } }, { 'Y', { "#.#", "#.#", ".#.", ".#.", ".#." } },
 	{ 'L', { "#..", "#..", "#..", "#..", "###" } }, { 'R', { "##.", "#.#", "##.", "#.#", "#.#" } },
 	{ 'Z', { "###", "..#", ".#.", "#..", "###" } }, { '+', { "...", ".#.", "###", ".#.", "..." } },
 	{ '-', { "...", "...", "###", "...", "..." } }, { 'C', { "###", "#..", "#..", "#..", "###" } },
 };
-/* The game's own glyphs used for Wii buttons. */
-enum { N_A, N_B, N_X, N_Y, N_DPAD, N_UP, N_DOWN, N_COUNT };
-static const char *const gameGlyphs[N_COUNT] = { "WiiUsXJoyBtnA", "WiiUsXJoyBtnB", "WiiUsXJoyBtnX", "WiiUsXJoyBtnY",
-						  "sDPadBtn", "sBtnUp", "sBtnDown" };
+/* The game's own d-pad glyphs, for the Remote's d-pad. */
+enum { N_DPAD, N_UP, N_DOWN, N_COUNT };
+static const char *const gameGlyphs[N_COUNT] = { "sDPadBtn", "sBtnUp", "sBtnDown" };
 #define KEEP 0
 #define OURS(g) ((g) + 1)
 #define GAME(n) (-1 - (n))
-/* Slots as in the name tables; KEEP leaves AM2R's Nintendo glyph (right for the Classic's face buttons). */
-static const signed char classicGlyphs[10] = { KEEP, KEEP, KEEP, KEEP, OURS(G_L), OURS(G_R), OURS(G_ZL), OURS(G_ZR),
-					       OURS(G_MINUS), OURS(G_PLUS) };
-static const signed char gcGlyphs[10] = { GAME(N_A), GAME(N_X), GAME(N_B), GAME(N_Y), OURS(G_L), OURS(G_R), OURS(G_Z),
+/* Slots as in the name tables; KEEP leaves AM2R's own glyph. */
+static const signed char classicGlyphs[10] = { OURS(G_B), OURS(G_A), OURS(G_Y), OURS(G_X), OURS(G_L), OURS(G_R), OURS(G_ZL),
+					       OURS(G_ZR), OURS(G_MINUS), OURS(G_PLUS) };
+static const signed char gcGlyphs[10] = { OURS(G_A), OURS(G_X), OURS(G_B), OURS(G_Y), OURS(G_L), OURS(G_R), OURS(G_Z),
 					  KEEP, KEEP, KEEP };
-static const signed char nunchukGlyphs[10] = { GAME(N_A), OURS(G_C), GAME(N_B), OURS(G_MINUS), GAME(N_DPAD), OURS(G_Z),
+static const signed char nunchukGlyphs[10] = { OURS(G_A), OURS(G_C), OURS(G_B), OURS(G_MINUS), GAME(N_DPAD), OURS(G_Z),
 					       GAME(N_DPAD), GAME(N_DOWN), KEEP, OURS(G_PLUS) };
 
 /* Looked up by scope: canedit, for one, is also a global somewhere in the data, listed first. */
@@ -205,19 +206,18 @@ static char pill_base(int x, int y, int w)
 
 static int glyph_width(int g)
 {
-	return g >= G_DISC ? 7 : 4 * (int)strlen(glyphText[g]) + 3;
+	return 4 * (int)strlen(glyphText[g]) + 3;
 }
 
-/* 'c' is ink: dark on a pill, white on a disc. */
+/* 'c' is ink. */
 static void draw_glyph(uint8_t *rgba, int stride, int x0, int g)
 {
-	bool disc = g >= G_DISC;
 	int w = glyph_width(g), x, y, k;
 	char cell[7][12];
 
 	for (y = 0; y < 7; y++)
 		for (x = 0; x < w; x++)
-			cell[y][x] = !disc ? pill_base(x, y, w) : (y == 0 || y == 6) && (x == 0 || x == w - 1) ? '.' : 'a';
+			cell[y][x] = pill_base(x, y, w);
 	for (k = 0; glyphText[g][k]; k++) {
 		const char *const *rows = letter_rows(glyphText[g][k]);
 
@@ -226,14 +226,14 @@ static void draw_glyph(uint8_t *rgba, int stride, int x0, int g)
 				if (rows[y][x] == '#')
 					cell[1 + y][2 + 4 * k + x] = 'c';
 	}
-	for (y = 2; !disc && y < 5; y++)
+	for (y = 2; y < 5; y++)
 		for (x = 0; x < w; x++)
 			if (cell[y][x] == 'b' && cell[y - 1][x] == 'c')
 				cell[y][x] = 'a';
 	for (y = 0; y < 7; y++)
 		for (x = 0; x < w; x++) {
 			uint8_t *px = rgba + ((size_t)y * stride + x0 + x) * 4;
-			uint8_t v = cell[y][x] == 'a' ? (disc ? 32 : 110) : cell[y][x] == 'b' ? 145 : cell[y][x] == 'c' ? (disc ? 255 : 25) : 0;
+			uint8_t v = cell[y][x] == 'a' ? 110 : cell[y][x] == 'b' ? 145 : cell[y][x] == 'c' ? 25 : 0;
 
 			px[0] = px[1] = px[2] = v;
 			px[3] = cell[y][x] == '.' ? 0 : 255;
