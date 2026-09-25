@@ -27,9 +27,10 @@
 #define GP_START 32778
 #define NINTENDO_NAMES 2
 
-enum { SCR_DEFAULTS, SCR_NAME, SCR_SPRITE, SCR_TEXT, SCR_COUNT };
-static const char *const scriptNames[SCR_COUNT] = { "set_default_xjoypad", "get_xjoybtnname", "get_xjoybtnsprite", "get_text" };
-static int32_t scriptCode[SCR_COUNT] = { -1, -1, -1, -1 };
+enum { SCR_DEFAULTS, SCR_NAME, SCR_SPRITE, SCR_SAVE, SCR_LOAD, SCR_TEXT, SCR_COUNT };
+static const char *const scriptNames[SCR_COUNT] = { "set_default_xjoypad", "get_xjoybtnname", "get_xjoybtnsprite",
+						    "save_gameoptions", "load_gameoptions", "get_text" };
+static int32_t scriptCode[SCR_COUNT] = { -1, -1, -1, -1, -1, -1 };
 
 /* key/key2: [Buttons] strings, so the words stay in the player's language; key2 joins as "key/key2", text before a
  * key as a prefix. */
@@ -45,7 +46,7 @@ static const Name gcNames[10] = {
 	W("Start", NULL),
 };
 static const Name nunchukNames[10] = {
-	T("A"), T("C"), T("B"), T("-"), W("Up", "Down"), T("Z"), W("Left", "Right"), W("Down", NULL), T(""), T("+"),
+	T("B"), T("C"), T("A"), T("-"), W("Up", "Down"), T("Z"), W("Left", "Right"), W("Down", NULL), T(""), T("+"),
 };
 #undef T
 #undef W
@@ -76,7 +77,7 @@ static const signed char classicGlyphs[10] = { OURS(G_B), OURS(G_A), OURS(G_Y), 
 					       OURS(G_ZR), OURS(G_MINUS), OURS(G_PLUS) };
 static const signed char gcGlyphs[10] = { OURS(G_A), OURS(G_X), OURS(G_B), OURS(G_Y), OURS(G_L), OURS(G_R), OURS(G_Z),
 					  OURS(G_CDOWN), KEEP, KEEP };
-static const signed char nunchukGlyphs[10] = { OURS(G_A), OURS(G_C), OURS(G_B), OURS(G_MINUS), GAME(N_DPAD), OURS(G_Z),
+static const signed char nunchukGlyphs[10] = { OURS(G_B), OURS(G_C), OURS(G_A), OURS(G_MINUS), GAME(N_DPAD), OURS(G_Z),
 					       GAME(N_DPAD), GAME(N_DOWN), KEEP, OURS(G_PLUS) };
 
 /* Looked up by scope: canedit, for one, is also a global somewhere in the data, listed first. */
@@ -277,6 +278,26 @@ static RValue wii_set_default_xjoypad(VMContext *ctx, RValue *args, int32_t argC
 		WiiInput_applyLayout(ctx);
 		logInfo("controls: Defaults restores the Wii layout\n");
 	}
+	WiiInput_flipMenus(ctx);
+	return r;
+}
+
+/* The options file keeps the real menu slots, whichever pad is in use. */
+static RValue wii_save_gameoptions(VMContext *ctx, RValue *args, int32_t argCount)
+{
+	RValue r;
+
+	WiiInput_flipMenus(ctx);
+	r = call_script(ctx, SCR_SAVE, args, argCount);
+	WiiInput_flipMenus(ctx);
+	return r;
+}
+
+static RValue wii_load_gameoptions(VMContext *ctx, RValue *args, int32_t argCount)
+{
+	RValue r = call_script(ctx, SCR_LOAD, args, argCount);
+
+	WiiInput_flipMenus(ctx);
 	return r;
 }
 
@@ -327,7 +348,8 @@ static RValue wii_get_xjoybtnsprite(VMContext *ctx, RValue *args, int32_t argCou
 
 void WiiControls_hookScripts(VMContext *ctx)
 {
-	static const BuiltinFunc standIns[SCR_COUNT] = { wii_set_default_xjoypad, wii_get_xjoybtnname, wii_get_xjoybtnsprite, NULL };
+	static const BuiltinFunc standIns[SCR_COUNT] = { wii_set_default_xjoypad, wii_get_xjoybtnname, wii_get_xjoybtnsprite,
+							 wii_save_gameoptions, wii_load_gameoptions, NULL };
 	int k;
 
 	for (k = 0; k < SCR_COUNT; k++) {

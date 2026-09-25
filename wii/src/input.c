@@ -123,10 +123,11 @@ static const ButtonMap gcMap[] = {
 	{ 0, 0 },
 };
 /* The stick moves, so the Remote's d-pad holds the aim: up/down aim diagonally, left/right lock the aim. */
+/* A fires and B jumps like Prime; menus still take A as OK (see swap_menus). */
 static const ButtonMap nunchukMap[] = {
-	{ WPAD_BUTTON_A, SLOT_FACE1 },         /* jump, menu accept */
+	{ WPAD_BUTTON_B, SLOT_FACE1 },         /* jump */
 	{ WPAD_NUNCHUK_BUTTON_C, SLOT_FACE2 }, /* morph */
-	{ WPAD_BUTTON_B, SLOT_FACE3 },         /* fire, menu back */
+	{ WPAD_BUTTON_A, SLOT_FACE3 },         /* fire */
 	{ WPAD_BUTTON_MINUS, SLOT_FACE4 },     /* weapon select */
 	{ WPAD_NUNCHUK_BUTTON_Z, SLOT_RB },    /* arm weapon */
 	{ WPAD_BUTTON_LEFT, SLOT_LT },         /* aim lock */
@@ -182,7 +183,7 @@ static void nunchuk_xy(const joystick_t *js, float *lx, float *ly)
 	*ly = -js->mag * cosf(rad);
 }
 
-static void poll_nunchuk(GamepadSlot *slot, u32 held, const expansion_t *exp, bool twoAim)
+static void poll_nunchuk(GamepadSlot *slot, u32 held, const expansion_t *exp, bool twoAim, bool pause)
 {
 	float lx, ly;
 
@@ -196,6 +197,22 @@ static void poll_nunchuk(GamepadSlot *slot, u32 held, const expansion_t *exp, bo
 		set_btn(slot, SLOT_LB, true);
 	if (held & WPAD_BUTTON_DOWN)
 		set_btn(slot, twoAim ? SLOT_RT : SLOT_LB, true);
+	if (pause)
+		set_btn(slot, SLOT_START, true);
+}
+
+/* 1 pauses when it is let go, so holding 1 + 2 for the overscan screen doesn't pause the game on the way. */
+static bool remote_one_released(u32 wheld, bool overscan)
+{
+	static bool armed, prev;
+	bool down = wheld & WPAD_BUTTON_1, fire = !down && prev && armed;
+
+	if (down && !prev)
+		armed = true;
+	if (!down || (wheld & WPAD_BUTTON_2) || overscan)
+		armed = false;
+	prev = down;
+	return fire;
 }
 
 /* Held partway down: a long hold of a GameCube trigger to its click is tiring. */
@@ -302,6 +319,8 @@ static const struct {
 	{ "opxjoybtn_menu2", GP_FACE2, GP_FACE3 },
 };
 
+static bool defaults_done, menus_swapped;
+
 static double global_num(VMContext *vm, const char *name)
 {
 	ptrdiff_t slot = shgeti(vm->varNameMap, (char *)name);
@@ -321,6 +340,32 @@ static void set_global_num(VMContext *vm, const char *name, int value)
 		Instance_setSelfVar(vm->globalScopeInstance, vm->varNameMap[slot].value, RValue_makeInt32(value));
 }
 
+static int swap_face(int button)
+{
+	return button == GP_FACE1 ? GP_FACE3 : button == GP_FACE3 ? GP_FACE1 : button;
+}
+
+/* The Nunchuk's A and B sit on each other's slots, so while it is in use the menu bindings are held swapped too: menus,
+ * their prompts and the remap screen then all see A as OK. The options file only ever gets the real slots. */
+static void swap_menus(VMContext *vm)
+{
+	static const char *const vars[] = { "opxjoybtn_menu1", "opxjoybtn_menu2" };
+	unsigned k;
+
+	for (k = 0; k < 2; k++) {
+		double b = global_num(vm, vars[k]);
+
+		if (b >= 0)
+			set_global_num(vm, vars[k], swap_face((int)b));
+	}
+}
+
+void WiiInput_flipMenus(VMContext *vm)
+{
+	if (menus_swapped)
+		swap_menus(vm);
+}
+
 void WiiInput_applyLayout(VMContext *vm)
 {
 	unsigned k;
@@ -333,7 +378,6 @@ void WiiInput_applyLayout(VMContext *vm)
  * AM2R's Nintendo names follow the Switch layout by position, which is how the buttons are laid out above. */
 static void wii_pad_defaults(Runner *runner)
 {
-	static bool done;
 	VMContext *vm = runner->vmContext;
 	int32_t idx = vm ? Wii_objectIndex(runner, "oControl") : -1;
 	Instance *ctl;
@@ -342,7 +386,7 @@ static void wii_pad_defaults(Runner *runner)
 	bool stock = true;
 	RValue v;
 
-	if (done || idx < 0 || !vm->globalScopeInstance || !runner->instancesByExactObject ||
+	if (defaults_done || idx < 0 || !vm->globalScopeInstance || !runner->instancesByExactObject ||
 	    arrlen(runner->instancesByExactObject[idx]) == 0)
 		return;
 	ctl = runner->instancesByExactObject[idx][0];
@@ -350,7 +394,7 @@ static void wii_pad_defaults(Runner *runner)
 	v = slot >= 0 ? Instance_getSelfVar(ctl, vm->varNameMap[slot].value) : (RValue){ .type = RVALUE_UNDEFINED };
 	if (v.type == RVALUE_UNDEFINED && runner->frameCount < 600)
 		return; /* oControl reads the options a few frames in */
-	done = true;
+	defaults_done = true;
 	if (v.type != RVALUE_UNDEFINED && RValue_toReal(v) == 0)
 		Instance_setSelfVar(ctl, vm->varNameMap[slot].value, RValue_makeInt32(2));
 	for (k = 0; k < sizeof padBindings / sizeof padBindings[0]; k++)
@@ -439,6 +483,7 @@ void WiiInput_poll(Runner *runner)
 	u16 gcheld;
 	s8 sticks[3];
 	int i;
+	bool overscan, pause;
 	expansion_t exp;
 
 	if (!runner || !runner->gamepads)
@@ -471,8 +516,15 @@ void WiiInput_poll(Runner *runner)
 
 	wii_pad_defaults(runner);
 	note_pad(wheld, gcheld, sticks[2], &exp);
+	if (defaults_done && (pad_in_use == WII_PAD_NUNCHUK) != menus_swapped) {
+		swap_menus(runner->vmContext);
+		menus_swapped = !menus_swapped;
+		logInfo("menu buttons: %s\n", menus_swapped ? "Nunchuk (A = OK)" : "real");
+	}
 	drive_rumble();
+	overscan = Overscan_active();
 	overscan_input(wheld, gcheld, sticks, &exp);
+	pause = remote_one_released(wheld, overscan || Overscan_active());
 	if (Overscan_active())
 		; /* overlay owns input; leave the slot neutral */
 	else if (exp.type == WPAD_EXP_CLASSIC)
@@ -481,7 +533,7 @@ void WiiInput_poll(Runner *runner)
 		 PAD_TriggerR(0) > GC_TRIGGER_PRESS)
 		poll_gcpad(slot, gcheld, sticks, two_button_aim(runner));
 	else
-		poll_nunchuk(slot, wheld, &exp, two_button_aim(runner));
+		poll_nunchuk(slot, wheld, &exp, two_button_aim(runner), pause);
 
 	for (i = 0; i < GP_BUTTON_COUNT; i++) {
 		bool was = slot->buttonDownPrev[i];
