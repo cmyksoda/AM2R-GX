@@ -41,7 +41,7 @@
 
 static u8 *ioBuf;
 static u64 t0;
-static char errLine[128]; /* the last thing said before "FAILED", for the startup screen */
+static char errLine[200]; /* the first failure, for the startup screen: later lines are its consequences */
 static bool noSpace, ranFailed;
 /* Big buffers come from a region carved off MEM2's arena, not malloc: a heap that grows into MEM2
  * stays there, and the game would lose the MEM1 the texture arena normally claims. Ours grow down
@@ -141,7 +141,7 @@ static void xd_free(void *opaque, void *address)
 
 static void say(const char *fmt, ...)
 {
-	char line[128];
+	char line[200];
 	va_list ap;
 
 	va_start(ap, fmt);
@@ -149,8 +149,20 @@ static void say(const char *fmt, ...)
 	va_end(ap);
 	printf("%s\n", line);
 	logInfo("PATCH %6u ms: %s\n", (unsigned)ticks_to_millisecs(gettime() - t0), line);
-	if (strncmp(line, "FAILED", 6) != 0)
-		memcpy(errLine, line, sizeof errLine);
+}
+
+/* A failure in words a player can act on; only the first is kept (a statistics line once overwrote it). */
+static void fail(const char *fmt, ...)
+{
+	char line[200];
+	va_list ap;
+
+	va_start(ap, fmt);
+	vsnprintf(line, sizeof line, fmt, ap);
+	va_end(ap);
+	say("%s", line);
+	if (!errLine[0])
+		snprintf(errLine, sizeof errLine, "%s", line);
 }
 
 /* fwrite that names the one failure a player can fix: a full card. */
@@ -160,7 +172,7 @@ static size_t wr(const void *p, size_t n, FILE *f)
 
 	if (r != n && !noSpace) {
 		noSpace = errno == ENOSPC;
-		say(noSpace ? "the SD card is full" : "write error %d", errno);
+		fail(noSpace ? "the SD card is full; free some space and start again" : "could not write to the SD card (error %d)", errno);
 	}
 	return r;
 }
@@ -289,7 +301,7 @@ static bool zip_inflate(FILE *zf, u32 dataOff, u32 csize, u32 usize, int method,
 		inflateEnd(&z);
 	fclose(out);
 	if (ok && (got != usize || have != crc)) {
-		say("%s: size or checksum wrong (%u/%u bytes)", dst, (unsigned)got, (unsigned)usize);
+		fail("a file in AM2R_11.zip is damaged (%s: %u of %u bytes, or a bad checksum); download the zip again", dst, (unsigned)got, (unsigned)usize);
 		ok = false;
 	}
 	return ok;
@@ -314,7 +326,7 @@ static bool unzip_11(void)
 			break;
 	}
 	if (at < 0 || rd32le(hdr) != 0x06054b50) {
-		say("AM2R_11.zip is not a zip file");
+		fail("AM2R_11.zip is not a zip file");
 		fclose(zf);
 		return false;
 	}
@@ -356,6 +368,8 @@ static bool unzip_11(void)
 	}
 	fclose(zf);
 	say("unpacked %u files from AM2R_11.zip", (unsigned)found);
+	if (!file_exists(DATA11))
+		fail("AM2R_11.zip has no data.win at its top level; zip the game's files, not the folder they are in");
 	return file_exists(DATA11);
 }
 
@@ -417,7 +431,7 @@ static bool apply_delta(void)
 	memset(&cache, 0, sizeof cache);
 	cache.f = fopen(DATA11, "rb");
 	if (!in || !out || !cache.f) {
-		say("cannot open the delta, the 1.1 data or the output");
+		fail("cannot open patch/data.xdelta, or cannot write the new data.win");
 		return false;
 	}
 	for (i = 0; i < SRC_BLOCKS; i++) {
@@ -439,7 +453,7 @@ static bool apply_delta(void)
 	memset(&stream, 0, sizeof stream);
 	memset(&src, 0, sizeof src);
 	if (xd3_config_stream(&stream, &cfg) != 0) {
-		say("xdelta: config failed");
+		fail("the patch could not start (xdelta config)");
 		return false;
 	}
 	src.blksize = SRC_BLOCK;
@@ -471,7 +485,7 @@ static bool apply_delta(void)
 		}
 		if (ret == XD3_GOTHEADER || ret == XD3_WINSTART || ret == XD3_WINFINISH)
 			continue;
-		say("xdelta: %s (%d) - is this the right AM2R_11.zip?", xd3_errstring(&stream), ret);
+		fail("this AM2R_11.zip is not AM2R 1.1: the 1.5.5 patch does not fit it (%s)", xd3_errstring(&stream));
 		ok = false;
 	}
 	xd3_close_stream(&stream);
@@ -532,7 +546,7 @@ static bool read_plan(Plan *plan, const u8 *tpag, u32 tpagSize)
 		return false;
 	}
 	if (rd32le(hdr + 8) != (u32)crc32(0, tpag, tpagSize)) {
-		say("plan.bin was made for a different data.win");
+		fail("patch/plan.bin belongs to a different release; copy the whole release again");
 		fclose(f);
 		return false;
 	}
@@ -698,7 +712,7 @@ static bool repack(void)
 	memset(&plan, 0, sizeof plan);
 	memset(&pass, 0, sizeof pass);
 	if (!in || !find_chunks(in, &tpag, &txtr, &audo, &total)) {
-		say("1.5.5 data.win: chunk layout not understood");
+		fail("the patched data.win is not the expected AM2R 1.5.5; copy the whole release again");
 		goto done;
 	}
 	tpagBuf = (u8 *)take_top(tpag.size);
@@ -707,7 +721,7 @@ static bool repack(void)
 		goto done;
 	n = rd32le(tpagBuf);
 	if (n != plan.count) {
-		say("plan/TPAG count mismatch");
+		fail("patch/plan.bin does not match the patched data.win; copy the whole release again");
 		goto done;
 	}
 	rects = (Rect *)take_top(n * sizeof(Rect));
@@ -800,7 +814,7 @@ static bool repack(void)
 				break;
 			pass.canvas[pass.n] = (u8 *)take_top(b);
 			if (!pass.canvas[pass.n]) {
-				say("out of memory for page %u", (unsigned)(first + pass.n));
+				fail("out of memory while rebuilding texture page %u", (unsigned)(first + pass.n));
 				goto done;
 			}
 			bytes += b;
@@ -816,12 +830,12 @@ static bool repack(void)
 			fseek(in, (long)oldOff[o], SEEK_SET);
 			if (fread(blob, 1, oldOff[o + 1] - oldOff[o], in) != oldOff[o + 1] - oldOff[o] ||
 			    !WiiPng_size(blob, oldOff[o + 1] - oldOff[o], &pass.oldW, &pass.oldH)) {
-				say("old page %u unreadable", (unsigned)o);
+				fail("texture page %u of the new data.win could not be read", (unsigned)o);
 				goto done;
 			}
 			pass.oldPage = (s16)o;
 			if (!WiiPng_decodeRows(blob, oldOff[o + 1] - oldOff[o], pass_row, &pass)) {
-				say("old page %u failed to decode", (unsigned)o);
+				fail("texture page %u of the new data.win could not be decoded", (unsigned)o);
 				goto done;
 			}
 		}
@@ -972,10 +986,10 @@ bool WiiPatcher_run(void)
 
 const char *WiiPatcher_error(void)
 {
-	static char msg[160];
+	static char msg[320];
 
 	if (!ranFailed)
 		return NULL;
-	snprintf(msg, sizeof msg, "first boot failed: %s", errLine);
+	snprintf(msg, sizeof msg, "The first boot could not build AM2R 1.5.5: %s.", errLine[0] ? errLine : "see the log");
 	return msg;
 }

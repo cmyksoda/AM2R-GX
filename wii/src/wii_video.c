@@ -243,13 +243,35 @@ bool WiiVideo_console(void)
 	return true;
 }
 
-void WiiVideo_panic(const char *title, const char *body)
+/* Word-wrapped inside the margins: the console itself breaks lines mid-word at the screen's edge. */
+static void print_wrapped(const char *text, int width)
+{
+	while (*text) {
+		int n = (int)strlen(text), cut = n;
+
+		if (n > width) {
+			for (cut = width; cut > 0 && text[cut] != ' '; cut--)
+				;
+			if (cut == 0)
+				cut = width;
+		}
+		printf("  %.*s\n", cut, text);
+		text += cut;
+		while (*text == ' ')
+			text++;
+	}
+}
+
+void WiiVideo_panic(const char *title, const char *body, bool showLog)
 {
 	if (!WiiVideo_console())
 		return;
 	printf("\n\n  AM2R GX -- %s\n\n", title ? title : "fatal error");
-	if (body && *body)
-		printf("  %s\n\n", body);
-	printf("  Log: " WII_LOG_PATH "\n");
-	printf("  Hold HOME to return to the loader.\n");
+	if (body && *body) {
+		print_wrapped(body, 66);
+		printf("\n");
+	}
+	if (showLog)
+		printf("  Details: " WII_LOG_PATH "\n");
+	printf("  Hold HOME to return to the Homebrew Channel.\n");
 }

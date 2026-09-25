@@ -18,6 +18,6 @@ u32 WiiVideo_efbHeight(void);
 bool WiiVideo_isWide(void);
 /* Text console on its own XFB: the panic screen and the patcher's progress display. */
 bool WiiVideo_console(void);
-void WiiVideo_panic(const char *title, const char *body);
+void WiiVideo_panic(const char *title, const char *body, bool showLog);
 
 #endif

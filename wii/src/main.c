@@ -20,10 +20,10 @@
 
 #define SAVE_DIR WII_APP_DIR "/save"
 
-static void wait_home(const char *why)
+static void wait_home(const char *why, bool haveLog)
 {
 	logError("%s\nHold HOME to quit.\n", why);
-	WiiVideo_panic("startup failed", why);
+	WiiVideo_panic("could not start", why, haveLog);
 	while (SYS_MainLoop()) {
 		if (WiiInput_shouldQuit())
 			break;
@@ -106,14 +106,14 @@ int main(int argc, char **argv)
 	WiiMem_init();
 	WiiInput_init();
 	if (!WiiVideo_init()) {
-		wait_home("WiiVideo_init failed");
+		wait_home("the video could not start", false);
 		return 1;
 	}
 
 	/* 256 pages (1 MB) instead of libfat's 16 KB default: the game stats a file every frame, and
 	 * with the directory sectors evicted each stat cost 17 ms on a real card (vWii, session 9). */
 	if (!fatInit(256, true)) {
-		wait_home("fatInitDefault failed (no SD?)");
+		wait_home("No SD card found. Put the SD card with the apps/am2r folder into the Wii's front slot, then start AM2R GX again.", false);
 		return 1;
 	}
 
@@ -144,7 +144,9 @@ int main(int argc, char **argv)
 	WiiPatcher_run();
 	if (access(WII_DATA_WIN, R_OK) != 0) {
 		wait_home(WiiPatcher_error() ? WiiPatcher_error()
-		                             : "no game data: put your AM2R_11.zip in " WII_APP_DIR "/ (with the patch/ folder) and boot again");
+		                             : "No game data yet. Put your AM2R_11.zip (the AM2R 1.1 download) into " WII_APP_DIR
+		                               "/, next to the patch folder, and start AM2R GX again: the first boot builds AM2R 1.5.5 from it.",
+		          true);
 		WiiLog_close();
 		return 1;
 	}
@@ -177,7 +179,7 @@ int main(int argc, char **argv)
 
 	rc = loop(args, argv[0] ? argv[0] : "boot.dol");
 	if (GxRenderer_fatal())
-		wait_home(GxRenderer_fatal());
+		wait_home(GxRenderer_fatal(), true);
 	log_mallinfo("exit");
 	logInfo("loop returned %d\n", rc);
 	freeCommandLineArgs(&args);

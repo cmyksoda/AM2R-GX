@@ -804,7 +804,7 @@ static void gx_page_row(void *user, int y, const u8 *rgba, int width)
 	}
 }
 
-static char gx_fatal[160]; /* a data.win the GPU cannot draw; main shows it once the loop has ended */
+static char gx_fatal[320]; /* a data.win the GPU cannot draw; main shows it once the loop has ended */
 
 const char *GxRenderer_fatal(void)
 {
@@ -844,8 +844,9 @@ static bool gx_load_page(GxRenderer *gx, uint32_t pageId)
 	}
 	if (w > GX_MAX_TEX_DIM || h > GX_MAX_TEX_DIM) {
 		if (!gx_fatal[0]) {
-			snprintf(gx_fatal, sizeof gx_fatal, "texture page %u is %dx%d: this data.win was not repacked for the Wii "
-			         "(the first boot from AM2R_11.zip does that)", pageId, w, h);
+			snprintf(gx_fatal, sizeof gx_fatal, "This data.win was not prepared for the Wii (texture page %u is %dx%d). "
+			         "Delete sd:/apps/am2r/game/data.win, put AM2R_11.zip into sd:/apps/am2r/ and start again: "
+			         "the first boot builds a Wii-ready 1.5.5.", pageId, w, h);
 			if (gx->base.runner)
 				gx->base.runner->shouldExit = true;
 		}
