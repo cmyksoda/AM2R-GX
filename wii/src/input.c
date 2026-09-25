@@ -25,8 +25,12 @@
 #define NUNCHUK_DEADZONE 0.3f
 
 #define HOME_HOLD_FRAMES 60
+/* The GameCube pad has no HOME: X + B + Start, the reset its own games use. */
+#define GC_QUIT (PAD_BUTTON_X | PAD_BUTTON_B | PAD_BUTTON_START)
 
 static int home_held;
+static u32 polled_wheld; /* the last poll's reading, test hooks included */
+static u16 polled_gcheld;
 static WiiPad pad_in_use = WII_PAD_CLASSIC;
 static float rumble_level;
 static bool rumble_fresh, motor_on;
@@ -449,6 +453,8 @@ void WiiInput_poll(Runner *runner)
 	sticks[2] = PAD_SubStickY(0);
 	WPAD_Expansion(0, &exp);
 	Wii_hooksPad(runner, &wheld, &gcheld, &exp, sticks);
+	polled_wheld = wheld;
+	polled_gcheld = gcheld;
 
 	slot = &runner->gamepads->slots[0];
 	memcpy(slot->buttonDownPrev, slot->buttonDown, sizeof(slot->buttonDown));
@@ -492,14 +498,16 @@ void WiiInput_poll(Runner *runner)
 bool WiiInput_shouldQuit(void)
 {
 	u32 w;
+	u16 g;
 
 	if (!SYS_MainLoop())
 		return true;
 
 	WPAD_ScanPads();
 	PAD_ScanPads();
-	w = WPAD_ButtonsHeld(0);
-	if (w & (WPAD_BUTTON_HOME | WPAD_CLASSIC_BUTTON_HOME))
+	w = WPAD_ButtonsHeld(0) | polled_wheld;
+	g = PAD_ButtonsHeld(0) | polled_gcheld;
+	if ((w & (WPAD_BUTTON_HOME | WPAD_CLASSIC_BUTTON_HOME)) || (g & GC_QUIT) == GC_QUIT)
 		home_held++;
 	else
 		home_held = 0;
