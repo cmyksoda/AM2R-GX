@@ -102,10 +102,11 @@ static const ButtonMap classicMap[] = {
 	{ WPAD_CLASSIC_BUTTON_A, SLOT_FACE2 },      /* morph */
 	{ WPAD_CLASSIC_BUTTON_Y, SLOT_FACE3 },      /* fire, menu back */
 	{ WPAD_CLASSIC_BUTTON_X, SLOT_FACE4 },      /* weapon select */
-	{ WPAD_CLASSIC_BUTTON_MINUS, SLOT_FACE4 },  /* weapon select, the Select-button habit */
 	{ WPAD_CLASSIC_BUTTON_FULL_L, SLOT_LB },    /* aim diagonal */
 	{ WPAD_CLASSIC_BUTTON_FULL_R, SLOT_RB },    /* arm weapon */
 	{ WPAD_CLASSIC_BUTTON_ZL, SLOT_LT },        /* aim lock */
+	{ WPAD_CLASSIC_BUTTON_ZR, SLOT_RT },        /* Aim Down with two-button aim */
+	{ WPAD_CLASSIC_BUTTON_MINUS, SLOT_SELECT },
 	{ WPAD_CLASSIC_BUTTON_PLUS, SLOT_START },
 	{ WPAD_CLASSIC_BUTTON_HOME, SLOT_HOME },
 	{ 0, 0 },
@@ -154,7 +155,8 @@ static bool two_button_aim(Runner *runner)
 	return v.type != RVALUE_UNDEFINED && RValue_toReal(v) == 1;
 }
 
-static void poll_classic(GamepadSlot *slot, u32 held, const expansion_t *exp, bool twoAim)
+/* One slot per button: the remap screen takes the first slot it finds held, so a doubled button can't be bound. */
+static void poll_classic(GamepadSlot *slot, u32 held, const expansion_t *exp)
 {
 	float lx = 0.0f, ly = 0.0f;
 
@@ -163,8 +165,6 @@ static void poll_classic(GamepadSlot *slot, u32 held, const expansion_t *exp, bo
 	apply_move(slot, lx, ly, held & WPAD_CLASSIC_BUTTON_UP, held & WPAD_CLASSIC_BUTTON_DOWN,
 		   held & WPAD_CLASSIC_BUTTON_LEFT, held & WPAD_CLASSIC_BUTTON_RIGHT);
 	apply_map(slot, classicMap, held);
-	if (held & WPAD_CLASSIC_BUTTON_ZR) /* arm weapon again (nicer on the Pro), or Aim Down with two-button aim */
-		set_btn(slot, twoAim ? SLOT_RT : SLOT_RB, true);
 }
 
 /* Eight directions with a generous deadzone: diagonals from a thumb on a round gate come out clean. */
@@ -476,7 +476,7 @@ void WiiInput_poll(Runner *runner)
 	if (Overscan_active())
 		; /* overlay owns input; leave the slot neutral */
 	else if (exp.type == WPAD_EXP_CLASSIC)
-		poll_classic(slot, wheld, &exp, two_button_aim(runner));
+		poll_classic(slot, wheld, &exp);
 	else if (gcheld || sticks[0] || sticks[1] || gc_axis(sticks[2]) != 0.0f || PAD_TriggerL(0) > GC_TRIGGER_PRESS ||
 		 PAD_TriggerR(0) > GC_TRIGGER_PRESS)
 		poll_gcpad(slot, gcheld, sticks, two_button_aim(runner));
