@@ -102,6 +102,34 @@ static int arg_int(RValue *args, int32_t argCount, int i)
 	return i < argCount ? (int)RValue_toReal(args[i]) : 0;
 }
 
+void WiiAssets_addSprites(DataWin *dw, const uint8_t *rgba, int w, int h, const int *cellX, const int *cellW, int n,
+			  int32_t *sprites)
+{
+	int32_t page = GxRenderer_addImage(rgba, w, h);
+	int i;
+
+	for (i = 0; i < n; i++) {
+		TexturePageItem *item;
+		int32_t *tpag;
+		uint32_t slot;
+
+		sprites[i] = -1;
+		if (page < 0)
+			continue;
+		tpag = (int32_t *)safeMalloc(sizeof(int32_t));
+		*tpag = tpag_append(dw);
+		item = &dw->tpag.items[*tpag];
+		item->present = true;
+		item->sourceX = (uint16_t)cellX[i];
+		item->sourceWidth = item->targetWidth = item->boundingWidth = (uint16_t)cellW[i];
+		item->sourceHeight = item->targetHeight = item->boundingHeight = (uint16_t)h;
+		item->texturePageId = (int16_t)page;
+		slot = DataWin_allocSpriteSlot(dw, dw->sprt.parsedCount);
+		sprite_fill(&dw->sprt.sprites[slot], tpag, 1, cellW[i], h, 0, 0);
+		sprites[i] = (int32_t)slot;
+	}
+}
+
 /* sprite_add(fname, imgnumb, removeback, smooth, xorig, yorig) */
 static RValue wii_sprite_add(VMContext *ctx, RValue *args, int32_t argCount)
 {

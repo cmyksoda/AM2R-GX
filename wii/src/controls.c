@@ -1,6 +1,7 @@
 #include "controls.h"
 
 #include "am2r.h"
+#include "assets.h"
 #include "gml_array.h"
 #include "input.h"
 #include "instance.h"
@@ -20,6 +21,7 @@
 #define ROW_EXIT 10
 #define XJOY_TITLE 50 /* oOptionsXJoypad's op[] slot for its title */
 #define GP_FACE1 32769
+#define GP_SHOULDERL 32773
 #define GP_START 32778
 #define NINTENDO_NAMES 2
 
@@ -46,9 +48,36 @@ static const Name remoteNames[10] = {
 };
 #undef T
 #undef W
-/* The game's Nintendo glyphs by letter; NULL keeps the game's own glyph. */
-static const char *const gcGlyphs[4] = { "WiiUsXJoyBtnA", "WiiUsXJoyBtnX", "WiiUsXJoyBtnB", "WiiUsXJoyBtnY" };
-static const char *const nunchukGlyphs[4] = { "WiiUsXJoyBtnA", NULL, "WiiUsXJoyBtnB", NULL };
+
+/* Glyphs the data lacks, built by the rules of AM2R's own (these rebuild its "LB" and "B" pixel for pixel): a grey
+ * pill with 3x5 dark letters, each pill pixel under a letter pixel a shade darker; or a dark disc with white letters. */
+enum { G_L, G_R, G_ZL, G_ZR, G_Z, G_PLUS, G_MINUS, G_C, G_1, G_2, G_COUNT, G_DISC = G_C };
+static const char *const glyphText[G_COUNT] = { "L", "R", "ZL", "ZR", "Z", "+", "-", "C", "1", "2" };
+static const struct {
+	char ch;
+	const char *rows[5];
+} font3x5[] = {
+	{ 'L', { "#..", "#..", "#..", "#..", "###" } }, { 'R', { "##.", "#.#", "##.", "#.#", "#.#" } },
+	{ 'Z', { "###", "..#", ".#.", "#..", "###" } }, { '+', { "...", ".#.", "###", ".#.", "..." } },
+	{ '-', { "...", "...", "###", "...", "..." } }, { 'C', { "###", "#..", "#..", "#..", "###" } },
+	{ '1', { ".#.", "##.", ".#.", ".#.", "###" } }, { '2', { "##.", "..#", ".#.", "#..", "###" } },
+};
+/* The game's own glyphs used for Wii buttons. */
+enum { N_A, N_B, N_X, N_Y, N_DPAD, N_UP, N_DOWN, N_COUNT };
+static const char *const gameGlyphs[N_COUNT] = { "WiiUsXJoyBtnA", "WiiUsXJoyBtnB", "WiiUsXJoyBtnX", "WiiUsXJoyBtnY",
+						  "sDPadBtn", "sBtnUp", "sBtnDown" };
+#define KEEP 0
+#define OURS(g) ((g) + 1)
+#define GAME(n) (-1 - (n))
+/* Slots as in the name tables; KEEP leaves AM2R's Nintendo glyph (right for the Classic's face buttons). */
+static const signed char classicGlyphs[10] = { KEEP, KEEP, KEEP, KEEP, OURS(G_L), OURS(G_R), OURS(G_ZL), OURS(G_ZR),
+					       OURS(G_MINUS), OURS(G_PLUS) };
+static const signed char gcGlyphs[10] = { GAME(N_A), GAME(N_X), GAME(N_B), GAME(N_Y), OURS(G_L), OURS(G_R), OURS(G_Z),
+					  KEEP, KEEP, KEEP };
+static const signed char nunchukGlyphs[10] = { GAME(N_A), OURS(G_C), GAME(N_B), OURS(G_MINUS), GAME(N_DPAD), OURS(G_Z),
+					       GAME(N_DPAD), GAME(N_DOWN), KEEP, OURS(G_PLUS) };
+static const signed char remoteGlyphs[10] = { OURS(G_2), GAME(N_A), OURS(G_1), OURS(G_MINUS), KEEP, GAME(N_B), KEEP,
+					      KEEP, KEEP, OURS(G_PLUS) };
 
 /* Looked up by scope: canedit, for one, is also a global somewhere in the data, listed first. */
 static int32_t var_id(Runner *runner, const char *name, int32_t scope)
@@ -149,6 +178,97 @@ static bool nintendo_names(Runner *runner)
 	return var_num(runner, first_instance(runner, "oControl"), "mod_buttonsconfig", INSTANCE_SELF, 0) == NINTENDO_NAMES;
 }
 
+static const char *const *letter_rows(char ch)
+{
+	unsigned k;
+
+	for (k = 0; k < sizeof font3x5 / sizeof font3x5[0]; k++)
+		if (font3x5[k].ch == ch)
+			return font3x5[k].rows;
+	return NULL;
+}
+
+/* '.' clear, 'a' dark, 'b' light: the pill's rim is dark on its sides and along its two bottom rows. */
+static char pill_base(int x, int y, int w)
+{
+	bool edge = x == 0 || x == w - 1, next = x == 1 || x == w - 2;
+
+	switch (y) {
+	case 0:
+		return edge ? '.' : next ? 'a' : 'b';
+	case 1:
+	case 4:
+		return edge ? 'a' : 'b';
+	case 2:
+	case 3:
+		return 'b';
+	case 5:
+		return 'a';
+	default:
+		return edge ? '.' : 'a';
+	}
+}
+
+static int glyph_width(int g)
+{
+	return g >= G_DISC ? 7 : 4 * (int)strlen(glyphText[g]) + 3;
+}
+
+/* 'c' is ink: dark on a pill, white on a disc. */
+static void draw_glyph(uint8_t *rgba, int stride, int x0, int g)
+{
+	bool disc = g >= G_DISC;
+	int w = glyph_width(g), x, y, k;
+	char cell[7][12];
+
+	for (y = 0; y < 7; y++)
+		for (x = 0; x < w; x++)
+			cell[y][x] = !disc ? pill_base(x, y, w) : (y == 0 || y == 6) && (x == 0 || x == w - 1) ? '.' : 'a';
+	for (k = 0; glyphText[g][k]; k++) {
+		const char *const *rows = letter_rows(glyphText[g][k]);
+
+		for (y = 0; rows && y < 5; y++)
+			for (x = 0; x < 3; x++)
+				if (rows[y][x] == '#')
+					cell[1 + y][2 + 4 * k + x] = 'c';
+	}
+	for (y = 2; !disc && y < 5; y++)
+		for (x = 0; x < w; x++)
+			if (cell[y][x] == 'b' && cell[y - 1][x] == 'c')
+				cell[y][x] = 'a';
+	for (y = 0; y < 7; y++)
+		for (x = 0; x < w; x++) {
+			uint8_t *px = rgba + ((size_t)y * stride + x0 + x) * 4;
+			uint8_t v = cell[y][x] == 'a' ? (disc ? 32 : 110) : cell[y][x] == 'b' ? 145 : cell[y][x] == 'c' ? (disc ? 255 : 25) : 0;
+
+			px[0] = px[1] = px[2] = v;
+			px[3] = cell[y][x] == '.' ? 0 : 255;
+		}
+}
+
+static void build_glyphs(DataWin *dw, int32_t *sprites)
+{
+	int cellX[G_COUNT], cellW[G_COUNT], w = 0, g;
+	uint8_t *rgba;
+
+	for (g = 0; g < G_COUNT; g++) {
+		cellX[g] = w;
+		cellW[g] = glyph_width(g);
+		w += cellW[g] + 1;
+	}
+	rgba = (uint8_t *)safeCalloc((size_t)w * 7, 4);
+	for (g = 0; g < G_COUNT; g++)
+		draw_glyph(rgba, w, cellX[g], g);
+	WiiAssets_addSprites(dw, rgba, w, 7, cellX, cellW, G_COUNT, sprites);
+	free(rgba);
+	logInfo("controls: %d Wii button glyphs added\n", G_COUNT);
+}
+
+static bool two_button_aim(Runner *runner)
+{
+	return var_num(runner, runner->vmContext->globalScopeInstance, "opaimstyle", INSTANCE_GLOBAL, 0) == 1;
+}
+
 /* The remap screen's Defaults row: AM2R's own defaults first (vibration, deadzone, ...), then our layout on top.
  * Boot also calls this script, before the options are read; there the stock set must stay for wii_pad_defaults. */
 static RValue wii_set_default_xjoypad(VMContext *ctx, RValue *args, int32_t argCount)
@@ -176,22 +296,37 @@ static RValue wii_get_xjoybtnname(VMContext *ctx, RValue *args, int32_t argCount
 		return i == GP_START - GP_FACE1 ? RValue_makeOwnedString(safeStrdup("+")) : call_script(ctx, SCR_NAME, args, argCount);
 	n = names[i];
 	/* two-button aim: the Nunchuk's d-pad Up alone is the aim-up button */
-	if (pad == WII_PAD_NUNCHUK && n.key2 && var_num(ctx->runner, ctx->globalScopeInstance, "opaimstyle", INSTANCE_GLOBAL, 0) == 1)
+	if (pad == WII_PAD_NUNCHUK && n.key2 && two_button_aim(ctx->runner))
 		n.key2 = NULL;
 	return RValue_makeOwnedString(name_text(ctx, &n));
 }
 
 static RValue wii_get_xjoybtnsprite(VMContext *ctx, RValue *args, int32_t argCount)
 {
+	static int32_t ours[G_COUNT], game[N_COUNT];
+	static bool built;
 	WiiPad pad = WiiInput_pad();
-	const char *const *glyphs = pad == WII_PAD_GAMECUBE ? gcGlyphs : pad == WII_PAD_NUNCHUK ? nunchukGlyphs : NULL;
-	int32_t i = argCount > 0 ? RValue_toInt32(args[0]) - GP_FACE1 : -1;
-	int32_t sprite;
+	const signed char *table = pad == WII_PAD_GAMECUBE ? gcGlyphs : pad == WII_PAD_NUNCHUK ? nunchukGlyphs :
+				   pad == WII_PAD_REMOTE ? remoteGlyphs : classicGlyphs;
+	int32_t i = argCount > 0 ? RValue_toInt32(args[0]) - GP_FACE1 : -1, sprite = -1;
+	int g, k;
 
-	if (glyphs && i >= 0 && i < 4 && glyphs[i] && nintendo_names(ctx->runner) &&
-	    (sprite = Wii_spriteIndex(ctx->runner, glyphs[i])) >= 0)
-		return RValue_makeInt32(sprite);
-	return call_script(ctx, SCR_SPRITE, args, argCount);
+	if (i < 0 || i >= 10 || !nintendo_names(ctx->runner))
+		return call_script(ctx, SCR_SPRITE, args, argCount);
+	if (!built) {
+		built = true;
+		build_glyphs(ctx->dataWin, ours);
+		for (k = 0; k < N_COUNT; k++)
+			game[k] = Wii_spriteIndex(ctx->runner, gameGlyphs[k]);
+	}
+	g = table[i];
+	if (pad == WII_PAD_NUNCHUK && i == GP_SHOULDERL - GP_FACE1 && two_button_aim(ctx->runner))
+		g = GAME(N_UP);
+	if (g > 0)
+		sprite = ours[g - 1];
+	else if (g < 0)
+		sprite = game[-1 - g];
+	return sprite >= 0 ? RValue_makeInt32(sprite) : call_script(ctx, SCR_SPRITE, args, argCount);
 }
 
 void WiiControls_hookScripts(VMContext *ctx)
