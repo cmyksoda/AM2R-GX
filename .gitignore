@@ -4,7 +4,7 @@ working/
 meta.xml
 icon.png
 build/
-hello/build/
+hello/
 dist/
 *.dol
 *.elf

@@ -20,15 +20,9 @@ WII_CMAKE_FLAGS := \
 	-DBUTTERSCOTCH_COMMIT_HASH="$(SHA)" \
 	-DBUTTERSCOTCH_COMMIT_DATE="2026-09-23"
 
-.PHONY: check check-bless all hello run run-wii clean wii wii-warn wii-sd sd-pack patchkit host-smoke
+.PHONY: check check-bless all run-wii clean wii wii-warn wii-sd sd-pack patchkit host-smoke
 
-all: hello
-
-hello:
-	$(MAKE) -C hello
-
-run: hello
-	$(MAKE) -C hello run
+all: wii
 
 # Push the AM2R DOL to a networked Homebrew Channel. Needs WIILOAD=tcp:<wii-ip>.
 # Game data still comes from the SD card; profile.txt/saves land there too.
@@ -128,5 +122,4 @@ host-smoke: $(BUTTER)/CMakeLists.txt
 	cmake --build $(HOST_BUILD) -j$(shell nproc)
 
 clean:
-	$(MAKE) -C hello clean
 	rm -rf dist $(WII_BUILD) $(HOST_BUILD)
