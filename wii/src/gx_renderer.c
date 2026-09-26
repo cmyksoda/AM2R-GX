@@ -82,6 +82,8 @@ typedef struct {
 	GxTile *tiles;
 	u64 lastUsed;
 	bool retired; /* reclaimed by us: the id is never handed out again, a stale holder draws nothing */
+	int32_t sharer; /* the surface these texels are also lent to or borrowed from; 0 = none (slot 0 is never used) */
+	u16 *spare;     /* a borrower's own buffer, idle until it or its lender is written */
 } GxSurf;
 
 typedef struct {
@@ -931,6 +933,55 @@ static void gx_prep_tile_obj(GxTile *t)
 	t->objReady = true;
 }
 
+/* Before a surface's texels are written or freed it takes a buffer of its own and the other side keeps the shared one;
+ * bytes move only when the write keeps part of the old picture. */
+static void gx_unshare(GxRenderer *gx, GxSurf *s, bool keep)
+{
+	u16 *shared = s->texels;
+	GxSurf *o;
+
+	if (!s->sharer)
+		return;
+	o = &gx->surfs[s->sharer];
+	if (s->spare) {
+		s->texels = s->spare;
+		s->spare = NULL;
+	} else {
+		s->texels = o->spare;
+		o->spare = NULL;
+	}
+	s->sharer = o->sharer = 0;
+	s->objReady = o->objReady = false;
+	if (keep) {
+		memcpy(s->texels, shared, surf_bytes(s->texW, s->texH));
+		DCFlushRange(s->texels, surf_bytes(s->texW, s->texH));
+	}
+}
+
+/* A whole-surface surface_copy lends the source's texels until either side is written: the water copies the screen
+ * every step, and 410 KB of memcpy costs a Wii 4-7 ms. */
+static void gx_share(GxRenderer *gx, int32_t srcId, int32_t destId)
+{
+	GxSurf *src = &gx->surfs[srcId], *dest = &gx->surfs[destId];
+	u32 nbytes = surf_bytes(src->texW, src->texH);
+
+	if (src->sharer == destId)
+		return;
+	gx_unshare(gx, dest, false);
+	if (src->sharer) {
+		memcpy(dest->texels, src->texels, nbytes);
+		DCFlushRange(dest->texels, nbytes);
+		dest->objReady = false;
+		GX_InvalidateTexAll();
+		return;
+	}
+	dest->spare = dest->texels;
+	dest->texels = src->texels;
+	dest->sharer = srcId;
+	src->sharer = destId;
+	dest->objReady = false;
+}
+
 static void gx_flush_target(GxRenderer *gx)
 {
 	GxSurf *s;
@@ -959,6 +1010,7 @@ static void gx_flush_target(GxRenderer *gx)
 		gx->targetDirty = false;
 		return;
 	} else {
+		gx_unshare(gx, s, (s->w | s->h) & 1);
 		if (!s->texels)
 			return;
 		texels = s->texels;
@@ -1132,10 +1184,13 @@ static bool gx_bind_surface(GxRenderer *gx, int32_t id, bool restore)
 	return true;
 }
 
-static void gx_surf_release(GxSurf *s)
+static void gx_unshare(GxRenderer *gx, GxSurf *s, bool keep);
+
+static void gx_surf_release(GxRenderer *gx, GxSurf *s)
 {
 	int i, n;
 
+	gx_unshare(gx, s, false);
 	if (s->tiles) {
 		n = s->tilesX * s->tilesY;
 		for (i = 0; i < n; i++)
@@ -1171,7 +1226,7 @@ static bool gx_reclaim_surface(GxRenderer *gx)
 	logInfo("GX: reclaim idle surface %u (%dx%d, idle %u frames)\n", (unsigned)victim,
 	        (int)gx->surfs[victim].w, (int)gx->surfs[victim].h,
 	        (unsigned)(gx->frameCounter - gx->surfs[victim].lastUsed));
-	gx_surf_release(&gx->surfs[victim]);
+	gx_surf_release(gx, &gx->surfs[victim]);
 	memset(&gx->surfs[victim], 0, sizeof(GxSurf));
 	gx->surfs[victim].retired = true;
 	return true;
@@ -1260,7 +1315,7 @@ static int32_t gx_alloc_surface(GxRenderer *gx, int32_t width, int32_t height)
 		id = gx->surfCount < 1 ? 1 : (int32_t)gx->surfCount;
 		gx->surfCount = n;
 	}
-	gx_surf_release(&gx->surfs[id]);
+	gx_surf_release(gx, &gx->surfs[id]);
 	gx->surfs[id].exists = true;
 	gx->surfs[id].lastUsed = gx->frameCounter;
 	gx->surfs[id].w = width;
@@ -1548,7 +1603,7 @@ static void gxDestroy(Renderer *renderer)
 	for (i = 0; i < gx->pageCount; i++)
 		WiiMem_texFree(gx->pages[i].texels);
 	for (i = 0; i < gx->surfCount; i++)
-		gx_surf_release(&gx->surfs[i]);
+		gx_surf_release(gx, &gx->surfs[i]);
 	free(gx->pages);
 	free(gx->surfs);
 	free(gx->primVerts);
@@ -1569,7 +1624,7 @@ static void gx_lose_surfaces(GxRenderer *gx)
 	for (i = 1; i < gx->surfCount; i++) {
 		if (!gx->surfs[i].exists || (int32_t)i == appId)
 			continue;
-		gx_surf_release(&gx->surfs[i]);
+		gx_surf_release(gx, &gx->surfs[i]);
 		memset(&gx->surfs[i], 0, sizeof(GxSurf));
 		gx->surfs[i].retired = true;
 	}
@@ -3048,7 +3103,7 @@ static void gxSurfaceResize(Renderer *renderer, int32_t surfaceID, int32_t width
 	if (height < 1)
 		height = 1;
 	s = &gx->surfs[surfaceID];
-	gx_surf_release(s);
+	gx_surf_release(gx, s);
 	s->w = width;
 	s->h = height;
 	s->objReady = false;
@@ -3120,7 +3175,7 @@ static void gxSurfaceFree(Renderer *renderer, int32_t surfaceID)
 		return;
 	if (surfaceID == renderer->runner->applicationSurfaceId)
 		return;
-	gx_surf_release(&gx->surfs[surfaceID]);
+	gx_surf_release(gx, &gx->surfs[surfaceID]);
 	memset(&gx->surfs[surfaceID], 0, sizeof(GxSurf));
 }
 
@@ -3130,7 +3185,6 @@ static void gxSurfaceCopy(Renderer *renderer, int32_t destSurfaceID, int32_t des
 	GxRenderer *gx = (GxRenderer *)renderer;
 	GxSurf *src, *dest;
 	int32_t saved = gx->currentTarget;
-	u32 nbytes;
 
 	if (srcSurfaceID < 0 || destSurfaceID < 0)
 		return;
@@ -3151,11 +3205,7 @@ static void gxSurfaceCopy(Renderer *renderer, int32_t destSurfaceID, int32_t des
 
 	if (!part && destX == 0 && destY == 0 && src->w == dest->w && src->h == dest->h &&
 	    src->texels && dest->texels && src->texW == dest->texW && src->texH == dest->texH) {
-		nbytes = surf_bytes(src->texW, src->texH);
-		memcpy(dest->texels, src->texels, nbytes);
-		DCFlushRange(dest->texels, nbytes);
-		dest->objReady = false;
-		GX_InvalidateTexAll();
+		gx_share(gx, srcSurfaceID, destSurfaceID);
 		return;
 	}
 
