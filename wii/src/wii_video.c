@@ -14,6 +14,8 @@
 #define FIFO_SIZE (1024 * 1024)
 
 static GXRModeObj *rmode;
+static GXRModeObj modes[2]; /* the console's own mode, and its 240p twin */
+static bool low, lowWanted;
 static void *xfb[3];
 static u32 fb;
 static bool fifty;
@@ -40,6 +42,47 @@ static GXRModeObj *pick_mode(void)
 	return m;
 }
 
+/* 240p shows each of the game's 240 lines once (double-strike). PAL 50 Hz has only a 264-line double-strike mode,
+ * so that one is cut to 240 lines and centred. */
+static void make_240(const GXRModeObj *base, GXRModeObj *out)
+{
+	switch (base->viTVMode >> 2) {
+	case VI_PAL:
+		*out = TVPal264Ds;
+		out->efbHeight = out->xfbHeight = 240;
+		out->viHeight = 480;
+		out->viYOrigin = (VI_MAX_HEIGHT_PAL / 2 - 480 / 2) / 2;
+		break;
+	case VI_MPAL:
+		*out = TVMpal240Ds;
+		break;
+	case VI_EURGB60:
+		*out = TVEurgb60Hz240Ds;
+		break;
+	default:
+		*out = TVNtsc240Ds;
+		break;
+	}
+	out->viXOrigin = base->viXOrigin;
+	out->viWidth = base->viWidth;
+}
+
+static void setup_copy(void)
+{
+	f32 yscale;
+	u32 xfbHeight;
+
+	GX_SetViewport(0, 0, rmode->fbWidth, rmode->efbHeight, 0, 1);
+	yscale = GX_GetYScaleFactor(rmode->efbHeight, rmode->xfbHeight);
+	xfbHeight = GX_SetDispCopyYScale(yscale);
+	GX_SetScissor(0, 0, rmode->fbWidth, rmode->efbHeight);
+	GX_SetDispCopySrc(0, 0, rmode->fbWidth, rmode->efbHeight);
+	GX_SetDispCopyDst(rmode->fbWidth, xfbHeight);
+	GX_SetCopyFilter(rmode->aa, rmode->sample_pattern, GX_FALSE, rmode->vfilter);
+	GX_SetFieldMode(rmode->field_rendering,
+			((rmode->viHeight == 2 * rmode->xfbHeight) ? GX_ENABLE : GX_DISABLE));
+}
+
 /* At 50 Hz the game still steps 60 times a second: the VI shows whichever finished frame is newest at each
  * retrace, so one frame in six is never shown. A third XFB keeps the copy off the buffer being scanned out. */
 static void on_retrace(u32 count)
@@ -53,15 +96,15 @@ static void on_retrace(u32 count)
 
 bool WiiVideo_init(void)
 {
-	f32 yscale;
-	u32 xfbHeight;
 	GXColor clear = {0, 0, 0, 0};
 
 	if (inited)
 		return true;
 
 	VIDEO_Init();
-	rmode = pick_mode();
+	modes[0] = *pick_mode();
+	make_240(&modes[0], &modes[1]);
+	rmode = &modes[0];
 	/* 16:9 TVs stretch the frame; the game composes its wide view for that unless WII_WIDE_PILLARBOX is built in. */
 	wide = (CONF_GetAspectRatio() == CONF_ASPECT_16_9);
 
@@ -89,15 +132,7 @@ bool WiiVideo_init(void)
 	memset(fifo, 0, FIFO_SIZE);
 	GX_Init(fifo, FIFO_SIZE);
 	GX_SetCopyClear(clear, 0x00ffffff);
-	GX_SetViewport(0, 0, rmode->fbWidth, rmode->efbHeight, 0, 1);
-	yscale = GX_GetYScaleFactor(rmode->efbHeight, rmode->xfbHeight);
-	xfbHeight = GX_SetDispCopyYScale(yscale);
-	GX_SetScissor(0, 0, rmode->fbWidth, rmode->efbHeight);
-	GX_SetDispCopySrc(0, 0, rmode->fbWidth, rmode->efbHeight);
-	GX_SetDispCopyDst(rmode->fbWidth, xfbHeight);
-	GX_SetCopyFilter(rmode->aa, rmode->sample_pattern, GX_FALSE, rmode->vfilter);
-	GX_SetFieldMode(rmode->field_rendering,
-			((rmode->viHeight == 2 * rmode->xfbHeight) ? GX_ENABLE : GX_DISABLE));
+	setup_copy();
 	if (rmode->aa)
 		GX_SetPixelFmt(GX_PF_RGB565_Z16, GX_ZC_LINEAR);
 	else
@@ -161,6 +196,32 @@ static void present_fifty(void)
 	}
 }
 
+/* Between frames: the next one is drawn at the new height. */
+static void switch_mode(void)
+{
+	low = lowWanted;
+	rmode = &modes[low];
+	VIDEO_SetBlack(true);
+	VIDEO_Configure(rmode);
+	VIDEO_Flush();
+	VIDEO_WaitVSync();
+	if (rmode->viTVMode & VI_NON_INTERLACE)
+		VIDEO_WaitVSync();
+	setup_copy();
+	first_present = true;
+	logInfo("video: %s, %ux%u\n", low ? "240p" : "full height", rmode->fbWidth, rmode->efbHeight);
+}
+
+void WiiVideo_set240p(bool on)
+{
+	lowWanted = on;
+}
+
+bool WiiVideo_is240p(void)
+{
+	return low;
+}
+
 void WiiVideo_present(void)
 {
 	u64 t0 = gettime(), t1;
@@ -170,6 +231,8 @@ void WiiVideo_present(void)
 	if (fifty) {
 		present_fifty();
 		frame_stats(t0, t1, gettime());
+		if (lowWanted != low)
+			switch_mode();
 		return;
 	}
 	GX_CopyDisp(xfb[fb], GX_TRUE);
@@ -183,16 +246,22 @@ void WiiVideo_present(void)
 	VIDEO_WaitVSync();
 	fb ^= 1;
 	frame_stats(t0, t1, gettime());
+	if (lowWanted != low)
+		switch_mode();
 }
 
 /* VI scales the 640-wide XFB onto this many of the line's 720 pixels. Nintendo's 640 leaves
  * borders on the Wii U's HDMI path; 704 or 720 fill it (overscan.txt's third number). */
 void WiiVideo_setActiveWidth(int w)
 {
+	int k;
+
 	if (!rmode || w < 640 || w > 720 || w == rmode->viWidth)
 		return;
-	rmode->viWidth = (u16)(w & ~1);
-	rmode->viXOrigin = (u16)((720 - rmode->viWidth) / 2);
+	for (k = 0; k < 2; k++) {
+		modes[k].viWidth = (u16)(w & ~1);
+		modes[k].viXOrigin = (u16)((720 - modes[k].viWidth) / 2);
+	}
 	VIDEO_Configure(rmode);
 	VIDEO_Flush();
 	VIDEO_WaitVSync();

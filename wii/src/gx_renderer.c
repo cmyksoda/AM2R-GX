@@ -971,8 +971,8 @@ static void gx_flush_target(GxRenderer *gx)
 	}
 	if (copyW > WII_FB_W)
 		copyW = WII_FB_W;
-	if (copyH > (int)WiiVideo_efbHeight())
-		copyH = (int)WiiVideo_efbHeight();
+	if (copyH > WII_FB_H)
+		copyH = WII_FB_H;
 	copyW &= ~1;
 	copyH &= ~1;
 	if (copyW < 2 || copyH < 2 || !texels)
@@ -1075,13 +1075,14 @@ static void gx_bind_host(GxRenderer *gx)
 	/* Overscan: squeeze everything into the safe area; the border stays black
 	 * (EFB clears full each present, and the scissor clips to the viewport). */
 	int oh = Overscan_h();
-	int ov = Overscan_v();
+	/* overscan.txt counts 480-line units, so a setting covers the same part of the screen in 240p */
+	int ov = Overscan_v() * h / WII_FB_H, oy = Overscan_y() * h / WII_FB_H;
 	if (gx_pillarbox && WiiVideo_isWide()) {
 		int pw = (w * 3) / 4;
 
-		gx_viewport((w - pw) / 2 + oh + Overscan_x(), ov + Overscan_y(), pw - 2 * oh, h - 2 * ov);
+		gx_viewport((w - pw) / 2 + oh + Overscan_x(), ov + oy, pw - 2 * oh, h - 2 * ov);
 	} else {
-		gx_viewport(oh + Overscan_x(), ov + Overscan_y(), w - 2 * oh, h - 2 * ov);
+		gx_viewport(oh + Overscan_x(), ov + oy, w - 2 * oh, h - 2 * ov);
 	}
 	gx->base.CPortX = 0;
 	gx->base.CPortY = 0;
@@ -1951,6 +1952,7 @@ static void gx_draw_overscan_overlay(GxRenderer *gx)
 	float hf = 1.0f - (float)Overscan_h() / (float)OVERSCAN_MAX_H;
 	float vf = 1.0f - (float)Overscan_v() / (float)OVERSCAN_MAX_V;
 	float cl = 44.0f, ct = 7.0f;
+	float ys = LH / (float)WII_FB_H; /* the sliders keep their on-screen size in 240p */
 	int i;
 
 	gx_bind_host(gx);
@@ -1981,13 +1983,13 @@ static void gx_draw_overscan_overlay(GxRenderer *gx)
 	gx_ov_rect(LW - ct, LH - cl, ct, cl, 255, 225, 40, 255);
 
 	/* Centre lines: R + Up/Down and L + Left/Right shift the whole picture; the lines show where its middle sits. */
-	gx_ov_rect(0, cy + (float)Overscan_y() - 1, LW, 2, 255, 255, 255, 200);
+	gx_ov_rect(0, cy + (float)(Overscan_y() * (int)LH / WII_FB_H) - 1, LW, 2, 255, 255, 255, 200);
 	gx_ov_rect(cx + (float)Overscan_x() - 1, 0, 2, LH, 255, 255, 255, 200);
 	/* H slider (Left/Right) above center, V slider (Up/Down) below */
-	gx_ov_rect(cx - tlen * 0.5f, cy - 40, tlen, tthk, 30, 30, 40, 230);
-	gx_ov_rect(cx - tlen * 0.5f, cy - 40, tlen * hf, tthk, 90, 200, 255, 255);
-	gx_ov_rect(cx - tthk * 0.5f, cy + 12, tthk, tlen * 0.55f, 30, 30, 40, 230);
-	gx_ov_rect(cx - tthk * 0.5f, cy + 12, tthk, tlen * 0.55f * vf, 255, 170, 90, 255);
+	gx_ov_rect(cx - tlen * 0.5f, cy - 40 * ys, tlen, tthk * ys, 30, 30, 40, 230);
+	gx_ov_rect(cx - tlen * 0.5f, cy - 40 * ys, tlen * hf, tthk * ys, 90, 200, 255, 255);
+	gx_ov_rect(cx - tthk * 0.5f, cy + 12 * ys, tthk, tlen * 0.55f * ys, 30, 30, 40, 230);
+	gx_ov_rect(cx - tthk * 0.5f, cy + 12 * ys, tthk, tlen * 0.55f * vf * ys, 255, 170, 90, 255);
 
 	gx_apply_blend(gx);
 	GX_SetColorUpdate(gx->colorWriteR || gx->colorWriteG || gx->colorWriteB);
