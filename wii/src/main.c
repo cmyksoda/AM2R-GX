@@ -10,7 +10,6 @@
 #include "wii_paths.h"
 #include "wii_video.h"
 
-#include <fat.h>
 #include <gccore.h>
 #include <malloc.h>
 #include <stdio.h>
@@ -57,13 +56,10 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	/* 256 pages (1 MB) instead of libfat's 16 KB default: the game stats a file every frame, and
-	 * with the directory sectors evicted each stat cost 17 ms on a real card (vWii, session 9). */
-	if (!fatInit(256, true)) {
+	if (!WiiPaths_init(argc, argv)) {
 		wait_home("No SD card or USB drive found. Put the one with the apps/am2r folder into the Wii, then start AM2R GX again.", false);
 		return 1;
 	}
-	WiiPaths_init(argc, argv);
 	snprintf(saveDir, sizeof saveDir, "%s/save", WII_APP_DIR);
 	snprintf(logPath, sizeof logPath, "%s/profile.txt", WII_APP_DIR);
 
