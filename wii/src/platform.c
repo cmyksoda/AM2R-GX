@@ -70,6 +70,9 @@ static RValue wii_ini_read_real(VMContext *ctx, RValue *args, int32_t argCount)
 		return RValue_makeReal(0.0);
 	if (screen_key(args, argCount, "Scale"))
 		return RValue_makeReal(2.0);
+	/* The VSync row is the 240p switch here, under its own key: a PC config's VSync=1 must not turn it on. */
+	if (screen_key(args, argCount, "VSync"))
+		return ini_screen(ctx, engineIniReadReal, "Wii240p", 0.0);
 	if (!screen_key(args, argCount, "Widescreen"))
 		return engineIniReadReal(ctx, args, argCount);
 	/* Our own key rides along: 1 = even 3:2 box filter, 0 = plain 2,1,2,1 columns. */
@@ -98,6 +101,8 @@ static RValue wii_ini_write_real(VMContext *ctx, RValue *args, int32_t argCount)
 {
 	if (screen_key(args, argCount, "Widescreen"))
 		GxRenderer_setPillarbox(RValue_toReal(args[2]) == 0.0 && WiiVideo_isWide());
+	if (screen_key(args, argCount, "VSync"))
+		return ini_screen(ctx, engineIniWriteReal, "Wii240p", RValue_toReal(args[2]));
 	return engineIniWriteReal(ctx, args, argCount);
 }
 
@@ -113,8 +118,43 @@ static RValue stub_fullscreen_off(MAYBE_UNUSED VMContext *ctx, MAYBE_UNUSED RVal
 	return RValue_makeReal(0.0);
 }
 
-static RValue wii_display_reset(MAYBE_UNUSED VMContext *ctx, MAYBE_UNUSED RValue *args, MAYBE_UNUSED int32_t argCount)
+static int32_t getTextCode = -1;
+
+/* The Display menu's VSync row is the 240p switch here (wii_ini_read_real keeps it under its own key). */
+static RValue wii_get_text(VMContext *ctx, RValue *args, int32_t argCount)
 {
+	if (argCount >= 2 && args[0].type == RVALUE_STRING && args[1].type == RVALUE_STRING && args[0].string &&
+	    args[1].string && strcmp(args[0].string, "OptionsDisplay") == 0) {
+		if (strcmp(args[1].string, "VSync") == 0)
+			return RValue_makeOwnedString(safeStrdup("240p"));
+		if (strcmp(args[1].string, "VSync_Tip") == 0)
+			return RValue_makeOwnedString(safeStrdup("Each of the game's 240 lines drawn once, for CRT TVs"));
+	}
+	return VM_callCodeIndex(ctx, getTextCode, args, argCount);
+}
+
+static void hook_get_text(VMContext *ctx)
+{
+	ptrdiff_t s = shgeti(ctx->codeIndexByName, "get_text");
+
+	if (s < 0)
+		return;
+	getTextCode = ctx->codeIndexByName[s].value;
+	repeat(ctx->funcCallCacheCount, fi) {
+		const char *name = ctx->dataWin->func.functions[fi].name;
+
+		if (name && strcmp(name, "get_text") == 0) {
+			ctx->funcCallCache[fi].builtin = (void *)wii_get_text;
+			ctx->funcCallCache[fi].scriptCodeIndex = -1;
+		}
+	}
+}
+
+/* display_reset(aa, vsync): the game calls it at boot and when its VSync row (our 240p switch) changes. */
+static RValue wii_display_reset(MAYBE_UNUSED VMContext *ctx, RValue *args, int32_t argCount)
+{
+	if (argCount >= 2)
+		WiiVideo_set240p(RValue_toReal(args[1]) != 0.0);
 	GxRenderer_loseSurfaces();
 	return RValue_makeReal(0.0);
 }
@@ -207,6 +247,7 @@ static void register_stubs(VMContext *ctx)
 		}
 		WiiControls_hookScripts(ctx);
 		WiiSafe_hookScripts(ctx);
+		hook_get_text(ctx);
 	}
 }
 
