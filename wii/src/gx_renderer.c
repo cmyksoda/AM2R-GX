@@ -1924,7 +1924,7 @@ static void gx_ov_rect(float x, float y, float w, float h, u8 r, u8 g, u8 b, u8 
 		  r, g, b, a, r, g, b, a, r, g, b, a, r, g, b, a);
 }
 
-/* Full-screen calibration overlay (L + Down + Y): grid + a bright safe-area border to
+/* Full-screen calibration overlay (Plus + Minus, Start + Z, 1 + 2): grid + a bright safe-area border to
  * line up against the CRT edge, plus H/V magnitude sliders. Drawn in the inset viewport. */
 static void gx_draw_overscan_overlay(GxRenderer *gx)
 {
