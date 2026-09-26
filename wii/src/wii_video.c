@@ -341,6 +341,6 @@ void WiiVideo_panic(const char *title, const char *body, bool showLog)
 		printf("\n");
 	}
 	if (showLog)
-		printf("  Details: " WII_LOG_PATH "\n");
+		printf("  Details: %s/profile.txt\n", WII_APP_DIR);
 	printf("  Hold HOME to return to the Homebrew Channel.\n");
 }

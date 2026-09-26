@@ -7,15 +7,13 @@
 #include <ogc/es.h>
 #include <stdio.h>
 
-#define OVERSCAN_PATH WII_APP_DIR "/overscan.txt"
-
 static int g_h;
 static int g_v;
 static int g_y; /* vertical shift of the picture, + = down */
 static int g_x; /* horizontal shift, + = right */
 static int g_vi; /* VI active width, 0 = the mode's own */
 static bool g_active;
-static char g_path[64]; /* this console's own file; the shared overscan.txt is only a fallback */
+static char g_path[96]; /* this console's own file; the shared overscan.txt is only a fallback */
 
 /* One card can move between consoles (Jaxi's Wii and Wii U want different insets), so each
  * console keeps its own file, named by its ES device id. */
@@ -25,9 +23,9 @@ static const char *own_path(void)
 
 	if (!g_path[0]) {
 		if (ES_GetDeviceID(&id) == 0 && id)
-			snprintf(g_path, sizeof g_path, WII_APP_DIR "/overscan-%08x.txt", (unsigned)id);
+			snprintf(g_path, sizeof g_path, "%s/overscan-%08x.txt", WII_APP_DIR, (unsigned)id);
 		else
-			snprintf(g_path, sizeof g_path, OVERSCAN_PATH);
+			snprintf(g_path, sizeof g_path, "%s/overscan.txt", WII_APP_DIR);
 	}
 	return g_path;
 }
@@ -40,10 +38,12 @@ static int clampi(int v, int lo, int hi)
 void Overscan_load(void)
 {
 	FILE *f = fopen(own_path(), "r");
+	char shared[96];
 	int h = 0, v = 0, vi = 0, y = 0, x = 0, n = 0;
 
+	snprintf(shared, sizeof shared, "%s/overscan.txt", WII_APP_DIR);
 	if (!f)
-		f = fopen(OVERSCAN_PATH, "r");
+		f = fopen(shared, "r");
 	if (f) {
 		n = fscanf(f, "%d %d %d %d %d", &h, &v, &vi, &y, &x);
 		if (n >= 2) {

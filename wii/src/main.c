@@ -18,7 +18,6 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#define SAVE_DIR WII_APP_DIR "/save"
 #define AM2R_GX_VERSION "0.14.7" /* keep in step with wii/hbc/meta.xml */
 
 static void wait_home(const char *why, bool haveLog)
@@ -46,6 +45,7 @@ static void log_mallinfo(const char *when)
 
 int main(int argc, char **argv)
 {
+	static char saveDir[80], logPath[80], why[300];
 	CommandLineArgs args;
 	const char *tape;
 	int rc;
@@ -60,25 +60,28 @@ int main(int argc, char **argv)
 	/* 256 pages (1 MB) instead of libfat's 16 KB default: the game stats a file every frame, and
 	 * with the directory sectors evicted each stat cost 17 ms on a real card (vWii, session 9). */
 	if (!fatInit(256, true)) {
-		wait_home("No SD card found. Put the SD card with the apps/am2r folder into the Wii's front slot, then start AM2R GX again.", false);
+		wait_home("No SD card or USB drive found. Put the one with the apps/am2r folder into the Wii, then start AM2R GX again.", false);
 		return 1;
 	}
+	WiiPaths_init(argc, argv);
+	snprintf(saveDir, sizeof saveDir, "%s/save", WII_APP_DIR);
+	snprintf(logPath, sizeof logPath, "%s/profile.txt", WII_APP_DIR);
 
 	mkdir(WII_APP_DIR, 0777);
 	mkdir(WII_GAME_DIR, 0777);
-	mkdir(SAVE_DIR, 0777);
+	mkdir(saveDir, 0777);
 
 	if (chdir(WII_APP_DIR) != 0)
 		logWarn("chdir(%s) failed — paths stay absolute\n", WII_APP_DIR);
 
-	if (!WiiLog_open(WII_LOG_PATH))
-		logWarn("could not open %s — console only\n", WII_LOG_PATH);
+	if (!WiiLog_open(logPath))
+		logWarn("could not open %s — console only\n", logPath);
 	Wii_hooksBoot(argc, argv);
 
 	Overscan_load();
 	WiiVideo_setActiveWidth(Overscan_viWidth());
 
-	logInfo("AM2R GX " AM2R_GX_VERSION "\n");
+	logInfo("AM2R GX " AM2R_GX_VERSION " from %s\n", WII_APP_DIR);
 	logInfo("mode %ux%u xfb=%u aspect=%s\n", WiiVideo_fbWidth(), WiiVideo_efbHeight(),
 		WiiVideo_rmode() ? WiiVideo_rmode()->xfbHeight : 0,
 		WiiVideo_isWide() ? "16:9 stretch" : "4:3 fill");
@@ -86,10 +89,9 @@ int main(int argc, char **argv)
 
 	WiiPatcher_run();
 	if (access(WII_DATA_WIN, R_OK) != 0) {
-		wait_home(WiiPatcher_error() ? WiiPatcher_error()
-		                             : "No game data yet. Put your AM2R_11.zip (the AM2R 1.1 download) into " WII_APP_DIR
-		                               "/, next to the patch folder, and start AM2R GX again: the first boot builds AM2R 1.5.5 from it.",
-		          true);
+		snprintf(why, sizeof why, "No game data yet. Put your AM2R_11.zip (the AM2R 1.1 download) into %s/, next to the "
+		         "patch folder, and start AM2R GX again: the first boot builds AM2R 1.5.5 from it.", WII_APP_DIR);
+		wait_home(WiiPatcher_error() ? WiiPatcher_error() : why, true);
 		WiiLog_close();
 		return 1;
 	}
@@ -107,7 +109,7 @@ int main(int argc, char **argv)
 	args.lazyAudio = true;
 	args.renderer = NOOP;
 	args.dataWinPath = WII_DATA_WIN;
-	args.saveFolder = SAVE_DIR;
+	args.saveFolder = saveDir;
 
 	if ((tape = Wii_hooksTape())) {
 		args.playbackInputsPath = tape;

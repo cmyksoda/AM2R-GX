@@ -24,12 +24,6 @@
 #include <zlib.h>
 #include <malloc.h>
 
-#define PATCH_DIR WII_APP_DIR "/patch"
-#define XDELTA_PATH PATCH_DIR "/data.xdelta"
-#define PLAN_PATH PATCH_DIR "/plan.bin"
-#define FILES_DIR PATCH_DIR "/files"
-#define DATA11 WII_GAME_DIR "/data11.win"
-#define DATA155 WII_GAME_DIR "/data155.win"
 #define IO_CHUNK (256 << 10)
 #define SRC_BLOCK (1 << 20)
 #define SRC_BLOCKS 14 /* the delta copies from all over the 1.1 file: 8 blocks re-read 6 GB (trial 6) */
@@ -173,7 +167,8 @@ static size_t wr(const void *p, size_t n, FILE *f)
 
 	if (r != n && !noSpace) {
 		noSpace = errno == ENOSPC;
-		fail(noSpace ? "the SD card is full; free some space and start again" : "could not write to the SD card (error %d)", errno);
+		fail(noSpace ? "%s is full; free some space and start again" : "could not write to %s (error %d)",
+		     WiiPaths_media(), errno);
 	}
 	return r;
 }
@@ -234,6 +229,7 @@ static bool copy_range(FILE *in, FILE *out, u32 off, u32 len)
 /* ---- 1. the player's zip: data.win and the 1.1 music ---- */
 
 static char zipPath[300];  /* the player's AM2R 1.1 zip, whatever it ended up being called */
+static char xdeltaPath[96], planPath[96], filesDir[96], data11Path[96], data155Path[96];
 static char zipName[128];  /* its file name, for the messages */
 static char zipPrefix[96]; /* "" or "AM2R_11/": a zip of the folder instead of its contents */
 
@@ -253,9 +249,9 @@ static bool zip_entry_out(const char *name, char *out, size_t cap)
 	name += p;
 	n = strlen(name);
 	if (strcasecmp(name, "data.win") == 0)
-		snprintf(out, cap, "%s", DATA11);
+		snprintf(out, cap, "%s", data11Path);
 	else if (n > 4 && ends_with(name, ".ogg") && !strchr(name, '/'))
-		snprintf(out, cap, WII_GAME_DIR "/%s", name);
+		snprintf(out, cap, "%s/%s", WII_GAME_DIR, name);
 	else
 		return false;
 	return true;
@@ -371,26 +367,28 @@ static bool zip_find_data(FILE *zf, u32 cdOff, u32 cdN, char *prefix, size_t cap
  * (AM2R_11.zip.zip, "AM2R_11 (1).zip"). With none, a zip beside the app stands in so its problem is named. */
 static bool find_zip(void)
 {
-	static const char *dirs[] = { WII_APP_DIR, "sd:" };
-	char path[300], first[300] = "";
+	const char *dirs[] = { WII_APP_DIR, WII_DRIVE };
+	char path[300], first[300] = "", root[20];
 	struct dirent *e;
 	u32 cdOff, cdN;
 	unsigned d;
 	FILE *zf;
 	DIR *dir;
 
-	if ((zf = fopen(WII_APP_DIR "/AM2R_11.zip", "rb"))) { /* the right name wins over any other zip lying around */
+	snprintf(path, sizeof path, "%s/AM2R_11.zip", WII_APP_DIR);
+	if ((zf = fopen(path, "rb"))) { /* the right name wins over any other zip lying around */
 		bool ok = zip_directory(zf, &cdOff, &cdN) && zip_find_data(zf, cdOff, cdN, zipPrefix, sizeof zipPrefix);
 
 		fclose(zf);
-		snprintf(zipPath, sizeof zipPath, WII_APP_DIR "/AM2R_11.zip");
+		snprintf(zipPath, sizeof zipPath, "%s", path);
 		snprintf(zipName, sizeof zipName, "AM2R_11.zip");
 		if (ok)
 			return true;
 		snprintf(first, sizeof first, "%s", zipPath);
 	}
+	snprintf(root, sizeof root, "%s/", WII_DRIVE);
 	for (d = 0; d < sizeof dirs / sizeof dirs[0]; d++) {
-		if (!(dir = opendir(d == 0 ? dirs[0] : "sd:/")))
+		if (!(dir = opendir(d == 0 ? dirs[0] : root)))
 			continue;
 		while ((e = readdir(dir))) {
 			if (e->d_name[0] == '.' || !ends_with(e->d_name, ".zip"))
@@ -474,9 +472,9 @@ static bool unzip_11(void)
 	}
 	fclose(zf);
 	say("unpacked %u files from %s", (unsigned)found, zipName);
-	if (!file_exists(DATA11))
+	if (!file_exists(data11Path))
 		fail("could not unpack data.win from %s", zipName);
-	return file_exists(DATA11);
+	return file_exists(data11Path);
 }
 
 /* ---- 2. the community delta: 1.1 data.win -> 1.5.5 data.win ---- */
@@ -528,14 +526,14 @@ static bool apply_delta(void)
 	xd3_config cfg;
 	xd3_source src;
 	SrcCache cache;
-	FILE *in = fopen(XDELTA_PATH, "rb"), *out = fopen(DATA155, "wb");
+	FILE *in = fopen(xdeltaPath, "rb"), *out = fopen(data155Path, "wb");
 	long srcSize, inSize;
 	u64 written = 0;
 	bool ok = true, eof = false;
 	int i, ret;
 
 	memset(&cache, 0, sizeof cache);
-	cache.f = fopen(DATA11, "rb");
+	cache.f = fopen(data11Path, "rb");
 	if (!in || !out || !cache.f) {
 		fail("cannot open patch/data.xdelta, or cannot write the new data.win");
 		return false;
@@ -641,7 +639,7 @@ typedef struct {
 
 static bool read_plan(Plan *plan, const u8 *tpag, u32 tpagSize)
 {
-	FILE *f = fopen(PLAN_PATH, "rb");
+	FILE *f = fopen(planPath, "rb");
 	u8 hdr[20];
 	u32 pages, i;
 
@@ -805,7 +803,7 @@ static bool find_chunks(FILE *f, Chunk *tpag, Chunk *txtr, Chunk *audo, u32 *tot
 
 static bool repack(void)
 {
-	FILE *in = fopen(DATA155, "rb"), *out = NULL;
+	FILE *in = fopen(data155Path, "rb"), *out = NULL;
 	Chunk tpag, txtr, audo;
 	u32 total, n, i, oldN, newN, flag = 0, entryAt, txtrBodyAt, outTxtrSize, delta, first;
 	u8 *tpagBuf = NULL, *txtrHead = NULL, *blob = NULL, *mark;
@@ -1050,7 +1048,12 @@ bool WiiPatcher_run(void)
 
 	if (file_exists(WII_DATA_WIN))
 		return true;
-	if (!file_exists(XDELTA_PATH) || !file_exists(PLAN_PATH) || !find_zip())
+	snprintf(xdeltaPath, sizeof xdeltaPath, "%s/patch/data.xdelta", WII_APP_DIR);
+	snprintf(planPath, sizeof planPath, "%s/patch/plan.bin", WII_APP_DIR);
+	snprintf(filesDir, sizeof filesDir, "%s/patch/files", WII_APP_DIR);
+	snprintf(data11Path, sizeof data11Path, "%s/data11.win", WII_GAME_DIR);
+	snprintf(data155Path, sizeof data155Path, "%s/data155.win", WII_GAME_DIR);
+	if (!file_exists(xdeltaPath) || !file_exists(planPath) || !find_zip())
 		return false;
 	if (!region_take()) {
 		logWarn("PATCH: not enough free MEM2 for the patcher (%u MB)\n", (unsigned)(SYS_GetArena2Size() >> 20));
@@ -1070,7 +1073,7 @@ bool WiiPatcher_run(void)
 	ok = unzip_11();
 	if (ok)
 		ok = apply_delta();
-	remove(DATA11);
+	remove(data11Path);
 	bumpLo = regionLo; /* the delta's buffers are done with; the repack starts afresh */
 	bumpHi = regionHi;
 	heap = NULL;
@@ -1078,11 +1081,14 @@ bool WiiPatcher_run(void)
 	ioBuf = (u8 *)take_top(IO_CHUNK);
 	if (ok)
 		ok = repack();
-	remove(DATA155);
-	if (ok && file_exists(FILES_DIR))
-		ok = copy_tree(FILES_DIR, WII_GAME_DIR);
+	remove(data155Path);
+	if (ok && file_exists(filesDir))
+		ok = copy_tree(filesDir, WII_GAME_DIR);
 	logInfo("PATCH heap after: arena=%d mem1_free=%u\n", mallinfo().arena, (unsigned)SYS_GetArena1Size());
-	say(ok ? "done" : "FAILED - see " WII_LOG_PATH);
+	if (ok)
+		say("done");
+	else
+		say("FAILED - see %s/profile.txt", WII_APP_DIR);
 	if (!ok)
 		remove(WII_DATA_WIN);
 	ioBuf = NULL;

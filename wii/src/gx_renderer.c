@@ -826,8 +826,8 @@ static bool gx_load_page(GxRenderer *gx, uint32_t pageId)
 	if (w > GX_MAX_TEX_DIM || h > GX_MAX_TEX_DIM) {
 		if (!gx_fatal[0]) {
 			snprintf(gx_fatal, sizeof gx_fatal, "This data.win was not prepared for the Wii (texture page %u is %dx%d). "
-			         "Delete sd:/apps/am2r/game/data.win, put AM2R_11.zip into sd:/apps/am2r/ and start again: "
-			         "the first boot builds a Wii-ready 1.5.5.", pageId, w, h);
+			         "Delete %s, put AM2R_11.zip into %s/ and start again: the first boot builds a Wii-ready 1.5.5.",
+			         pageId, w, h, WII_DATA_WIN, WII_APP_DIR);
 			if (gx->base.runner)
 				gx->base.runner->shouldExit = true;
 		}
