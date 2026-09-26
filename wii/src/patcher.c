@@ -92,7 +92,7 @@ static void *xd_alloc(void *opaque, size_t items, usize_t size)
 	for (b = heap; b; link = &b->next, b = b->next) {
 		if (b->used || b->size < bytes)
 			continue;
-		if (b->size >= bytes + hdr + 32) { /* split: the tail stays free */
+		if (b->size >= bytes + hdr + 32) {
 			HeapBlock *tail = (HeapBlock *)((u8 *)b + hdr + bytes);
 
 			tail->size = b->size - bytes - hdr;
@@ -127,7 +127,7 @@ static void xd_free(void *opaque, void *address)
 	if (!b)
 		return;
 	b->used = false;
-	for (n = heap; n; n = n->next) /* merge runs of free neighbours */
+	for (n = heap; n; n = n->next)
 		while (!n->used && n->next && !n->next->used) {
 			n->size += hdr + n->next->size;
 			n->next = n->next->next;

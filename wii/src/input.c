@@ -92,8 +92,7 @@ static void apply_move(GamepadSlot *slot, float lx, float ly, bool up, bool down
 
 /* Every controller reaches the game only as its gamepad (keyboard keys alongside doubled actions, session 12).
  * Face buttons go by position, bottom = face1, so AM2R's own remap screen names them right; the layout itself
- * lives in the game's bindings (first_run_controls): Jump face1, Fire face3, Morph face2, weapon cycle face4,
- * Aim LB, Arm Weapon RB, Aim Lock LT, Aim Down RT (two-button aim only). */
+ * lives in the game's bindings (padBindings). */
 typedef struct {
 	u32 mask;
 	int slot;
