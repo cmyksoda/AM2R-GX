@@ -37,8 +37,9 @@ static int home_held;
 static u32 polled_wheld; /* the last poll's reading, test hooks included */
 static u16 polled_gcheld;
 static WiiPad pad_in_use = WII_PAD_CLASSIC;
+static bool classic_is_wiiu;
 static float rumble_level;
-static bool rumble_fresh, motor_on;
+static bool rumble_fresh, gc_motor, wiiu_motor;
 
 static void set_btn(GamepadSlot *slot, int idx, bool down)
 {
@@ -449,9 +450,10 @@ static void wii_pad_defaults(Runner *runner)
 /* Sticky: an idle frame keeps the last controller, so a GameCube player's names do not flip back when the pad rests. */
 static void note_pad(u32 wheld, u16 gcheld, s8 csticky, const expansion_t *exp)
 {
-	if (exp->type == WPAD_EXP_CLASSIC)
+	if (exp->type == WPAD_EXP_CLASSIC) {
 		pad_in_use = WII_PAD_CLASSIC;
-	else if (gcheld || fabsf(gc_axis(csticky)) > STICK_DIGITAL || PAD_TriggerL(0) > GC_TRIGGER_PRESS ||
+		classic_is_wiiu = exp->classic.type == CLASSIC_TYPE_WIIU;
+	} else if (gcheld || fabsf(gc_axis(csticky)) > STICK_DIGITAL || PAD_TriggerL(0) > GC_TRIGGER_PRESS ||
 		 PAD_TriggerR(0) > GC_TRIGGER_PRESS)
 		pad_in_use = WII_PAD_GAMECUBE;
 	else if ((wheld & ~(u32)(WPAD_BUTTON_HOME)) && exp->type == WPAD_EXP_NUNCHUK)
@@ -463,6 +465,12 @@ WiiPad WiiInput_pad(void)
 	return pad_in_use;
 }
 
+/* A Classic Controller would buzz the Remote it hangs from; a Wii U Pro Controller has its own motor. */
+bool WiiInput_hasRumble(void)
+{
+	return pad_in_use == WII_PAD_GAMECUBE || (pad_in_use == WII_PAD_CLASSIC && classic_is_wiiu);
+}
+
 /* AM2R calls gamepad_set_vibration every step while its Vibration option is on, so a step without a call stops. */
 void WiiInput_rumble(float left, float right)
 {
@@ -472,12 +480,27 @@ void WiiInput_rumble(float left, float right)
 	rumble_fresh = true;
 }
 
-/* Only the GameCube pad has a motor the game can reach, and it is on or off: a level is a share of frames. */
+static void set_motors(bool on)
+{
+	bool gc = on && pad_in_use == WII_PAD_GAMECUBE, wiiu = on && pad_in_use == WII_PAD_CLASSIC;
+
+	if (gc != gc_motor) {
+		PAD_ControlMotor(PAD_CHAN0, gc ? PAD_MOTOR_RUMBLE : PAD_MOTOR_STOP);
+		gc_motor = gc;
+	}
+	if (wiiu != wiiu_motor) {
+		WPAD_Rumble(WPAD_CHAN_0, wiiu);
+		wiiu_motor = wiiu;
+	}
+}
+
+/* Both motors are on or off, so a level is a share of frames. */
 static void drive_rumble(void)
 {
 	static float acc;
 	static bool active;
-	float level = rumble_fresh && pad_in_use == WII_PAD_GAMECUBE ? rumble_level : 0.0f;
+	static int frames, frames_on;
+	float level = rumble_fresh && WiiInput_hasRumble() ? rumble_level : 0.0f;
 	bool on;
 
 	rumble_fresh = false;
@@ -485,25 +508,26 @@ static void drive_rumble(void)
 		active = level > 0.0f;
 		acc = 1.0f; /* a new rumble starts with a pulse */
 		if (active)
-			logInfo("rumble on (%.2f)\n", level);
+			logInfo("rumble on (%.2f, %s)\n", level, pad_in_use == WII_PAD_GAMECUBE ? "GameCube" : "Wii U Pro");
 		else
-			logInfo("rumble off\n");
+			logInfo("rumble off (motor on %d of %d frames)\n", frames_on, frames);
+		frames = frames_on = 0;
 	} else {
 		acc += level;
 	}
 	on = active && acc >= 1.0f;
 	if (on)
 		acc -= 1.0f;
-	if (on != motor_on) {
-		PAD_ControlMotor(PAD_CHAN0, on ? PAD_MOTOR_RUMBLE : PAD_MOTOR_STOP);
-		motor_on = on;
-	}
+	frames += active;
+	frames_on += on;
+	set_motors(on);
 }
 
 void WiiInput_stopRumble(void)
 {
 	PAD_ControlMotor(PAD_CHAN0, PAD_MOTOR_STOP_HARD);
-	motor_on = false;
+	WPAD_Rumble(WPAD_CHAN_0, 0);
+	gc_motor = wiiu_motor = false;
 }
 
 void WiiInput_init(void)

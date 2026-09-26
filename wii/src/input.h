@@ -13,6 +13,7 @@ void WiiInput_init(void);
 void WiiInput_poll(struct Runner *runner);
 bool WiiInput_shouldQuit(void);
 WiiPad WiiInput_pad(void);
+bool WiiInput_hasRumble(void);
 void WiiInput_rumble(float left, float right); /* gamepad_set_vibration's levels, 0..1 */
 void WiiInput_stopRumble(void);
 void WiiInput_applyLayout(struct VMContext *vm);
