@@ -12,6 +12,7 @@
 #include "log.h"
 
 #define FIFO_SIZE (1024 * 1024)
+#define FIELD_NS_50 20000000ull
 
 static GXRModeObj *rmode;
 static GXRModeObj modes[2]; /* the console's own mode, and its 240p twin */
@@ -20,6 +21,7 @@ static void *xfb[3];
 static u32 fb;
 static bool fifty;
 static volatile int shownFb, queuedFb = -1;
+static volatile u32 retraces;
 static void *fifo;
 static bool inited;
 static bool first_present = true;
@@ -87,7 +89,7 @@ static void setup_copy(void)
  * retrace, so one frame in six is never shown. A third XFB keeps the copy off the buffer being scanned out. */
 static void on_retrace(u32 count)
 {
-	(void)count;
+	retraces = count;
 	if (queuedFb >= 0) {
 		shownFb = queuedFb;
 		queuedFb = -1;
@@ -163,7 +165,7 @@ static void frame_stats(u64 t0, u64 t1, u64 t2)
 		frame += us;
 		gpu += ticks_to_microsecs(t1 - t0);
 		sync += ticks_to_microsecs(t2 - t1);
-		if (us > 17500)
+		if (us > (fifty ? 20800 : 17500))
 			late++;
 		if (++n == 200) {
 			logInfo("FRAME avg %.2f ms (gpu wait %.2f, vsync wait %.2f), %u/200 late\n",
@@ -194,6 +196,40 @@ static void present_fifty(void)
 		VIDEO_Flush();
 		first_present = false;
 	}
+}
+
+/* At 50 Hz steps start on retraces too, as at 60 Hz, instead of on a timer that drifts: each retrace earns 1.2 of them,
+ * so every fifth one runs two back to back (the first never shown) and the TV sees a steady rhythm. */
+bool WiiVideo_paceStep(u64 stepNs)
+{
+	static bool primed;
+	static u32 seen;
+	static u64 paid; /* game time the retraces have paid for, in whole ns: a float credit drifted a field late */
+	u64 fps;
+	u32 rc;
+
+	if (!fifty || !stepNs)
+		return false;
+	/* The engine's step, rounded to whole steps a second: its wake-up time adds a little to each. */
+	fps = (1000000000ull + stepNs / 2) / stepNs;
+	if (!fps)
+		return false;
+	stepNs = 1000000000ull / fps;
+	for (;;) {
+		rc = retraces;
+		if (primed)
+			paid += (u64)(rc - seen) * FIELD_NS_50;
+		primed = true;
+		seen = rc;
+		if (paid >= stepNs)
+			break;
+		VIDEO_WaitVSync();
+	}
+	paid -= stepNs;
+	/* One step owed at most: a frame too heavy for its field slows the game, as at 60 Hz, rather than bursting. */
+	if (paid > stepNs)
+		paid = stepNs;
+	return true;
 }
 
 /* Between frames: the next one is drawn at the new height. */

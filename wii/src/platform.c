@@ -340,16 +340,20 @@ bool platformHandleEvents(void)
 
 void platformSleepUntil(uint64_t time)
 {
+	static uint64_t woke; /* the engine asks for woke + one step */
 	int64_t remaining = (int64_t)time - (int64_t)nowNanos();
 
-	if (remaining > 2000000) {
-		struct timespec ts;
+	if (!woke || time <= woke || !WiiVideo_paceStep(time - woke)) {
+		if (remaining > 2000000) {
+			struct timespec ts;
 
-		remaining -= 1000000;
-		ts.tv_sec = remaining / 1000000000;
-		ts.tv_nsec = remaining % 1000000000;
-		nanosleep(&ts, NULL);
+			remaining -= 1000000;
+			ts.tv_sec = remaining / 1000000000;
+			ts.tv_nsec = remaining % 1000000000;
+			nanosleep(&ts, NULL);
+		}
+		while (nowNanos() < time)
+			YIELD();
 	}
-	while (nowNanos() < time)
-		YIELD();
+	woke = nowNanos();
 }
