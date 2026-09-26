@@ -2,6 +2,7 @@
 
 #include "input_recording.h"
 #include "am2r.h"
+#include "controls.h"
 #include "vm.h"
 #include "stb_ds.h"
 #include "log.h"
@@ -381,6 +382,23 @@ static void swap_menus(VMContext *vm)
 	}
 }
 
+/* A fresh Menu Back press becomes Menu OK when an options screen has put its cursor on its Back row. */
+static void menu_back(Runner *runner, GamepadSlot *slot)
+{
+	VMContext *vm = runner->vmContext;
+	int ok, back;
+
+	if (!defaults_done || !vm || !vm->globalScopeInstance)
+		return;
+	ok = (int)global_num(vm, "opxjoybtn_menu1") - GP_FACE1;
+	back = (int)global_num(vm, "opxjoybtn_menu2") - GP_FACE1;
+	if (ok < 0 || back < 0 || ok >= GP_BUTTON_COUNT || back >= GP_BUTTON_COUNT || !slot->buttonPressed[back] ||
+	    slot->buttonDown[ok] || !WiiControls_menuBack(runner))
+		return;
+	set_btn(slot, ok, true);
+	slot->buttonPressed[ok] = true;
+}
+
 void WiiInput_flipMenus(VMContext *vm)
 {
 	if (menus_swapped)
@@ -569,6 +587,7 @@ void WiiInput_poll(Runner *runner)
 		if (!slot->buttonDown[i] && was)
 			slot->buttonReleased[i] = true;
 	}
+	menu_back(runner, slot);
 	runner->gamepads->connectedCount = 1;
 
 }

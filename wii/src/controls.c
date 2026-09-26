@@ -86,7 +86,7 @@ static int32_t var_id(Runner *runner, const char *name, int32_t scope)
 	static struct {
 		const char *name;
 		int32_t scope, id;
-	} cache[12];
+	} cache[16];
 	static unsigned used;
 	unsigned k;
 
@@ -424,6 +424,45 @@ static void retitle_joypad(Runner *runner, Instance *menu)
 		logInfo("controls: joypad screen titled \"%s\"\n", r.string);
 	}
 	RValue_free(&r);
+}
+
+/* AM2R's options screens leave only by their Back row, so Menu Back picks it. In play the pause screen already takes
+ * Menu Back out of its options, so only the title side needs this. rowVar: a screen that keeps its Back row in a variable. */
+static const struct {
+	const char *object, *rowVar;
+	int32_t row;
+} backRows[] = {
+	{ "oOptionsMain", NULL, 4 },
+	{ "oOptionsDisplay", "menuSize", 0 },
+	{ "oOptionsSound", NULL, 3 },
+	{ "oOptionsControl", NULL, ROW_EXIT },
+	{ "oOptionsXJoypad", NULL, XJOY_EXIT },
+	{ "oOptionsExtras", "lastitem", 0 },
+	{ "oOptionsGame", "lastitem", 0 },
+};
+
+bool WiiControls_menuBack(Runner *runner)
+{
+	int32_t curropt = var_id(runner, "curropt", INSTANCE_GLOBAL), row;
+	Instance *menu;
+	unsigned k;
+
+	if (curropt < 0 || first_instance(runner, "oSS_Control"))
+		return false;
+	for (k = 0; k < sizeof backRows / sizeof backRows[0]; k++) {
+		menu = first_instance(runner, backRows[k].object);
+		/* editing: a row waiting for a button to bind, which may be this very one */
+		if (!menu || var_num(runner, menu, "active", INSTANCE_SELF, 0) == 0 ||
+		    var_num(runner, menu, "editing", INSTANCE_SELF, 0) != 0)
+			continue;
+		row = backRows[k].rowVar ? (int32_t)var_num(runner, menu, backRows[k].rowVar, INSTANCE_SELF, -1) : backRows[k].row;
+		if (row < 0)
+			return false;
+		Instance_setSelfVar(runner->vmContext->globalScopeInstance, curropt, RValue_makeInt32(row));
+		logInfo("controls: Menu Back leaves %s by row %d\n", backRows[k].object, (int)row);
+		return true;
+	}
+	return false;
 }
 
 void WiiControls_frame(Runner *runner)
