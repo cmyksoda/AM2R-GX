@@ -101,6 +101,8 @@ typedef struct {
     uint32_t* blobUsed;     // per AUDO entry: tick of last play, for LRU
     uint32_t blobTick;
     uint32_t blobBytes;
+    int32_t stoppedThisStep[WII_VOICES]; // SOND indices whose effect voices were stopped since the last update
+    int stoppedCount;
 } WiiAudioSystem;
 
 static AudioSystemVtable wiiAudioVtable;
@@ -529,6 +531,7 @@ static void wiiDestroy(AudioSystem* audio) {
 
 static void wiiUpdate(AudioSystem* audio, float dt) {
     WiiAudioSystem* a = (WiiAudioSystem*) audio;
+    a->stoppedCount = 0;
     reap(a);
     for (int i = 0; i < WII_VOICES; i++) {
         WiiVoice* v = &a->voices[i];
@@ -613,8 +616,11 @@ static int32_t wiiPlaySound(AudioSystem* audio, int32_t soundIndex, MAYBE_UNUSED
 
 static void wiiStopSound(AudioSystem* audio, int32_t idOrSound) {
     WiiAudioSystem* a = (WiiAudioSystem*) audio;
-    for (int i = 0; i < WII_VOICES; i++)
-        if (voiceMatches(&a->voices[i], idOrSound)) voiceStop(&a->voices[i]);
+    for (int i = 0; i < WII_VOICES; i++) {
+        if (!voiceMatches(&a->voices[i], idOrSound)) continue;
+        if (idOrSound < INSTANCE_ID_BASE && a->stoppedCount < WII_VOICES) a->stoppedThisStep[a->stoppedCount++] = idOrSound;
+        voiceStop(&a->voices[i]);
+    }
     for (int i = 0; i < WII_STREAMS; i++)
         if (streamMatches(&a->streams[i], idOrSound)) streamStop(&a->streams[i]);
 }
@@ -624,6 +630,10 @@ static bool wiiIsPlaying(AudioSystem* audio, int32_t idOrSound) {
     WiiAudioSystem* a = (WiiAudioSystem*) audio;
     reap(a);
     if (findStream(a, idOrSound) != nullptr) return true;
+    // A stop lands at the end of the step: AM2R stops Samus's spin loop on entering water, then asks again the same step;
+    // an instant "no" restarted it under the old id, orphaned for as long as she stayed in the water.
+    for (int i = 0; i < a->stoppedCount; i++)
+        if (a->stoppedThisStep[i] == idOrSound) return true;
     WiiVoice* v = findVoice(a, idOrSound);
     if (v == nullptr) return false;
     return v->loop || v->paused || gettime() < v->freeAt;
