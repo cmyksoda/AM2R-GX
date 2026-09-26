@@ -14,6 +14,7 @@
 #define ROW_UPPER 205
 #define ROW_LOWER 220
 #define NOTIFY_HIDDEN 30 /* oNotification's offset when it is fully slid out */
+#define TITLE_MID 120 /* the title's version line is above, its links below */
 
 enum { SCR_1BUTTON, SCR_2BUTTONS, SCR_COUNT };
 static const char *const scriptNames[SCR_COUNT] = { "draw_txt_1button", "draw_txt_2buttons" };
@@ -147,7 +148,8 @@ static RValue wii_draw_txt_2buttons(VMContext *ctx, RValue *args, int32_t argCou
 /* The inventory's "[arrows] - Select item" row is a background plus a draw_text, not a prompt script: hold the arrows
  * until the text arrives, then centre the pair. */
 static BuiltinFunc engineDrawBackground, engineDrawText, engineStringWidth, engineDrawRectangle;
-static int32_t tipArrow = -2, subscreenFg = -2, optionsFg = -2;
+static BuiltinFunc engineDrawBackgroundExt, engineDrawTextColour, engineDrawRectangleColour;
+static int32_t tipArrow = -2, subscreenFg = -2, optionsFg = -2, titleBg = -2, bgVersion = -1, bgUrl = -1;
 static struct {
 	bool held;
 	RValue args[3];
@@ -211,6 +213,66 @@ static RValue wii_draw_text(VMContext *ctx, RValue *args, int32_t argCount)
 	return engineDrawText(ctx, moved, 3);
 }
 
+static const TexturePageItem *bg_item(DataWin *dw, int32_t bg)
+{
+	int32_t t = bg >= 0 && (uint32_t)bg < dw->bgnd.count ? dw->bgnd.backgrounds[bg].tpagIndex : -1;
+
+	return t >= 0 ? &dw->tpag.items[t] : NULL;
+}
+
+/* The title's corner lines: the version moves down and the links up, and their black boxes grow back out to the
+ * screen's corners instead of floating. */
+static RValue wii_draw_background_ext(VMContext *ctx, RValue *args, int32_t argCount)
+{
+	const TexturePageItem *ver = bg_item(ctx->dataWin, bgVersion), *url = bg_item(ctx->dataWin, bgUrl);
+	int32_t bg = argCount == 8 ? RValue_toInt32(args[0]) : -1;
+	double y, h;
+	RValue fill[8], out;
+
+	if (!in_object(ctx, titleBg) || !ver || !url || (bg != bgVersion && bg != bgUrl))
+		return engineDrawBackgroundExt(ctx, args, argCount);
+	memcpy(fill, args, sizeof fill);
+	if (bg == bgVersion) {
+		fill[4] = RValue_makeReal(RValue_toReal(args[4]) + (double)WII_SAFE_ROWS / ver->boundingHeight);
+		return engineDrawBackgroundExt(ctx, fill, 8);
+	}
+	y = RValue_toReal(args[2]) - WII_SAFE_ROWS;
+	h = url->boundingHeight * RValue_toReal(args[4]);
+	fill[2] = RValue_makeReal(y);
+	out = engineDrawBackgroundExt(ctx, fill, 8);
+	fill[0] = RValue_makeInt32(bgVersion);
+	fill[2] = RValue_makeReal(y + h);
+	fill[3] = RValue_makeReal(url->boundingWidth * RValue_toReal(args[3]) / ver->boundingWidth);
+	fill[4] = RValue_makeReal((double)WII_SAFE_ROWS / ver->boundingHeight);
+	engineDrawBackgroundExt(ctx, fill, 8);
+	return out;
+}
+
+static RValue wii_draw_text_colour(VMContext *ctx, RValue *args, int32_t argCount)
+{
+	RValue moved[8];
+	double y;
+
+	if (argCount != 8 || !in_object(ctx, titleBg))
+		return engineDrawTextColour(ctx, args, argCount);
+	memcpy(moved, args, sizeof moved);
+	y = RValue_toReal(args[1]);
+	moved[1] = RValue_makeReal(y < TITLE_MID ? y + WII_SAFE_ROWS : y - WII_SAFE_ROWS);
+	return engineDrawTextColour(ctx, moved, 8);
+}
+
+static RValue wii_draw_rectangle_colour(VMContext *ctx, RValue *args, int32_t argCount)
+{
+	RValue lifted[9];
+
+	if (argCount != 9 || !in_object(ctx, titleBg))
+		return engineDrawRectangleColour(ctx, args, argCount);
+	memcpy(lifted, args, sizeof lifted);
+	lifted[1] = RValue_makeReal(RValue_toReal(args[1]) - WII_SAFE_ROWS);
+	lifted[3] = RValue_makeReal(RValue_toReal(args[3]) - WII_SAFE_ROWS);
+	return engineDrawRectangleColour(ctx, lifted, 9);
+}
+
 static int32_t background_index(DataWin *dw, const char *name)
 {
 	uint32_t i;
@@ -241,6 +303,14 @@ void WiiSafe_hookScripts(VMContext *ctx)
 	}
 	if (engineDrawText && engineDrawRectangle)
 		optionsFg = Wii_objectIndex(ctx->runner, "oOptionsFG");
+	engineDrawBackgroundExt = VM_findBuiltin(ctx, "draw_background_ext");
+	engineDrawTextColour = VM_findBuiltin(ctx, "draw_text_colour");
+	engineDrawRectangleColour = VM_findBuiltin(ctx, "draw_rectangle_colour");
+	if (engineDrawBackgroundExt && engineDrawTextColour && engineDrawRectangleColour) {
+		titleBg = Wii_objectIndex(ctx->runner, "oDrawTitleBG");
+		bgVersion = background_index(ctx->dataWin, "bgVersion");
+		bgUrl = background_index(ctx->dataWin, "bgURL");
+	}
 	repeat(ctx->funcCallCacheCount, fi) {
 		const char *name = ctx->dataWin->func.functions[fi].name;
 
@@ -257,5 +327,11 @@ void WiiSafe_hookScripts(VMContext *ctx)
 			ctx->funcCallCache[fi].builtin = (void *)wii_draw_text;
 		if (optionsFg >= 0 && strcmp(name, "draw_rectangle") == 0)
 			ctx->funcCallCache[fi].builtin = (void *)wii_draw_rectangle;
+		if (titleBg >= 0 && strcmp(name, "draw_background_ext") == 0)
+			ctx->funcCallCache[fi].builtin = (void *)wii_draw_background_ext;
+		if (titleBg >= 0 && strcmp(name, "draw_text_colour") == 0)
+			ctx->funcCallCache[fi].builtin = (void *)wii_draw_text_colour;
+		if (titleBg >= 0 && strcmp(name, "draw_rectangle_colour") == 0)
+			ctx->funcCallCache[fi].builtin = (void *)wii_draw_rectangle_colour;
 	}
 }
