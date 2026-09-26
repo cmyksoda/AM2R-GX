@@ -4,6 +4,7 @@
 #include "am2r.h"
 #include "controls.h"
 #include "hooks.h"
+#include "safearea.h"
 #include "wii_mem.h"
 #include "wii_paths.h"
 #include "wii_video.h"
@@ -126,6 +127,7 @@ typedef struct {
 	 * box filter, instead of the game's blit landing at 1.5 screen pixels per game pixel. */
 	bool compose;
 	int32_t composeId;
+	int32_t guiSurf; /* oControl's HUD layer, drawn WII_SAFE_ROWS lower */
 	int32_t shPal, shGB; /* SHDR indices of the two shaders we do natively, -1 if absent */
 	int32_t palTpag; /* palette sprite bound with texture_set_stage while shPal is set */
 	int palIndex; /* column of the palette to replace with (the game always passes 1) */
@@ -1500,6 +1502,7 @@ static void gxInit(Renderer *renderer, DataWin *dataWin)
 	gx->currentTarget = HOST_TARGET;
 	gx->appSurfId = -1;
 	gx->composeId = -1;
+	gx->guiSurf = -1;
 	gx->shPal = gx->shGB = -1;
 	gx->palTpag = -1;
 	gx->palIndex = 1;
@@ -1771,6 +1774,7 @@ static void gxBeginFrame(Renderer *renderer, int32_t gameW, int32_t gameH, int32
 	Wii_hooksFrame(renderer->runner);
 	Wii_forceGamepadProfile(renderer->runner);
 	WiiControls_frame(renderer->runner);
+	gx->guiSurf = WiiSafe_guiSurface(renderer->runner);
 	appId = renderer->runner->applicationSurfaceId;
 	if (appId >= 0)
 		gx_bind_surface(gx, appId, false);
@@ -2934,6 +2938,8 @@ static void gxDrawSurfaceColor(Renderer *renderer, int32_t surfaceID, int32_t sr
 		srcWidth = s->w;
 	if (srcHeight <= 0)
 		srcHeight = s->h;
+	if (surfaceID == gx->guiSurf)
+		y += WII_SAFE_ROWS * yscale;
 	angleRad = -angleDeg * ((float)M_PI / 180.0f);
 	Matrix4f_setTransform2D(&transform, x, y, xscale, yscale, angleRad);
 	if (s->tiles) {
