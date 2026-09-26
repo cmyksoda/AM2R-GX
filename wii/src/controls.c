@@ -179,6 +179,16 @@ static bool nintendo_names(Runner *runner)
 	return var_num(runner, first_instance(runner, "oControl"), "mod_buttonsconfig", INSTANCE_SELF, 0) == NINTENDO_NAMES;
 }
 
+/* A fresh options file says Xbox; every other setting than Nintendo Pro draws buttons no Wii pad has. */
+static void pin_nintendo_names(Runner *runner)
+{
+	Instance *control = first_instance(runner, "oControl");
+	int32_t id = control ? var_id(runner, "mod_buttonsconfig", INSTANCE_SELF) : -1;
+
+	if (id >= 0 && !nintendo_names(runner))
+		Instance_setSelfVar(control, id, RValue_makeInt32(NINTENDO_NAMES));
+}
+
 static const char *const *letter_rows(char ch)
 {
 	unsigned k;
@@ -415,12 +425,16 @@ static void hide_vibration_row(Runner *runner, Instance *menu)
 	logInfo("controls: Vibration hidden (no GameCube pad in use)\n");
 }
 
-/* Fullscreen and Window Size mean nothing on a TV; the game leaves both out on Android the same way. */
-static void hide_window_rows(Runner *runner, Instance *menu)
+/* Fullscreen and Window Size mean nothing on a TV (the game leaves both out on Android the same way); Controller
+ * Tips is pinned to Nintendo Pro, the one setting that draws Wii buttons. */
+static void hide_pc_rows(Runner *runner, Instance *menu)
 {
 	int32_t full = (int32_t)var_num(runner, menu, "opFullscreen", INSTANCE_SELF, -1);
 	int32_t scale = (int32_t)var_num(runner, menu, "opScale", INSTANCE_SELF, -1);
+	int32_t tips = (int32_t)var_num(runner, menu, "opButtonType", INSTANCE_SELF, -1);
 
+	if (tips > scale && hide_row(runner, menu, "canEdit", "SPACER", tips))
+		logInfo("controls: Controller Tips hidden\n");
 	if (full != 0 || scale != 1)
 		return;
 	if (!hide_row(runner, menu, "canEdit", "SPACER", full) || !hide_row(runner, menu, "canEdit", "SPACER", scale))
@@ -494,6 +508,7 @@ void WiiControls_frame(Runner *runner)
 
 	if (!runner || !runner->vmContext)
 		return;
+	pin_nintendo_names(runner);
 	if ((menu = first_instance(runner, "oOptionsControl")) && menu->instanceId != controlMenu) {
 		controlMenu = menu->instanceId;
 		if (hide_row(runner, menu, "canedit", "sep", ROW_KEYBOARD))
@@ -501,7 +516,7 @@ void WiiControls_frame(Runner *runner)
 	}
 	if ((menu = first_instance(runner, "oOptionsDisplay")) && menu->instanceId != displayMenu) {
 		displayMenu = menu->instanceId;
-		hide_window_rows(runner, menu);
+		hide_pc_rows(runner, menu);
 	}
 	if ((menu = first_instance(runner, "oOptionsXJoypad")) && menu->instanceId != joypadMenu) {
 		joypadMenu = menu->instanceId;
