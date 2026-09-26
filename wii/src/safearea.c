@@ -51,7 +51,7 @@ int32_t WiiSafe_guiSurface(Runner *runner)
  * slid out stays below the screen. */
 float WiiSafe_lift(Runner *runner)
 {
-	static int32_t notify = -2, options, popup, offset;
+	static int32_t notify = -2, popup, offset;
 	Instance *inst = runner && runner->vmContext ? runner->vmContext->currentInstance : NULL;
 	float off;
 
@@ -59,11 +59,10 @@ float WiiSafe_lift(Runner *runner)
 		return 0.0f;
 	if (notify == -2) {
 		notify = Wii_objectIndex(runner, "oNotification");
-		options = Wii_objectIndex(runner, "oOptionsFG");
 		popup = Wii_objectIndex(runner, "oPopupText");
 		offset = Wii_varId(runner, "offset", INSTANCE_SELF);
 	}
-	if (inst->objectIndex == options || inst->objectIndex == popup)
+	if (inst->objectIndex == popup)
 		return -WII_SAFE_ROWS;
 	if (inst->objectIndex != notify || offset < 0)
 		return 0.0f;
@@ -147,16 +146,34 @@ static RValue wii_draw_txt_2buttons(VMContext *ctx, RValue *args, int32_t argCou
 
 /* The inventory's "[arrows] - Select item" row is a background plus a draw_text, not a prompt script: hold the arrows
  * until the text arrives, then centre the pair. */
-static BuiltinFunc engineDrawBackground, engineDrawText, engineStringWidth;
-static int32_t tipArrow = -2, subscreenFg;
+static BuiltinFunc engineDrawBackground, engineDrawText, engineStringWidth, engineDrawRectangle;
+static int32_t tipArrow = -2, subscreenFg = -2, optionsFg = -2;
 static struct {
 	bool held;
 	RValue args[3];
 } arrow;
 
+static bool in_object(VMContext *ctx, int32_t obj)
+{
+	return ctx->currentInstance && ctx->currentInstance->objectIndex == obj;
+}
+
 static bool in_subscreen_fg(VMContext *ctx)
 {
-	return ctx->currentInstance && ctx->currentInstance->objectIndex == subscreenFg;
+	return in_object(ctx, subscreenFg);
+}
+
+/* The options menus' tip bar: its text moves up and the bar grows up to meet it, still covering the list that scrolls
+ * beneath it down to the screen's edge. */
+static RValue wii_draw_rectangle(VMContext *ctx, RValue *args, int32_t argCount)
+{
+	RValue lifted[5];
+
+	if (argCount != 5 || !in_object(ctx, optionsFg))
+		return engineDrawRectangle(ctx, args, argCount);
+	memcpy(lifted, args, sizeof lifted);
+	lifted[1] = RValue_makeReal(RValue_toReal(args[1]) - WII_SAFE_ROWS);
+	return engineDrawRectangle(ctx, lifted, 5);
 }
 
 static RValue wii_draw_background(VMContext *ctx, RValue *args, int32_t argCount)
@@ -174,6 +191,11 @@ static RValue wii_draw_text(VMContext *ctx, RValue *args, int32_t argCount)
 	RValue w, moved[3];
 	float left, right, dx;
 
+	if (argCount == 3 && in_object(ctx, optionsFg)) {
+		memcpy(moved, args, sizeof moved);
+		moved[1] = RValue_makeReal(RValue_toReal(args[1]) - WII_SAFE_ROWS);
+		return engineDrawText(ctx, moved, 3);
+	}
 	if (!arrow.held || argCount != 3 || !in_subscreen_fg(ctx))
 		return engineDrawText(ctx, args, argCount);
 	arrow.held = false;
@@ -212,10 +234,13 @@ void WiiSafe_hookScripts(VMContext *ctx)
 	engineDrawBackground = VM_findBuiltin(ctx, "draw_background");
 	engineDrawText = VM_findBuiltin(ctx, "draw_text");
 	engineStringWidth = VM_findBuiltin(ctx, "string_width");
+	engineDrawRectangle = VM_findBuiltin(ctx, "draw_rectangle");
 	if (engineDrawBackground && engineDrawText && engineStringWidth) {
 		tipArrow = background_index(ctx->dataWin, "bg_SubScrTipArrow1");
 		subscreenFg = Wii_objectIndex(ctx->runner, "oSS_Fg");
 	}
+	if (engineDrawText && engineDrawRectangle)
+		optionsFg = Wii_objectIndex(ctx->runner, "oOptionsFG");
 	repeat(ctx->funcCallCacheCount, fi) {
 		const char *name = ctx->dataWin->func.functions[fi].name;
 
@@ -228,7 +253,9 @@ void WiiSafe_hookScripts(VMContext *ctx)
 			}
 		if (tipArrow >= 0 && strcmp(name, "draw_background") == 0)
 			ctx->funcCallCache[fi].builtin = (void *)wii_draw_background;
-		if (tipArrow >= 0 && strcmp(name, "draw_text") == 0)
+		if ((tipArrow >= 0 || optionsFg >= 0) && strcmp(name, "draw_text") == 0)
 			ctx->funcCallCache[fi].builtin = (void *)wii_draw_text;
+		if (optionsFg >= 0 && strcmp(name, "draw_rectangle") == 0)
+			ctx->funcCallCache[fi].builtin = (void *)wii_draw_rectangle;
 	}
 }
