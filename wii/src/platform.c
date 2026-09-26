@@ -9,6 +9,7 @@
 #include "runner.h"
 #include "runner_mouse.h"
 #include "rvalue.h"
+#include "safearea.h"
 #include "hooks.h"
 #include "utils.h"
 #include "vm.h"
@@ -205,6 +206,7 @@ static void register_stubs(VMContext *ctx)
 				ctx->funcCallCache[fi].builtin = (void *)b;
 		}
 		WiiControls_hookScripts(ctx);
+		WiiSafe_hookScripts(ctx);
 	}
 }
 
