@@ -1,0 +1,18 @@
+Reason: AM2R 1.5.5's language files start with a UTF-8 byte order mark, so [Header] was never found: the Display menu's Language and Author lines read "[!]", and the area-intro header pictures, matched by the Header's language name, never loaded for German, French, Spanish or Italian.
+Upstream: Engine bug on every platform (upstream main 27af0e3 still has it). Retires this patch when merged.
+
+diff --git a/src/ini.c b/src/ini.c
+index b2ad2eb..ec402ca 100644
+--- a/src/ini.c
++++ b/src/ini.c
+@@ -83,6 +83,10 @@ IniFile* Ini_parse(const char* text) {
+     IniSection* currentSection = nullptr;
+ 
+     char* line = data;
++    // GameMaker skips a UTF-8 byte order mark; without this the first section's name keeps it and is never found.
++    if ((unsigned char) line[0] == 0xEF && (unsigned char) line[1] == 0xBB && (unsigned char) line[2] == 0xBF) {
++        line += 3;
++    }
+     while (line != nullptr) {
+         // Find end of line
+         char* eol = strchr(line, '\n');
