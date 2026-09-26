@@ -217,11 +217,6 @@ void WiiVideo_set240p(bool on)
 	lowWanted = on;
 }
 
-bool WiiVideo_is240p(void)
-{
-	return low;
-}
-
 void WiiVideo_present(void)
 {
 	u64 t0 = gettime(), t1;

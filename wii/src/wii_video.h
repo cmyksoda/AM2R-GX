@@ -17,7 +17,6 @@ u32 WiiVideo_efbHeight(void);
  * (platform.c, gx_renderer.c); WII_WIDE_PILLARBOX keeps 4:3 instead. */
 bool WiiVideo_isWide(void);
 void WiiVideo_set240p(bool on); /* from the next frame on */
-bool WiiVideo_is240p(void);
 /* Text console on its own XFB: the panic screen and the patcher's progress display. */
 bool WiiVideo_console(void);
 void WiiVideo_panic(const char *title, const char *body, bool showLog);
