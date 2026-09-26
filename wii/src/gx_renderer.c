@@ -1086,6 +1086,7 @@ static bool gx_bind_surface(GxRenderer *gx, int32_t id, bool restore)
 {
 	GxSurf *s;
 	int vw, vh;
+	bool live;
 
 	if (id < 0 || (uint32_t)id >= gx->surfCount)
 		return false;
@@ -1093,13 +1094,16 @@ static bool gx_bind_surface(GxRenderer *gx, int32_t id, bool restore)
 	if (!s->exists)
 		return false;
 	s->lastUsed = gx->frameCounter;
-	if (gx->currentTarget != id)
+	/* Setting the target already in the EFB keeps drawing into it; a restore would repaint its last copy over the frame. */
+	live = gx->currentTarget == id && gx->targetBound;
+	if (!live)
 		gx_flush_target(gx);
 	gx->currentTarget = id;
 	gx->targetBound = true;
 	gx->targetDirty = false;
 	gx_cur = gx;
-	gx_pe_kick();
+	if (!live)
+		gx_pe_kick();
 	gx_draw_state(gx);
 	gx->base.CPortX = 0;
 	gx->base.CPortY = 0;
@@ -1115,7 +1119,7 @@ static bool gx_bind_surface(GxRenderer *gx, int32_t id, bool restore)
 	gx_ortho(0, (float)s->h, 0, (float)s->w);
 	/* A tiled surface is rasterized on the CPU (emit_quad) and needs no restore; the projection still
 	 * has to cover the whole surface, because the culls and the tiled-sprite spans read it. */
-	if (restore && !s->tiles)
+	if (restore && !s->tiles && !live)
 		gx_restore_surface(gx, id);
 	return true;
 }
