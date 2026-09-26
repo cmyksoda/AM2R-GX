@@ -22,6 +22,7 @@
 #define XJOY_VIBRATION 0 /* oOptionsXJoypad's rows */
 #define XJOY_EXIT 15
 #define XJOY_TITLE 50 /* its op[] slot for the title */
+#define OP_SLOTS 64 /* the options screens file rows from 0 and titles, headers and Back from 50 */
 #define GP_FACE1 32769
 #define GP_SHOULDERL 32773
 #define GP_START 32778
@@ -369,21 +370,22 @@ void WiiControls_hookScripts(VMContext *ctx)
 }
 
 /* Hidden the way the game hides its Android rows (invisible, never selected); the rows below move up a line. */
-static bool hide_row(Runner *runner, Instance *menu, int32_t hidden, int32_t last)
+/* Everything the menu keeps in op[] below the hidden row moves up a line: the rows, and the section headers and the
+ * Back row the game files at other indices. */
+static bool hide_row(Runner *runner, Instance *menu, const char *editName, const char *sepName, int32_t hidden)
 {
-	RValue *edit = array_slot(runner, menu, "canedit", hidden);
-	float sep = (float)var_num(runner, menu, "sep", INSTANCE_SELF, 16);
-	Instance *row;
+	RValue *edit = array_slot(runner, menu, editName, hidden);
+	float sep = (float)var_num(runner, menu, sepName, INSTANCE_SELF, 16);
+	Instance *gone = op_row(runner, menu, hidden), *row;
 	int32_t i;
 
-	if (!edit)
+	if (!edit || !gone)
 		return false;
 	RValue_free(edit);
 	*edit = RValue_makeInt32(0);
-	if ((row = op_row(runner, menu, hidden)))
-		row->visible = false;
-	for (i = hidden + 1; i <= last; i++)
-		if ((row = op_row(runner, menu, i))) {
+	gone->visible = false;
+	for (i = 0; i < OP_SLOTS; i++)
+		if ((row = op_row(runner, menu, i)) && row != gone && row->y > gone->y) {
 			row->y -= sep;
 			if (runner->spatialGrid)
 				SpatialGrid_markInstanceAsDirty(runner->spatialGrid, row);
@@ -391,20 +393,40 @@ static bool hide_row(Runner *runner, Instance *menu, int32_t hidden, int32_t las
 	return true;
 }
 
-/* Rumble reaches only a GameCube pad. The cursor starts on row 0, where Left/Right would still flip the option. */
-static void hide_vibration_row(Runner *runner, Instance *menu)
+/* The cursor starts on row 0; when that row is hidden, Left/Right would still flip it. */
+static void cursor_to(Runner *runner, Instance *menu, int32_t row)
 {
 	Instance *global = runner->vmContext->globalScopeInstance;
-	RValue *tip = array_slot(runner, menu, "tip", XJOY_VIBRATION + 1);
+	RValue *tip = array_slot(runner, menu, "tip", row);
 	int32_t curropt = var_id(runner, "curropt", INSTANCE_GLOBAL), tiptext = var_id(runner, "tiptext", INSTANCE_GLOBAL);
 
-	if (!hide_row(runner, menu, XJOY_VIBRATION, XJOY_EXIT))
-		return;
 	if (curropt >= 0)
-		Instance_setSelfVar(global, curropt, RValue_makeInt32(XJOY_VIBRATION + 1));
+		Instance_setSelfVar(global, curropt, RValue_makeInt32(row));
 	if (tip && tiptext >= 0)
 		Instance_setSelfVar(global, tiptext, *tip);
+}
+
+/* Rumble reaches only a GameCube pad. */
+static void hide_vibration_row(Runner *runner, Instance *menu)
+{
+	if (!hide_row(runner, menu, "canedit", "sep", XJOY_VIBRATION))
+		return;
+	cursor_to(runner, menu, XJOY_VIBRATION + 1);
 	logInfo("controls: Vibration hidden (no GameCube pad in use)\n");
+}
+
+/* Fullscreen and Window Size mean nothing on a TV; the game leaves both out on Android the same way. */
+static void hide_window_rows(Runner *runner, Instance *menu)
+{
+	int32_t full = (int32_t)var_num(runner, menu, "opFullscreen", INSTANCE_SELF, -1);
+	int32_t scale = (int32_t)var_num(runner, menu, "opScale", INSTANCE_SELF, -1);
+
+	if (full != 0 || scale != 1)
+		return;
+	if (!hide_row(runner, menu, "canEdit", "SPACER", full) || !hide_row(runner, menu, "canEdit", "SPACER", scale))
+		return;
+	cursor_to(runner, menu, scale + 1);
+	logInfo("controls: Fullscreen and Window Size hidden\n");
 }
 
 /* "Joypad Configuration": the title the game already has, in every language, for its other pad screen. */
@@ -467,15 +489,19 @@ bool WiiControls_menuBack(Runner *runner)
 
 void WiiControls_frame(Runner *runner)
 {
-	static uint32_t controlMenu, joypadMenu;
+	static uint32_t controlMenu, joypadMenu, displayMenu;
 	Instance *menu;
 
 	if (!runner || !runner->vmContext)
 		return;
 	if ((menu = first_instance(runner, "oOptionsControl")) && menu->instanceId != controlMenu) {
 		controlMenu = menu->instanceId;
-		if (hide_row(runner, menu, ROW_KEYBOARD, ROW_EXIT))
+		if (hide_row(runner, menu, "canedit", "sep", ROW_KEYBOARD))
 			logInfo("controls: Keyboard Settings hidden\n");
+	}
+	if ((menu = first_instance(runner, "oOptionsDisplay")) && menu->instanceId != displayMenu) {
+		displayMenu = menu->instanceId;
+		hide_window_rows(runner, menu);
 	}
 	if ((menu = first_instance(runner, "oOptionsXJoypad")) && menu->instanceId != joypadMenu) {
 		joypadMenu = menu->instanceId;
