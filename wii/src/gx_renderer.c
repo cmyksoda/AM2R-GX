@@ -2741,6 +2741,16 @@ static bool gxSurfaceExists(Renderer *renderer, int32_t surfaceID)
 	return gx->surfs[surfaceID].exists;
 }
 
+static int surface_depth(const Runner *runner)
+{
+	int i, n = 0;
+
+	for (i = 0; i < MAX_SURFACES; i++)
+		if (runner->surfaceStack[i] != -1)
+			n++;
+	return n;
+}
+
 static bool gxSetRenderTarget(Renderer *renderer, int32_t surfaceID, bool implicitApplicationSurface)
 {
 	gx_stat.targets++;
@@ -2775,7 +2785,8 @@ static bool gxSetRenderTarget(Renderer *renderer, int32_t surfaceID, bool implic
 			gx_ortho(0, (float)gx->gameH, 0, (float)gx->gameW);
 		}
 	}
-	if (gx->viewActive && surfaceID == gx->viewSurf)
+	/* Only the view's own stack entry draws through the camera; set_target of it again draws in surface space. */
+	if (gx->viewActive && surfaceID == gx->viewSurf && surface_depth(renderer->runner) == 1)
 		gx_view_ortho(gx);
 	if (camera)
 		gxApplyProjection(renderer, &camera->viewMatrix, &camera->projectionMatrix);
