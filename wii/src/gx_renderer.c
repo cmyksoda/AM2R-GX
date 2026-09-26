@@ -792,6 +792,7 @@ static bool gx_load_page(GxRenderer *gx, uint32_t pageId)
 	u16 *texels = NULL;
 	int w, h, tw, th;
 	bool streamed;
+	u64 t0 = gettime();
 
 	if (pageId >= gx->pageCount)
 		return false;
@@ -863,8 +864,8 @@ static bool gx_load_page(GxRenderer *gx, uint32_t pageId)
 
 		for (i = 0; i < n && i < 16384; i++)
 			sum = sum * 31 + ck[i];
-		logInfo("GX: TXTR %u %dx%d (padded %dx%d, resident %u) %s sum=%08x\n", pageId, w, h, tw, th,
-			gx->pagesResident, streamed ? "rows" : "rgba", sum);
+		logInfo("GX: TXTR %u %dx%d (padded %dx%d, resident %u) %s sum=%08x in %.1f ms\n", pageId, w, h, tw, th,
+			gx->pagesResident, streamed ? "rows" : "rgba", sum, ticks_to_microsecs(gettime() - t0) / 1000.0);
 	}
 	return true;
 
