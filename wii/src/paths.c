@@ -10,9 +10,9 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-/* 256 pages of 64 sectors = 8 MB of MEM1 per mounted drive, so only the drive the game runs from is mounted.
- * The size is the one measured at 60 fps on hardware (session 9): the game stats a file every frame. */
-#define CACHE_PAGES 256
+/* 32 pages of 64 sectors = 1 MB of MEM1 per mounted drive: 32 KB reads stay as fast as a bigger cache, and the
+ * MEM1 left over holds textures, so the pause map no longer pushes the room's pages out. */
+#define CACHE_PAGES 32
 #define CACHE_SECTORS 64
 #define USB_WAIT_TRIES 20 /* x 250 ms */
 
