@@ -33,7 +33,6 @@
 /* What one page load needs: its PNG blob plus 2 MB of texels (the decode streams row by row). */
 #define PAGE_LOAD_NEED (4u << 20)
 #define PAGE_RETRY_FRAMES 300
-#define GX_MAX_TEX_DIM 1024
 /* AM2R orphans a surface on nearly every room change (water never frees; others free only in
  * Destroy, which room end doesn't fire). GM surfaces are volatile, so idle ones are fair game. */
 #define SURF_IDLE_FRAMES 600

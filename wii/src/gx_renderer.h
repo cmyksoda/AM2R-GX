@@ -3,6 +3,8 @@
 
 #include "renderer.h"
 
+#define GX_MAX_TEX_DIM 1024
+
 Renderer *GxRenderer_create(void);
 
 /* Texel memory currently held, for the Dolphin sweep's leak hunting. */

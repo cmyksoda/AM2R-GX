@@ -205,7 +205,6 @@ static RValue wii_background_add(VMContext *ctx, RValue *args, int32_t argCount)
  * atlas laid out like GameMaker's embedded fonts, so the text path and string_width need nothing new.
  * Codepoints past `last` that the language inis use are added when the face has them (Cyrillic, Czech). */
 #define FONT_MAX_GLYPHS 2048
-#define FONT_ATLAS_MAX 1024
 #define PX26(v) ((int)(((v) + 32) >> 6))
 
 typedef struct {
@@ -284,7 +283,7 @@ static int font_layout(FontCell *cells, int n, int width)
 			rowH = cells[i].h;
 	}
 	y += rowH + 1;
-	return y <= FONT_ATLAS_MAX ? y : 0;
+	return y <= GX_MAX_TEX_DIM ? y : 0;
 }
 
 static void font_blit(uint8_t *rgba, int atlasW, const FontCell *c, const FT_Bitmap *bm)
@@ -367,7 +366,7 @@ static RValue wii_font_replace(VMContext *ctx, RValue *args, int32_t argCount)
 	if (!atlasH)
 		atlasH = font_layout(cells, n, atlasW = 512);
 	if (!atlasH)
-		atlasH = font_layout(cells, n, atlasW = FONT_ATLAS_MAX);
+		atlasH = font_layout(cells, n, atlasW = GX_MAX_TEX_DIM);
 	if (!atlasH) {
 		logWarn("Wii: %s at %d px does not fit a font page\n", fname, px);
 		goto fail;
