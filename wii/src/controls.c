@@ -416,13 +416,13 @@ static void cursor_to(Runner *runner, Instance *menu, int32_t row)
 		Instance_setSelfVar(global, tiptext, *tip);
 }
 
-/* Rumble reaches only a GameCube pad. */
+/* Rumble reaches only a GameCube pad or a Wii U Pro Controller. */
 static void hide_vibration_row(Runner *runner, Instance *menu)
 {
 	if (!hide_row(runner, menu, "canedit", "sep", XJOY_VIBRATION))
 		return;
 	cursor_to(runner, menu, XJOY_VIBRATION + 1);
-	logInfo("controls: Vibration hidden (no GameCube pad in use)\n");
+	logInfo("controls: Vibration hidden (no pad with a motor in use)\n");
 }
 
 /* Fullscreen and Window Size mean nothing on a TV (the game leaves both out on Android the same way); Controller
@@ -521,7 +521,7 @@ void WiiControls_frame(Runner *runner)
 	if ((menu = first_instance(runner, "oOptionsXJoypad")) && menu->instanceId != joypadMenu) {
 		joypadMenu = menu->instanceId;
 		retitle_joypad(runner, menu);
-		if (WiiInput_pad() != WII_PAD_GAMECUBE)
+		if (!WiiInput_hasRumble())
 			hide_vibration_row(runner, menu);
 	}
 }
