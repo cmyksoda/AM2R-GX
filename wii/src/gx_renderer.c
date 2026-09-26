@@ -504,9 +504,15 @@ static void emit_quad(float x0, float y0, float x1, float y1, float x2, float y2
 		      u8 r2, u8 g2, u8 b2, u8 a2, u8 r3, u8 g3, u8 b3, u8 a3)
 {
 	GxSurf *s = gx_tiled_target(gx_cur);
-	float minx, maxx, miny, maxy;
+	float minx, maxx, miny, maxy, lift;
 	int c0, c1, tr0, tr1, c, tr;
 
+	if (gx_cur && (lift = WiiSafe_lift(gx_cur->base.runner)) != 0.0f) {
+		y0 += lift;
+		y1 += lift;
+		y2 += lift;
+		y3 += lift;
+	}
 	if (!s) {
 		emit_quad_raw(x0, y0, x1, y1, x2, y2, x3, y3, u0, v0, u1, v1, u2, v2, u3, v3,
 			      r0, g0, b0, a0, r1, g1, b1, a1, r2, g2, b2, a2, r3, g3, b3, a3);

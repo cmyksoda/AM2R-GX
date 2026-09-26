@@ -9,5 +9,6 @@
 struct Runner;
 
 int32_t WiiSafe_guiSurface(struct Runner *runner);
+float WiiSafe_lift(struct Runner *runner);
 
 #endif
