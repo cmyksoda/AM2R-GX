@@ -1,0 +1,37 @@
+Reason: an instance flagged dirty but on no dirty list never re-entered the collision grid, so grid-based checks
+(place_meeting, instance_place, collision_point, collision events) missed it until it left the room. A persistent room
+saved its instances with the flag set (Samus stayed registered where she took an item; the Alpha Metroid where the game
+was paused), and a sync skipped inactive instances without clearing theirs (walls AM2R deactivates early).
+Upstream: Engine bug on every platform. Retires this patch when merged.
+
+diff --git a/src/spatial_grid.c b/src/spatial_grid.c
+--- a/src/spatial_grid.c
++++ b/src/spatial_grid.c
+@@ -97,8 +97,13 @@
+ 
+         // We do not care about removed/inactive/destroyed instances, because they would've been already been removed from the grid on the "SpatialGrid_markInstanceAsDirty" call
+         // We also do not care if the spatial grid is not dirty
+-        if (instance == nullptr || !instance->active || instance->destroyed || !instance->spatialGridDirty)
++        if (instance == nullptr)
+             continue;
++        // The list is emptied below: an instance left off it must lose the flag too, or markInstanceAsDirty never lists it again.
++        if (!instance->active || instance->destroyed || !instance->spatialGridDirty) {
++            instance->spatialGridDirty = false;
++            continue;
++        }
+ 
+         instance->spatialGridDirty = false;
+ 
+diff --git a/src/runner.c b/src/runner.c
+--- a/src/runner.c
++++ b/src/runner.c
+@@ -3751,6 +3751,9 @@
+         if (inst->persistent) {
+             arrput(keptInstances, inst);
+         } else {
++            // The next visit builds a new grid: cells and a dirty flag from this one would keep the instance out of it.
++            arrsetlen(inst->collisionCells, 0);
++            inst->spatialGridDirty = false;
+             arrput(state->instances, inst);
+         }
+     }

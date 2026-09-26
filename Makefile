@@ -37,7 +37,7 @@ wii: $(BUTTER)/CMakeLists.txt
 	rsync -a --delete wii/src/ $(BUTTER)/src/wii/
 	# The local test hooks (wii/test/, never in the repository) join the build when they are on disk.
 	if [ -d wii/test/src ]; then rsync -a wii/test/src/ $(BUTTER)/src/wii/; fi
-	cd $(BUTTER) && git checkout -- CMakeLists.txt src/gettime.c src/ini.c src/loop.c src/runner.c src/vm_builtins.c src/vm_builtins.h
+	cd $(BUTTER) && git checkout -- CMakeLists.txt src/gettime.c src/ini.c src/loop.c src/runner.c src/spatial_grid.c src/vm_builtins.c src/vm_builtins.h
 	cd $(BUTTER) && git apply ../../wii/patches/0001-cmake-add-PLATFORM-wii.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0002-gettime-wii.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0003-loop-no-sigaction-on-wii.patch
@@ -53,6 +53,7 @@ wii: $(BUTTER)/CMakeLists.txt
 	cd $(BUTTER) && git apply ../../wii/patches/0014-runner-persistent-room-keeps-inactive.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0015-runner-destroyed-self-still-reaches-other.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0016-ini-skip-utf8-bom.patch
+	cd $(BUTTER) && git apply ../../wii/patches/0017-spatial-grid-dirty-flag.patch
 	if [ -f wii/test/patches/0099-debug-collision-trace.patch ]; then cd $(BUTTER) && git apply ../../wii/test/patches/0099-debug-collision-trace.patch; fi
 	cmake -B $(WII_BUILD) -S $(BUTTER) $(WII_CMAKE_FLAGS)
 	cmake --build $(WII_BUILD) -j$(shell nproc)
