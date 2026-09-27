@@ -17,7 +17,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#define AM2R_GX_VERSION "0.15.7" /* keep in step with wii/hbc/meta.xml */
+#define AM2R_GX_VERSION "0.15.14" /* keep in step with wii/hbc/meta.xml */
 
 static void wait_home(const char *why, bool haveLog)
 {
