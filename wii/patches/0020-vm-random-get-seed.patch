@@ -1,0 +1,50 @@
+Reason: random_get_seed was missing. AM2R 1.5.5's randomizer reads back the seed randomize() picked and replays the
+shuffle from it; getting nothing, it reseeded with 0 every time (a Randomizer game without a custom seed could only
+ever be one of 16 layouts) and saved no real seed to show or share.
+Upstream: Missing builtin, platform-neutral. Retires this patch when merged.
+
+diff --git a/src/random.h b/src/random.h
+--- a/src/random.h
++++ b/src/random.h
+@@ -6,6 +6,7 @@
+ typedef struct {
+     uint32_t state[16];
+     uint32_t index;
++    uint32_t seed; // the last seed set, for random_get_seed
+ } Random;
+ 
+ void Random_setSeed(Random* m, uint32_t seed);
+diff --git a/src/random.c b/src/random.c
+--- a/src/random.c
++++ b/src/random.c
+@@ -4,6 +4,7 @@
+ #include "random.h"
+ 
+ void Random_setSeed(Random* m, uint32_t seed) {
++    m->seed = seed;
+     m->state[0] = seed;
+     for (int i = 1; 16 > i; ++i)
+         m->state[i] = i + 0x6C078965 * (m->state[i - 1] ^ (m->state[i - 1] >> 30));
+diff --git a/src/vm_builtins.c b/src/vm_builtins.c
+--- a/src/vm_builtins.c
++++ b/src/vm_builtins.c
+@@ -3288,6 +3288,11 @@
+     return RValue_makeUndefined();
+ }
+ 
++// random_get_seed() - the seed last set by random_set_seed or randomize (not the generator's current state).
++static RValue builtin_random_get_seed(VMContext* ctx, MAYBE_UNUSED RValue* args, MAYBE_UNUSED int32_t argCount) {
++    return RValue_makeReal((GMLReal) ctx->runner->random.seed);
++}
++
+ static RValue builtin_random(MAYBE_UNUSED VMContext* ctx, RValue* args, int32_t argCount) {
+     REQUIRE_ARGC_AT_LEAST("random", 1, RValue_makeReal(0.0));
+     GMLReal n = RValue_toReal(args[0]);
+@@ -21611,6 +21616,7 @@
+     VM_registerBuiltin(ctx, "matrix_set", builtin_matrix_set);
+     // Random
+     VM_registerBuiltin(ctx, "random_set_seed", builtin_random_set_seed);
++    VM_registerBuiltin(ctx, "random_get_seed", builtin_random_get_seed);
+     VM_registerBuiltin(ctx, "random", builtin_random);
+     VM_registerBuiltin(ctx, "random_range", builtin_random_range);
+     VM_registerBuiltin(ctx, "irandom", builtin_irandom);
