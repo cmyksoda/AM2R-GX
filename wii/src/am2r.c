@@ -30,6 +30,17 @@ int32_t Wii_spriteIndex(Runner *runner, const char *name)
 	return -1;
 }
 
+int32_t Wii_roomIndex(Runner *runner, const char *name)
+{
+	DataWin *dw = runner ? runner->dataWin : NULL;
+	uint32_t i;
+
+	for (i = 0; dw && i < dw->room.count; i++)
+		if (dw->room.rooms[i].name && strcmp(dw->room.rooms[i].name, name) == 0)
+			return (int32_t)i;
+	return -1;
+}
+
 int32_t Wii_varId(Runner *runner, const char *name, int32_t scope)
 {
 	DataWin *dw = runner ? runner->dataWin : NULL;
@@ -61,4 +72,15 @@ void Wii_forceGamepadProfile(Runner *runner)
 	}
 	if (varId >= 0 && vm->globalScopeInstance)
 		Instance_setSelfVar(vm->globalScopeInstance, varId, RValue_makeInt32(2));
+}
+
+void Wii_setViewClears(Runner *runner)
+{
+	static int32_t itemRoom = -2;
+
+	if (!runner)
+		return;
+	if (itemRoom == -2)
+		itemRoom = Wii_roomIndex(runner, "itemroom");
+	runner->clearViewSurfaces = runner->currentRoomIndex != itemRoom;
 }

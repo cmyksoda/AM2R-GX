@@ -37,7 +37,7 @@ wii: $(BUTTER)/CMakeLists.txt
 	rsync -a --delete wii/src/ $(BUTTER)/src/wii/
 	# The local test hooks (wii/test/, never in the repository) join the build when they are on disk.
 	if [ -d wii/test/src ]; then rsync -a wii/test/src/ $(BUTTER)/src/wii/; fi
-	cd $(BUTTER) && git checkout -- CMakeLists.txt src/gettime.c src/ini.c src/loop.c src/runner.c src/spatial_grid.c src/vm_builtins.c src/vm_builtins.h
+	cd $(BUTTER) && git checkout -- CMakeLists.txt src/gettime.c src/ini.c src/loop.c src/runner.c src/runner.h src/spatial_grid.c src/vm_builtins.c src/vm_builtins.h
 	cd $(BUTTER) && git apply ../../wii/patches/0001-cmake-add-PLATFORM-wii.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0002-gettime-wii.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0003-loop-no-sigaction-on-wii.patch

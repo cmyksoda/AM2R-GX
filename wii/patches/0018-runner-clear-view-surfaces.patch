@@ -1,19 +1,29 @@
-Reason: a view that draws into its own surface (AM2R 1.5.5 widescreen) was cleared only when the room draws its
-background colour, while the screen is always cleared. Where a room leaves pixels undrawn (the filler gap left of
-rm_a1h03 in 16:9), old frames smeared as the camera moved and shots left trails.
-Upstream: Engine bug on every platform. Retires this patch when merged.
+Reason: GameMaker leaves a view surface alone when the room draws no background colour, so whatever the room leaves
+undrawn keeps old frames (the filler gap left of rm_a1h03 in 16:9 smeared as the camera moved). AM2R's item screen
+relies on that rule: it shows the frozen game straight from the widescreen view's surface. The port asks for the clear
+everywhere else.
+Upstream: Port-specific; stays here.
 
+diff --git a/src/runner.h b/src/runner.h
+--- a/src/runner.h
++++ b/src/runner.h
+@@ -712,6 +712,7 @@
+     RuntimeBackground backgrounds[8];
+     uint32_t backgroundColor;      // runtime-mutable (BGR format)
+     bool drawBackgroundColor;
++    bool clearViewSurfaces; // also clear view surfaces when the room draws no background colour
+     bool shouldExit;
+     bool paused;
+     bool debugMode;
 diff --git a/src/runner.c b/src/runner.c
 --- a/src/runner.c
 +++ b/src/runner.c
-@@ -1309,8 +1309,8 @@
+@@ -1311,6 +1311,8 @@
  
-                 Runner_surfaceSetTarget(runner, view->surfaceId);
- 
--                if (runner->drawBackgroundColor)
--                    renderer->vtable->clearScreen(renderer, runner->currentRoom->backgroundColor, 1.0f);
-+                // Cleared like the screen above: whatever the room leaves undrawn would otherwise smear the last frames.
-+                renderer->vtable->clearScreen(renderer, runner->drawBackgroundColor ? runner->currentRoom->backgroundColor : 0, 1.0f);
+                 if (runner->drawBackgroundColor)
+                     renderer->vtable->clearScreen(renderer, runner->currentRoom->backgroundColor, 1.0f);
++                else if (runner->clearViewSurfaces)
++                    renderer->vtable->clearScreen(renderer, 0, 1.0f);
  
                  runner->viewCurrent = (int32_t) vi;
                  runner->renderer->cameraCurrent = runner->views[runner->viewCurrent].cameraId;
