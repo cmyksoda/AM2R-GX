@@ -15,6 +15,8 @@
 #define ROW_LOWER 220
 #define NOTIFY_HIDDEN 30 /* oNotification's offset when it is fully slid out */
 #define TITLE_MID 120 /* the title's version line is above, its links below */
+#define SCORE_BOTTOM 200 /* the score screen's closing lines sit on row 220 */
+#define SAFE_BOTTOM (240 - WII_SAFE_ROWS)
 
 enum { SCR_1BUTTON, SCR_2BUTTONS, SCR_COUNT };
 static const char *const scriptNames[SCR_COUNT] = { "draw_txt_1button", "draw_txt_2buttons" };
@@ -164,9 +166,10 @@ static RValue wii_draw_txt_2buttons(VMContext *ctx, RValue *args, int32_t argCou
 
 /* The inventory's "[arrows] - Select item" row is a background plus a draw_text, not a prompt script: hold the arrows
  * until the text arrives, then centre the pair. */
-static BuiltinFunc engineDrawBackground, engineDrawText, engineStringWidth, engineDrawRectangle;
+static BuiltinFunc engineDrawBackground, engineDrawText, engineStringWidth, engineStringHeight, engineDrawRectangle;
 static BuiltinFunc engineDrawBackgroundExt, engineDrawTextColour, engineDrawRectangleColour;
-static int32_t tipArrow = -2, subscreenFg = -2, optionsFg = -2, titleBg = -2, bgVersion = -1, bgUrl = -1;
+static int32_t introText = -2, introFull = -1;
+static int32_t tipArrow = -2, subscreenFg = -2, optionsFg = -2, scoreScreen = -2, titleBg = -2, bgVersion = -1, bgUrl = -1;
 static struct {
 	bool held;
 	RValue args[3];
@@ -210,7 +213,19 @@ static RValue wii_draw_text(VMContext *ctx, RValue *args, int32_t argCount)
 	RValue w, moved[3];
 	float left, right, dx;
 
-	if (argCount == 3 && in_object(ctx, optionsFg)) {
+	if (argCount == 3 && in_object(ctx, introText) && introFull >= 0) {
+		RValue full = Instance_getSelfVar(ctx->currentInstance, introFull);
+		double over = RValue_toReal(args[1]) + RValue_toReal(engineStringHeight(ctx, &full, 1)) - SAFE_BOTTOM;
+
+		/* A long scene (Italian's six lines) rises as a whole, by the full scene's height, not the typed part's. */
+		if (over > 0) {
+			memcpy(moved, args, sizeof moved);
+			moved[1] = RValue_makeReal(RValue_toReal(args[1]) - over);
+			return engineDrawText(ctx, moved, 3);
+		}
+	}
+	if (argCount == 3 && (in_object(ctx, optionsFg) ||
+			      (in_object(ctx, scoreScreen) && RValue_toReal(args[1]) >= SCORE_BOTTOM))) {
 		memcpy(moved, args, sizeof moved);
 		moved[1] = RValue_makeReal(RValue_toReal(args[1]) - WII_SAFE_ROWS);
 		return engineDrawText(ctx, moved, 3);
@@ -320,6 +335,13 @@ void WiiSafe_hookScripts(VMContext *ctx)
 	}
 	if (engineDrawText && engineDrawRectangle)
 		optionsFg = Wii_objectIndex(ctx->runner, "oOptionsFG");
+	if (engineDrawText)
+		scoreScreen = Wii_objectIndex(ctx->runner, "oScoreScreen");
+	engineStringHeight = VM_findBuiltin(ctx, "string_height");
+	if (engineDrawText && engineStringHeight) {
+		introText = Wii_objectIndex(ctx->runner, "oIntroText1");
+		introFull = Wii_varId(ctx->runner, "drawtext", INSTANCE_SELF);
+	}
 	engineDrawBackgroundExt = VM_findBuiltin(ctx, "draw_background_ext");
 	engineDrawTextColour = VM_findBuiltin(ctx, "draw_text_colour");
 	engineDrawRectangleColour = VM_findBuiltin(ctx, "draw_rectangle_colour");
@@ -340,7 +362,7 @@ void WiiSafe_hookScripts(VMContext *ctx)
 			}
 		if (tipArrow >= 0 && strcmp(name, "draw_background") == 0)
 			ctx->funcCallCache[fi].builtin = (void *)wii_draw_background;
-		if ((tipArrow >= 0 || optionsFg >= 0) && strcmp(name, "draw_text") == 0)
+		if ((tipArrow >= 0 || optionsFg >= 0 || scoreScreen >= 0 || introText >= 0) && strcmp(name, "draw_text") == 0)
 			ctx->funcCallCache[fi].builtin = (void *)wii_draw_text;
 		if (optionsFg >= 0 && strcmp(name, "draw_rectangle") == 0)
 			ctx->funcCallCache[fi].builtin = (void *)wii_draw_rectangle;
