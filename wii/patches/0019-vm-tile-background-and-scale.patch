@@ -1,0 +1,53 @@
+Reason: tile_get_background and tile_set_scale were missing. AM2R 1.5.5 picks each baby Septogg's sprite from the
+tileset under a Metroid shell (without it every scavenger deleted itself: none ever hovered over a shell), and three
+rooms mirror a tile they add with tile_set_scale.
+Upstream: Missing builtins, platform-neutral. Retires this patch when merged.
+
+diff --git a/src/vm_builtins.c b/src/vm_builtins.c
+--- a/src/vm_builtins.c
++++ b/src/vm_builtins.c
+@@ -14466,6 +14466,35 @@
+     return RValue_makeUndefined();
+ }
+ 
++// tile_get_background(id) - returns the background the tile with the given id draws from, or -1.
++static RValue builtin_tile_get_background(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
++    Runner* runner = ctx->runner;
++    Room* room = runner->currentRoom;
++    if (room == nullptr) return RValue_makeReal(-1.0);
++    uint32_t id = (uint32_t) RValue_toInt32(args[0]);
++    repeat(room->tileCount, i) {
++        if (room->tiles[i].instanceID == id) return RValue_makeReal((GMLReal) room->tiles[i].backgroundDefinition);
++    }
++    logWarn("VM: tile_get_background: tile does not exist (%u)\n", id);
++    return RValue_makeReal(-1.0);
++}
++
++// tile_set_scale(id, xscale, yscale) - sets the scale of the tile with the given id; a negative scale mirrors it.
++static RValue builtin_tile_set_scale(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
++    Runner* runner = ctx->runner;
++    Room* room = runner->currentRoom;
++    if (room == nullptr) return RValue_makeUndefined();
++    uint32_t id = (uint32_t) RValue_toInt32(args[0]);
++    repeat(room->tileCount, i) {
++        if (room->tiles[i].instanceID != id) continue;
++        room->tiles[i].scaleX = (float) RValue_toReal(args[1]);
++        room->tiles[i].scaleY = (float) RValue_toReal(args[2]);
++        return RValue_makeUndefined();
++    }
++    logWarn("VM: tile_set_scale: tile does not exist (%u)\n", id);
++    return RValue_makeUndefined();
++}
++
+ // tile_get_ids_at_depth(depth) - returns a 1D array of tile ids whose tileDepth matches.
+ static RValue builtin_tile_get_ids_at_depth(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
+     Runner* runner = ctx->runner;
+@@ -22299,6 +22328,8 @@
+         VM_registerBuiltin(ctx, "tile_delete", builtin_tile_delete);
+         VM_registerBuiltin(ctx, "tile_get_ids_at_depth", builtin_tile_get_ids_at_depth);
+         VM_registerBuiltin(ctx, "tile_set_alpha", builtin_tile_set_alpha);
++        VM_registerBuiltin(ctx, "tile_set_scale", builtin_tile_set_scale);
++        VM_registerBuiltin(ctx, "tile_get_background", builtin_tile_get_background);
+         VM_registerBuiltin(ctx, "tile_set_visible", builtin_layer_tile_visible);
+     }
+ 
