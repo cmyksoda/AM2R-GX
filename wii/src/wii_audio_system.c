@@ -22,7 +22,7 @@
 #undef C
 #undef R
 
-#define WII_VOICES 16
+#define WII_VOICES 24                     // 16 sounding at once, plus stopped ones still draining
 #define WII_STREAMS 4
 #define TAIL_MARGIN_MS 120                // keep a finished one-shot's buffer alive so the DSP can drain it
 #define MAX_SFX_BYTES (2 * 1024 * 1024)   // embedded SFX are short; refuse anything larger (music is external OGG)
@@ -45,6 +45,19 @@
 #define DECODE_NAP_US 4000
 #define BLOB_CACHE_BYTES (6u << 20)       // raw WAVs kept for replay; a playing voice owns its own swapped copy
 #define BLOB_BIG_BYTES (256u << 10)       // ambience-sized: cheap to re-read once, expensive to keep resident
+#define DRAIN_UPDATES 3                   // updates a stopped voice must stay stopped before its buffer is freed
+
+// libaesnd copies each voice back from its working copy after the DSP mixes it, flags included, so a stop, start or
+// volume set that lands mid-mix is undone. The head of libogc 3.1.0's struct aesndpb_t, to see which of ours survived.
+typedef struct {
+    u32 out_buf, buf_start, buf_end, buf_curr;
+    u16 yn1, yn2, pds, freq_h, freq_l, counter;
+    s16 left, right;
+    u16 volume_l, volume_r;
+    u32 delay;
+    u32 flags;
+} PbHead;
+#define PB_STOPPED 0x00200000
 
 typedef struct {
     float gain, target, from;
@@ -63,6 +76,7 @@ typedef struct {
     Fade fade;
     uint64_t freeAt;        // gettime() tick at which a one-shot's buffer may be freed; 0 while looping
     uint64_t pausedAt;
+    int draining;           // updates left before a stopped voice's buffer is freed and the voice reused
 } WiiVoice;
 
 typedef struct {
@@ -103,6 +117,7 @@ typedef struct {
     uint32_t blobBytes;
     int32_t stoppedThisStep[WII_VOICES]; // SOND indices whose effect voices were stopped since the last update
     int stoppedCount;
+    uint32_t undoneStops, undoneStarts, undoneLogged;
 } WiiAudioSystem;
 
 static AudioSystemVtable wiiAudioVtable;
@@ -200,9 +215,14 @@ static void releaseBuf(WiiVoice* v) {
     if (v->buf != nullptr) { free(v->buf); v->buf = nullptr; }
 }
 
+static bool pbStopped(AESNDPB* pb) {
+    return (((volatile PbHead*) pb)->flags & PB_STOPPED) != 0;
+}
+
+// The buffer outlives the stop until the voice has stayed stopped for DRAIN_UPDATES updates (see PbHead).
 static void voiceStop(WiiVoice* v) {
     if (v->pb != nullptr) AESND_SetVoiceStop(v->pb, true);
-    releaseBuf(v);
+    if (v->buf != nullptr) v->draining = DRAIN_UPDATES;
     v->playing = false;
     v->loop = false;
     v->paused = false;
@@ -221,8 +241,29 @@ static void reap(WiiAudioSystem* a) {
 
 static WiiVoice* findFree(WiiAudioSystem* a) {
     for (int i = 0; i < WII_VOICES; i++)
-        if (!a->voices[i].playing) return &a->voices[i];
+        if (!a->voices[i].playing && a->voices[i].draining == 0) return &a->voices[i];
     return nullptr;
+}
+
+static void applyVolume(WiiAudioSystem* a, WiiVoice* v);
+
+// Put back whatever the DSP's copy-back undid: stopped and paused voices stay stopped, loops keep running.
+static void settleVoices(WiiAudioSystem* a) {
+    for (int i = 0; i < WII_VOICES; i++) {
+        WiiVoice* v = &a->voices[i];
+        if (v->pb == nullptr) continue;
+        bool stopped = pbStopped(v->pb);
+        if ((v->draining > 0 || (v->playing && v->paused)) && !stopped) {
+            AESND_SetVoiceStop(v->pb, true);
+            a->undoneStops++;
+            if (v->draining > 0) v->draining = DRAIN_UPDATES;
+        } else if (v->playing && v->loop && !v->paused && stopped) {
+            AESND_SetVoiceStop(v->pb, false);
+            a->undoneStarts++;
+        }
+        if (v->draining > 0 && --v->draining == 0) releaseBuf(v);
+        if (v->playing) applyVolume(a, v);
+    }
 }
 
 static bool voiceMatches(WiiVoice* v, int32_t idOrSound) {
@@ -408,8 +449,18 @@ static void streamsUpdate(WiiAudioSystem* a, float dt) {
 #endif
     for (int i = 0; i < WII_STREAMS; i++) {
         WiiStream* s = &a->streams[i];
+        if (s->pb == nullptr) continue;
+        bool stopped = pbStopped(s->pb);
+        if ((!s->active || s->paused) && !stopped) {
+            AESND_SetVoiceStop(s->pb, true);
+            a->undoneStops++;
+        } else if (s->active && !s->paused && stopped) {
+            AESND_SetVoiceStop(s->pb, false);
+            a->undoneStarts++;
+        }
         if (!s->active) continue;
-        if (fadeStep(&s->fade, dt)) applyStreamVolume(a, s);
+        fadeStep(&s->fade, dt);
+        applyStreamVolume(a, s);
         if (s->starved != s->starvedLogged) {
             uint32_t n = s->starved - s->starvedLogged;
             s->starvedLogged = s->starved;
@@ -443,6 +494,10 @@ static void streamsUpdate(WiiAudioSystem* a, float dt) {
                     (unsigned) (ticks_to_microsecs(a->statTicks) / STREAM_STATS_FRAMES),
                     (unsigned) ticks_to_microsecs(a->statMaxTicks), active, starved);
 #endif
+        if (a->undoneStops + a->undoneStarts != a->undoneLogged) {
+            a->undoneLogged = a->undoneStops + a->undoneStarts;
+            logInfo("WiiAudio: redid %u stops and %u starts the DSP copy-back undid\n", a->undoneStops, a->undoneStarts);
+        }
         a->statFrames = 0;
         a->statTicks = a->statMaxTicks = 0;
     }
@@ -515,6 +570,7 @@ static void wiiDestroy(AudioSystem* audio) {
     g_decodeThread = LWP_THREAD_NULL;
 #endif
     wiiStopAll(audio);
+    for (int i = 0; i < WII_VOICES; i++) releaseBuf(&a->voices[i]);
 #if WII_AUDIO_DECODE_THREAD
     LWP_MutexDestroy(g_decodeMutex);
 #endif
@@ -535,8 +591,9 @@ static void wiiUpdate(AudioSystem* audio, float dt) {
     reap(a);
     for (int i = 0; i < WII_VOICES; i++) {
         WiiVoice* v = &a->voices[i];
-        if (v->playing && fadeStep(&v->fade, dt)) applyVolume(a, v);
+        if (v->playing) fadeStep(&v->fade, dt);
     }
+    settleVoices(a);
     streamsUpdate(a, dt);
 }
 
