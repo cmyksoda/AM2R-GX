@@ -1,0 +1,22 @@
+Reason: an instance deactivated before the collision grid's first sync was skipped by it and never given cells;
+waking it only flipped `active`, so grid queries (position_meeting, collision_point, place_meeting) could not see it
+until the room was left. AM2R deactivates every solid beyond the view as a room starts, so ledges and slopes away from
+where Samus entered lost their ledge grab and spider-ball grip.
+Upstream: Engine bug on every platform. Retires this patch when merged.
+
+diff --git a/src/runner.h b/src/runner.h
+--- a/src/runner.h
++++ b/src/runner.h
+@@ -993,7 +993,12 @@
+     (void)runner;
+ #endif
+ 
++    bool waking = active && !instance->active;
+     instance->active = active;
++    // AM2R deactivates far solids as a room starts, before the grid's first sync, so they never got cells: list them again
++    // as they wake, or position_meeting and collision_point (ledge grabs, spider ball) never see them.
++    if (waking && arrlen(instance->collisionCells) == 0 && runner->spatialGrid != nullptr)
++        SpatialGrid_markInstanceAsDirty(runner->spatialGrid, instance);
+ }
+ 
+ static inline GMLReal Runner_getEffectiveGameSpeed(Runner* runner) {

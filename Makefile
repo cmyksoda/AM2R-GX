@@ -57,6 +57,7 @@ wii: $(BUTTER)/CMakeLists.txt
 	cd $(BUTTER) && git apply ../../wii/patches/0018-runner-clear-view-surfaces.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0019-vm-tile-background-and-scale.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0020-vm-random-get-seed.patch
+	cd $(BUTTER) && git apply ../../wii/patches/0021-runner-waking-instance-joins-grid.patch
 	if [ -f wii/test/patches/0099-debug-collision-trace.patch ]; then cd $(BUTTER) && git apply ../../wii/test/patches/0099-debug-collision-trace.patch; fi
 	cmake -B $(WII_BUILD) -S $(BUTTER) $(WII_CMAKE_FLAGS)
 	cmake --build $(WII_BUILD) -j$(shell nproc)
