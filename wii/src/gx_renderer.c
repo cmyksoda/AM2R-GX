@@ -1835,6 +1835,7 @@ static void gxBeginFrame(Renderer *renderer, int32_t gameW, int32_t gameH, int32
 	Wii_hooksFrame(renderer->runner);
 	Wii_forceGamepadProfile(renderer->runner);
 	Wii_setViewClears(renderer->runner);
+	WiiSafe_frame(renderer->runner);
 	WiiControls_frame(renderer->runner);
 	gx->guiSurf = WiiSafe_guiSurface(renderer->runner);
 	appId = renderer->runner->applicationSurfaceId;

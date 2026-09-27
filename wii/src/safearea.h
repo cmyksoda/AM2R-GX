@@ -11,6 +11,7 @@ struct VMContext;
 
 int32_t WiiSafe_guiSurface(struct Runner *runner);
 float WiiSafe_lift(struct Runner *runner);
+void WiiSafe_frame(struct Runner *runner);
 void WiiSafe_hookScripts(struct VMContext *ctx);
 
 #endif

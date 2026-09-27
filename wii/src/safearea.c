@@ -52,7 +52,7 @@ int32_t WiiSafe_guiSurface(Runner *runner)
  * slid out stays below the screen. */
 float WiiSafe_lift(Runner *runner)
 {
-	static int32_t notify = -2, popup, offset;
+	static int32_t notify = -2, popup, scanning, scanMonster, intro, offset;
 	Instance *inst = runner && runner->vmContext ? runner->vmContext->currentInstance : NULL;
 	float off;
 
@@ -61,9 +61,13 @@ float WiiSafe_lift(Runner *runner)
 	if (notify == -2) {
 		notify = Wii_objectIndex(runner, "oNotification");
 		popup = Wii_objectIndex(runner, "oPopupText");
+		scanning = Wii_objectIndex(runner, "oScanning");
+		scanMonster = Wii_objectIndex(runner, "oScanMonster");
+		intro = Wii_objectIndex(runner, "oIntroController");
 		offset = Wii_varId(runner, "offset", INSTANCE_SELF);
 	}
-	if (inst->objectIndex == popup)
+	if (inst->objectIndex == popup || inst->objectIndex == scanning || inst->objectIndex == scanMonster ||
+	    inst->objectIndex == intro)
 		return -WII_SAFE_ROWS;
 	if (inst->objectIndex != notify || offset < 0)
 		return 0.0f;
@@ -73,6 +77,19 @@ float WiiSafe_lift(Runner *runner)
 	if (off > NOTIFY_HIDDEN)
 		off = NOTIFY_HIDDEN;
 	return -WII_SAFE_ROWS * (NOTIFY_HIDDEN - off) / NOTIFY_HIDDEN;
+}
+
+/* The first screen is one picture whose legal lines reach row 236; it rises with its caption (oIntroController). */
+void WiiSafe_frame(Runner *runner)
+{
+	static int32_t controllerRoom = -2;
+
+	if (!runner)
+		return;
+	if (controllerRoom == -2)
+		controllerRoom = Wii_roomIndex(runner, "rm_controller");
+	if (runner->currentRoomIndex == controllerRoom)
+		runner->backgrounds[0].y = -WII_SAFE_ROWS;
 }
 
 static GMLCamera *view0(Runner *runner)
