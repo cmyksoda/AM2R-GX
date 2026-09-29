@@ -1,0 +1,18 @@
+Reason: Random_setSeed rebuilt WELL512's sixteen state words but kept its position in them, so the same seed gave up to
+16 different sequences depending on how many numbers had been drawn before. AM2R's randomizer seeds with the player's
+custom seed and shuffles the items: the same seed came out as a different layout (11 of 20 runs differed). A seed now
+gives the same sequence every time, so the same custom seed gives the same layout on every Wii. It is not GameMaker's
+own seeding, so a seed probably still differs from the PC game's layout.
+Upstream: Engine bug on every platform. Retires this patch when merged.
+
+diff --git a/src/random.c b/src/random.c
+--- a/src/random.c
++++ b/src/random.c
+@@ -4,6 +4,7 @@
+ #include "random.h"
+ 
+ void Random_setSeed(Random* m, uint32_t seed) {
++    m->index = 0;
+     m->seed = seed;
+     m->state[0] = seed;
+     for (int i = 1; 16 > i; ++i)
