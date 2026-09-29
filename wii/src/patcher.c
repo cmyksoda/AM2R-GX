@@ -229,7 +229,7 @@ static bool copy_range(FILE *in, FILE *out, u32 off, u32 len)
 /* ---- 1. the player's zip: data.win and the 1.1 music ---- */
 
 static char zipPath[300];  /* the player's AM2R 1.1 zip, whatever it ended up being called */
-static char xdeltaPath[96], planPath[96], filesDir[96], data11Path[96], data155Path[96];
+static char xdeltaPath[96], planPath[96], filesDir[96], data11Path[96], data155Path[96], partPath[112];
 static char zipName[128];  /* its file name, for the messages */
 static char zipPrefix[96]; /* "" or "AM2R_11/": a zip of the folder instead of its contents */
 
@@ -872,7 +872,7 @@ static bool repack(void)
 	if (!blob || !newOff)
 		goto done;
 
-	out = fopen(WII_DATA_WIN, "wb");
+	out = fopen(partPath, "wb");
 	if (!out)
 		goto done;
 	/* head, with the patched TPAG chunk substituted */
@@ -1001,8 +1001,6 @@ done:
 		fclose(out);
 	if (in)
 		fclose(in);
-	if (!ok)
-		remove(WII_DATA_WIN);
 	return ok;
 }
 
@@ -1053,6 +1051,7 @@ bool WiiPatcher_run(void)
 	snprintf(filesDir, sizeof filesDir, "%s/patch/files", WII_APP_DIR);
 	snprintf(data11Path, sizeof data11Path, "%s/data11.win", WII_GAME_DIR);
 	snprintf(data155Path, sizeof data155Path, "%s/data155.win", WII_GAME_DIR);
+	snprintf(partPath, sizeof partPath, "%s.part", WII_DATA_WIN);
 	if (!file_exists(xdeltaPath) || !file_exists(planPath) || !find_zip())
 		return false;
 	if (!region_take()) {
@@ -1070,7 +1069,11 @@ bool WiiPatcher_run(void)
 	        (unsigned)SYS_GetArena2Size());
 	printf("\n\n  AM2R GX -- first boot: building AM2R 1.5.5 from %s\n", zipName);
 	printf("  This happens once and takes a few minutes. Do not turn the Wii off.\n\n");
-	ok = unzip_11();
+	ok = file_exists(filesDir);
+	if (!ok)
+		fail("patch/files is missing; copy the whole release again");
+	if (ok)
+		ok = unzip_11();
 	if (ok)
 		ok = apply_delta();
 	remove(data11Path);
@@ -1082,15 +1085,23 @@ bool WiiPatcher_run(void)
 	if (ok)
 		ok = repack();
 	remove(data155Path);
-	if (ok && file_exists(filesDir))
+	if (ok) {
 		ok = copy_tree(filesDir, WII_GAME_DIR);
+		if (!ok)
+			fail("could not copy patch/files into %s", WII_GAME_DIR);
+	}
+	/* data.win appears last: a boot cut short anywhere before this starts over instead of playing a half-built game */
+	if (ok && rename(partPath, WII_DATA_WIN) != 0) {
+		fail("could not finish %s (error %d)", WII_DATA_WIN, errno);
+		ok = false;
+	}
 	logInfo("PATCH heap after: arena=%d mem1_free=%u\n", mallinfo().arena, (unsigned)SYS_GetArena1Size());
 	if (ok)
 		say("done");
 	else
 		say("FAILED - see %s/profile.txt", WII_APP_DIR);
 	if (!ok)
-		remove(WII_DATA_WIN);
+		remove(partPath);
 	ioBuf = NULL;
 	region_give_back();
 	WiiLog_setEcho(true);
