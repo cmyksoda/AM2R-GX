@@ -674,10 +674,12 @@ static bool read_plan(Plan *plan, const u8 *tpag, u32 tpagSize)
 	FILE *f = fopen(planPath, "rb");
 	u8 hdr[20];
 	u32 pages, i;
+	bool ok = true;
 
 	if (!f)
 		return false;
 	if (fread(hdr, 1, 20, f) != 20 || memcmp(hdr, "AM2RPLAN", 8) != 0) {
+		fail("patch/plan.bin is damaged; copy the whole release again");
 		fclose(f);
 		return false;
 	}
@@ -688,26 +690,38 @@ static bool read_plan(Plan *plan, const u8 *tpag, u32 tpagSize)
 	}
 	pages = rd32le(hdr + 12);
 	plan->count = rd32le(hdr + 16);
+	if (!pages || pages > 4096 || plan->count != rd32le(tpag)) {
+		fail("patch/plan.bin does not match the patched data.win; copy the whole release again");
+		fclose(f);
+		return false;
+	}
 	plan->pages = (PlanPage *)take_top(pages * sizeof(PlanPage));
 	plan->items = (PlanItem *)take_top(plan->count * sizeof(PlanItem));
 	if (!plan->pages || !plan->items) {
 		fclose(f);
 		return false;
 	}
-	for (i = 0; i < pages; i++) {
-		fread(hdr, 1, 4, f);
+	/* a copy cut short still passes the TPAG check above; its records would become canvas addresses */
+	for (i = 0; ok && i < pages; i++) {
+		ok = fread(hdr, 1, 4, f) == 4;
 		plan->pages[i].w = rd16le(hdr);
 		plan->pages[i].h = rd16le(hdr + 2);
+		ok = ok && plan->pages[i].w && plan->pages[i].w <= 1024 && plan->pages[i].h && plan->pages[i].h <= 1024;
 	}
-	for (i = 0; i < plan->count; i++) {
-		fread(hdr, 1, 6, f);
+	for (i = 0; ok && i < plan->count; i++) {
+		ok = fread(hdr, 1, 6, f) == 6;
 		plan->items[i].page = rd16le(hdr);
 		plan->items[i].x = rd16le(hdr + 2);
 		plan->items[i].y = rd16le(hdr + 4);
+		ok = ok && plan->items[i].page < pages;
 	}
 	fclose(f);
+	if (!ok) {
+		fail("patch/plan.bin is damaged; copy the whole release again");
+		return false;
+	}
 	say("plan: %u items onto %u pages", (unsigned)plan->count, (unsigned)pages);
-	return pages <= 4096;
+	return true;
 }
 
 /* Row y of old page P lands in every canvas of the pass that holds one of its items; the ring
@@ -841,6 +855,7 @@ static bool repack(void)
 	u8 *tpagBuf = NULL, *txtrHead = NULL, *blob = NULL, *mark;
 	u32 *oldOff = NULL, *newOff = NULL, blobMax = 0;
 	Rect *rects = NULL;
+	const PlanPage *pg;
 	Plan plan;
 	Pass pass;
 	bool ok = false;
@@ -855,11 +870,7 @@ static bool repack(void)
 	fseek(in, (long)tpag.off, SEEK_SET);
 	if (!tpagBuf || fread(tpagBuf, 1, tpag.size, in) != tpag.size || !read_plan(&plan, tpagBuf, tpag.size))
 		goto done;
-	n = rd32le(tpagBuf);
-	if (n != plan.count) {
-		fail("patch/plan.bin does not match the patched data.win; copy the whole release again");
-		goto done;
-	}
+	n = plan.count;
 	rects = (Rect *)take_top(n * sizeof(Rect));
 	if (!rects)
 		goto done;
@@ -871,6 +882,12 @@ static bool repack(void)
 		rects[i].w = rd16le(e + 4);
 		rects[i].h = rd16le(e + 6);
 		rects[i].page = (s16)rd16le(e + 20);
+		pg = &plan.pages[plan.items[i].page];
+		if (plan.items[i].x < GUTTER || plan.items[i].y < GUTTER || plan.items[i].x + rects[i].w + GUTTER > pg->w ||
+		    plan.items[i].y + rects[i].h + GUTTER > pg->h) {
+			fail("patch/plan.bin is damaged (item %u); copy the whole release again", (unsigned)i);
+			goto done;
+		}
 		wr16le(e, plan.items[i].x);
 		wr16le(e + 2, plan.items[i].y);
 		wr16le(e + 20, plan.items[i].page);
