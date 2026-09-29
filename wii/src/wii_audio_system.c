@@ -582,6 +582,10 @@ static void wiiDestroy(AudioSystem* audio) {
     g_decodeThread = LWP_THREAD_NULL;
 #endif
     wiiStopAll(audio);
+    // A round already mixing can still copy a voice back over its stop or FreeVoice and read its buffer; paused, the
+    // mixer starts no new round, and a round ends inside its 2 ms DMA period.
+    AESND_Pause(true);
+    usleep(10000);
     for (int i = 0; i < WII_VOICES; i++) releaseBuf(&a->voices[i]);
 #if WII_AUDIO_DECODE_THREAD
     LWP_MutexDestroy(g_decodeMutex);
