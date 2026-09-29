@@ -7,6 +7,7 @@
 #include "safearea.h"
 #include "wii_mem.h"
 #include "wii_paths.h"
+#include "wii_log.h"
 #include "wii_video.h"
 
 #include "common.h"
@@ -1749,6 +1750,8 @@ static void gx_preload_room(GxRenderer *gx)
 	if (n)
 		logInfo("GX: preload room %d: %u pages in %.1f ms\n", lastRoom, n,
 			ticks_to_microsecs(gettime() - t0) / 1000.0);
+	/* A room change is already a pause, and a freeze log only survives a power-off once it is on the card. */
+	WiiLog_sync();
 }
 
 /* The effect sprites (explosions, smoke, splashes, sparks): drawn in every area but rarely, so a room's first

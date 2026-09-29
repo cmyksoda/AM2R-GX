@@ -88,6 +88,7 @@ int main(int argc, char **argv)
 	log_mallinfo("boot");
 
 	WiiPatcher_run();
+	WiiLog_sync();
 	if (access(WII_DATA_WIN, R_OK) != 0) {
 		snprintf(why, sizeof why, "No game data yet. Put your AM2R_11.zip (the AM2R 1.1 download) into %s/, next to the "
 		         "patch folder, and start AM2R GX again: the first boot builds AM2R 1.5.5 from it.", WII_APP_DIR);
