@@ -32,6 +32,26 @@ static int32_t tpag_append(DataWin *dw)
 	return i;
 }
 
+/* load_resources runs again every time the Display options close: without this, each of its images pinned a fresh
+ * page (64 KB at least) per visit. Only the read-only lang/ and mods/ files; tempscr is rewritten per pause. */
+typedef struct {
+	char *fname;
+	int frames, w, h;
+	bool removeback;
+	int32_t *tpags;
+} LoadedPng;
+
+static LoadedPng *loadedPngs;
+static int loadedPngCount;
+
+static int32_t *tpags_copy(const int32_t *tpags, int frames)
+{
+	int32_t *copy = (int32_t *)safeMalloc((size_t)frames * sizeof(int32_t));
+
+	memcpy(copy, tpags, (size_t)frames * sizeof(int32_t));
+	return copy;
+}
+
 /* Caller frees the returned TPAG index list. */
 static int32_t *load_frames(VMContext *ctx, const char *fname, int frames, bool removeback, int *fw, int *fh)
 {
@@ -40,9 +60,19 @@ static int32_t *load_frames(VMContext *ctx, const char *fname, int frames, bool 
 	uint8_t *data, *rgba;
 	int32_t size, page, *tpags;
 	int w, h, n, i;
+	bool keep = strncmp(fname, "lang/", 5) == 0 || strncmp(fname, "mods/", 5) == 0;
 
 	if (frames < 1)
 		frames = 1;
+	for (i = 0; keep && i < loadedPngCount; i++) {
+		LoadedPng *l = &loadedPngs[i];
+
+		if (l->frames == frames && l->removeback == removeback && strcmp(l->fname, fname) == 0) {
+			*fw = l->w;
+			*fh = l->h;
+			return tpags_copy(l->tpags, frames);
+		}
+	}
 	if (!fs->vtable->readFileBinary(fs, fname, &data, &size))
 		return NULL;
 	rgba = stbi_load_from_memory(data, size, &w, &h, &n, 4);
@@ -78,6 +108,11 @@ static int32_t *load_frames(VMContext *ctx, const char *fname, int frames, bool 
 		item->sourceWidth = item->targetWidth = item->boundingWidth = (uint16_t)*fw;
 		item->sourceHeight = item->targetHeight = item->boundingHeight = (uint16_t)h;
 		item->texturePageId = (int16_t)page;
+	}
+	if (keep) {
+		loadedPngs = (LoadedPng *)safeRealloc(loadedPngs, (size_t)(loadedPngCount + 1) * sizeof(LoadedPng));
+		loadedPngs[loadedPngCount++] =
+			(LoadedPng){ safeStrdup(fname), frames, *fw, *fh, removeback, tpags_copy(tpags, frames) };
 	}
 	return tpags;
 }
