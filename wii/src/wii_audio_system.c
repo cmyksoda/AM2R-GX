@@ -392,9 +392,21 @@ static int32_t streamPlay(WiiAudioSystem* a, int32_t soundIndex, Sound* sound, b
     return id;
 }
 
+// PlayVoice on a voice the DSP is mid-way through mixing is undone by the copy-back (see PbHead), leaving the old
+// track's mono/stereo format and rate; a voice seen stopped a whole 2 ms mixing period after its stop is never mid-mix.
+static void streamSettleStop(WiiAudioSystem* a, WiiStream* s) {
+    for (int i = 0; i < 4; i++) {
+        AESND_SetVoiceStop(s->pb, true);
+        usleep(2500);
+        if (pbStopped(s->pb)) return;
+        a->undoneStops++;
+    }
+}
+
 static int32_t streamPlayLocked(WiiAudioSystem* a, int32_t soundIndex, Sound* sound, bool loop, const char* path) {
     WiiStream* s = findFreeStream(a);
     if (s == nullptr) { logWarn("WiiAudio: no stream slot for '%s'\n", sound->name); return -1; }
+    streamSettleStop(a, s);
 
     FILE* f = fopen(path, "rb");
     if (f == nullptr) { logWarn("WiiAudio: cannot open %s\n", path); return -1; }
