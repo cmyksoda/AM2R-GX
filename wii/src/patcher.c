@@ -400,9 +400,9 @@ static bool find_zip(void)
 				continue;
 			if (zip_directory(zf, &cdOff, &cdN) && zip_find_data(zf, cdOff, cdN, zipPrefix, sizeof zipPrefix)) {
 				fclose(zf);
-				closedir(dir);
 				snprintf(zipPath, sizeof zipPath, "%s", path);
-				snprintf(zipName, sizeof zipName, "%s", e->d_name);
+				snprintf(zipName, sizeof zipName, "%s", e->d_name); /* e belongs to dir: before closedir */
+				closedir(dir);
 				return true;
 			}
 			fclose(zf);
