@@ -37,7 +37,7 @@
 static u8 *ioBuf;
 static u64 t0;
 static char errLine[200]; /* the first failure, for the startup screen: later lines are its consequences */
-static bool noSpace, ranFailed;
+static bool writeFailed, ranFailed;
 /* Big buffers come from a region carved off MEM2's arena, not malloc: a heap that grows into MEM2
  * stays there, and the game would lose the MEM1 the texture arena normally claims. Ours grow down
  * from the top; xdelta gets a first-fit heap at the bottom (it reallocates per window). */
@@ -160,19 +160,24 @@ static void fail(const char *fmt, ...)
 		snprintf(errLine, sizeof errLine, "%s", line);
 }
 
-/* Names the one write failure a player can fix: a full card. */
+/* Names the one write failure a player can fix: a full card, which FatFs reports as a short write with no errno. */
 static void write_failed(void)
 {
-	if (noSpace)
+	if (writeFailed)
 		return;
-	noSpace = errno == ENOSPC;
-	fail(noSpace ? "%s is full; free some space and start again" : "could not write to %s (error %d)",
-	     WiiPaths_media(), errno);
+	writeFailed = true;
+	if (errno == ENOSPC || errno == 0)
+		fail("%s is full (the first boot needs about 190 MB free); free some space and start again", WiiPaths_media());
+	else
+		fail("could not write to %s (error %d)", WiiPaths_media(), errno);
 }
 
 static size_t wr(const void *p, size_t n, FILE *f)
 {
-	size_t r = fwrite(p, 1, n, f);
+	size_t r;
+
+	errno = 0;
+	r = fwrite(p, 1, n, f);
 
 	if (r != n)
 		write_failed();
@@ -184,6 +189,7 @@ static bool close_written(FILE *f)
 {
 	bool ok = !ferror(f);
 
+	errno = 0;
 	if (fclose(f) != 0)
 		ok = false;
 	if (!ok)
