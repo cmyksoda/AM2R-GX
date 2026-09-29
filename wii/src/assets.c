@@ -52,14 +52,37 @@ static int32_t *tpags_copy(const int32_t *tpags, int frames)
 	return copy;
 }
 
+/* A strip too wide for one texture (the translated area titles run up to 5115 px) folds its frames into rows. */
+static uint8_t *fold_frames(const uint8_t *rgba, int *w, int *h, int frames, int *cols)
+{
+	int fw = *w / frames, perRow, rows, i, y;
+	uint8_t *grid;
+
+	*cols = frames;
+	if (*w <= GX_MAX_TEX_DIM || fw < 1 || fw > GX_MAX_TEX_DIM)
+		return NULL;
+	perRow = GX_MAX_TEX_DIM / fw;
+	rows = (frames + perRow - 1) / perRow;
+	if (rows * *h > GX_MAX_TEX_DIM || !(grid = (uint8_t *)calloc((size_t)perRow * fw * rows * *h, 4)))
+		return NULL;
+	*cols = perRow;
+	for (i = 0; i < frames; i++)
+		for (y = 0; y < *h; y++)
+			memcpy(grid + (((size_t)(i / *cols) * *h + y) * *cols * fw + (size_t)(i % *cols) * fw) * 4,
+			       rgba + ((size_t)y * *w + (size_t)i * fw) * 4, (size_t)fw * 4);
+	*w = *cols * fw;
+	*h = rows * *h;
+	return grid;
+}
+
 /* Caller frees the returned TPAG index list. */
 static int32_t *load_frames(VMContext *ctx, const char *fname, int frames, bool removeback, int *fw, int *fh)
 {
 	DataWin *dw = ctx->dataWin;
 	FileSystem *fs = ctx->runner->fileSystem;
-	uint8_t *data, *rgba;
+	uint8_t *data, *rgba, *grid;
 	int32_t size, page, *tpags;
-	int w, h, n, i;
+	int w, h, n, i, cols;
 	bool keep = strncmp(fname, "lang/", 5) == 0 || strncmp(fname, "mods/", 5) == 0;
 
 	if (frames < 1)
@@ -88,14 +111,16 @@ static int32_t *load_frames(VMContext *ctx, const char *fname, int frames, bool 
 			if (memcmp(rgba + (size_t)i * 4, bg, 3) == 0)
 				rgba[(size_t)i * 4 + 3] = 0;
 	}
-	page = GxRenderer_addImage(rgba, w, h);
+	*fw = w / frames;
+	*fh = h;
+	grid = fold_frames(rgba, &w, &h, frames, &cols);
+	page = GxRenderer_addImage(grid ? grid : rgba, w, h);
+	free(grid);
 	stbi_image_free(rgba);
 	if (page < 0) {
 		logWarn("Wii: no room for %s (%dx%d)\n", fname, w, h);
 		return NULL;
 	}
-	*fw = w / frames;
-	*fh = h;
 	logInfo("Wii: image %s %dx%d x%d -> page %d\n", fname, w, h, frames, (int)page);
 	tpags = (int32_t *)safeMalloc((size_t)frames * sizeof(int32_t));
 	for (i = 0; i < frames; i++) {
@@ -104,9 +129,10 @@ static int32_t *load_frames(VMContext *ctx, const char *fname, int frames, bool 
 		tpags[i] = tpag_append(dw);
 		item = &dw->tpag.items[tpags[i]];
 		item->present = true;
-		item->sourceX = (uint16_t)(i * *fw);
+		item->sourceX = (uint16_t)(i % cols * *fw);
+		item->sourceY = (uint16_t)(i / cols * *fh);
 		item->sourceWidth = item->targetWidth = item->boundingWidth = (uint16_t)*fw;
-		item->sourceHeight = item->targetHeight = item->boundingHeight = (uint16_t)h;
+		item->sourceHeight = item->targetHeight = item->boundingHeight = (uint16_t)*fh;
 		item->texturePageId = (int16_t)page;
 	}
 	if (keep) {
