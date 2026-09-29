@@ -160,17 +160,44 @@ static void fail(const char *fmt, ...)
 		snprintf(errLine, sizeof errLine, "%s", line);
 }
 
-/* fwrite that names the one failure a player can fix: a full card. */
+/* Names the one write failure a player can fix: a full card. */
+static void write_failed(void)
+{
+	if (noSpace)
+		return;
+	noSpace = errno == ENOSPC;
+	fail(noSpace ? "%s is full; free some space and start again" : "could not write to %s (error %d)",
+	     WiiPaths_media(), errno);
+}
+
 static size_t wr(const void *p, size_t n, FILE *f)
 {
 	size_t r = fwrite(p, 1, n, f);
 
-	if (r != n && !noSpace) {
-		noSpace = errno == ENOSPC;
-		fail(noSpace ? "%s is full; free some space and start again" : "could not write to %s (error %d)",
-		     WiiPaths_media(), errno);
-	}
+	if (r != n)
+		write_failed();
 	return r;
+}
+
+/* An fwrite only reached stdio's buffer; the card can still refuse it on a later flush or at the close. */
+static bool close_written(FILE *f)
+{
+	bool ok = !ferror(f);
+
+	if (fclose(f) != 0)
+		ok = false;
+	if (!ok)
+		write_failed();
+	return ok;
+}
+
+static bool pad_to(FILE *f, u32 align)
+{
+	static const u8 zeros[BLOB_ALIGN];
+	long at = ftell(f);
+	u32 n = at < 0 ? 0 : (align - (u32)at % align) % align;
+
+	return at >= 0 && wr(zeros, n, f) == n;
 }
 
 /* One line that keeps rewriting itself (row 20), for progress. */
@@ -311,7 +338,8 @@ static bool zip_inflate(FILE *zf, u32 dataOff, u32 csize, u32 usize, int method,
 	}
 	if (method == 8)
 		inflateEnd(&z);
-	fclose(out);
+	if (!close_written(out))
+		ok = false;
 	if (ok && (got != usize || have != crc)) {
 		fail("a file in %s is damaged (%s: %u of %u bytes, or a bad checksum); download the zip again", zipName, dst, (unsigned)got, (unsigned)usize);
 		ok = false;
@@ -592,11 +620,15 @@ static bool apply_delta(void)
 		fail("%s is not AM2R 1.1: the 1.5.5 patch does not fit it (%s)", zipName, xd3_errstring(&stream));
 		ok = false;
 	}
-	xd3_close_stream(&stream);
+	if (ok && xd3_close_stream(&stream) != 0) {
+		fail("patch/data.xdelta ends early (%s); copy the whole release again", xd3_errstring(&stream));
+		ok = false;
+	}
 	xd3_free_stream(&stream);
 	fclose(cache.f);
 	fclose(in);
-	fclose(out);
+	if (!close_written(out))
+		ok = false;
 	say("delta applied: %u MB written; source blocks %u asked, %u read (%u MB, %u ms); xdelta used %u KB",
 	    (unsigned)(written >> 20), cache.calls, cache.misses, (unsigned)(cache.misses * (SRC_BLOCK >> 20)),
 	    (unsigned)cache.readMs, (unsigned)(bumpHigh >> 10));
@@ -946,8 +978,8 @@ static bool repack(void)
 		for (p = 0; p < pass.n; p++) {
 			long at;
 
-			while ((ftell(out) % BLOB_ALIGN) != 0)
-				fputc(0, out);
+			if (!pad_to(out, BLOB_ALIGN))
+				goto done;
 			at = ftell(out);
 			newOff[first + p] = (u32)at;
 			if (!png_write(out, pass.canvas[p], plan.pages[first + p].w, plan.pages[first + p].h))
@@ -957,8 +989,8 @@ static bool repack(void)
 		}
 		bumpHi = mark; /* the pass's canvases, LIFO */
 	}
-	while ((ftell(out) % 16) != 0)
-		fputc(0, out);
+	if (!pad_to(out, 16))
+		goto done;
 	outTxtrSize = (u32)ftell(out) - txtr.off;
 	/* AUDO: the pointer list shifts by the TXTR growth, the sound data is copied as is */
 	delta = outTxtrSize - txtr.size;
@@ -997,8 +1029,8 @@ static bool repack(void)
 	ok = true;
 	say("repacked: %u pages -> %u, %u MB", (unsigned)oldN, (unsigned)newN, (unsigned)(total >> 20));
 done:
-	if (out)
-		fclose(out);
+	if (out && !close_written(out))
+		ok = false;
 	if (in)
 		fclose(in);
 	return ok;
@@ -1032,8 +1064,8 @@ static bool copy_tree(const char *from, const char *to)
 			ok = fi && fo && copy_range(fi, fo, 0, (u32)st.st_size);
 			if (fi)
 				fclose(fi);
-			if (fo)
-				fclose(fo);
+			if (fo && !close_written(fo))
+				ok = false;
 		}
 	}
 	closedir(d);
