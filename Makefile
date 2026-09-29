@@ -90,7 +90,8 @@ patchkit:
 # Same tree, second build dir, unused/shadow warnings on for src/wii/ only (upstream's are noise).
 wii-warn: wii
 	cmake -B $(WII_BUILD)-warn -S $(BUTTER) -DWII_STRICT=ON $(WII_CMAKE_FLAGS)
-	cmake --build $(WII_BUILD)-warn -j$(shell nproc) 2>&1 | grep -E "src/wii/.*warning" || echo "no warnings in src/wii/"
+	cmake --build $(WII_BUILD)-warn -j$(shell nproc) > $(WII_BUILD)-warn/build.log 2>&1 || { tail -20 $(WII_BUILD)-warn/build.log; exit 1; }
+	grep -E "src/wii/.*warning" $(WII_BUILD)-warn/build.log || echo "no warnings in src/wii/"
 	@ls -l dist/apps/am2r/boot.dol
 
 wii-sd:
