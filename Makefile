@@ -106,10 +106,10 @@ wii-sd:
 	cp -f $(AM2R_DATA)/lang/languages.txt $(AM2R_DATA)/lang/english.ini $(WII_SD)/apps/am2r/game/lang/
 	@echo "SD image: $(WII_SD)/apps/am2r/"
 
-# Assemble a copy-to-SD tree (boot.dol + your data.win + lang). One-time setup;
-# after that, iterate with 'make wii && make run-wii'. Never commits data.win.
+# Assemble a copy-to-SD tree from an already-patched 1.5.5 folder (boot.dol, data.win, lang, mods, music), for
+# development. Never commits data.win.
 sd-pack:
-	tools/sd-pack.sh "$(CURDIR)/$(AM2R_DATA)" "$(CURDIR)/dist/sd"
+	tools/sd-pack.sh "$(CURDIR)/$(dir $(CU155))" "$(CURDIR)/dist/sd"
 
 # Regression check in Dolphin: two tapes shot against a blessed reference DOL, then a short room sweep.
 # The harness lives in project-notes/research/scripts (untracked); bless a build you trust first.

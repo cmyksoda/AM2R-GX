@@ -2,7 +2,7 @@
 """Repack a GameMaker: Studio 1.x data.win's texture pages onto pages the Wii's GPU can bind.
 
   tools/repack_textures.py IN.win OUT.win [--max 1024] [--gutter 1] [--groups groups.json] [--pow2]
-  tools/repack_textures.py IN.win --check          exit 0 if a page is over --max, 1 if none is
+  tools/repack_textures.py IN.win --check          exit 0 if a page is over --max, 3 if none is (1 = a crash)
 
 Every graphic is moved whole, pixels untouched, together with the ring of pixels GameMaker left
 around it. TPAG entries are patched in place; TXTR is rebuilt; AUDO's pointers are shifted.
@@ -203,7 +203,7 @@ def main():
     flag = u32(data, entries[0])
     if args.check:
         sizes = [struct.unpack('>II', data[b + 16:b + 24]) for b in blob_offs]
-        sys.exit(0 if any(w > args.max or h > args.max for w, h in sizes) else 1)
+        sys.exit(0 if any(w > args.max or h > args.max for w, h in sizes) else 3)
     if not args.dst:
         ap.error('OUT.win is required unless --check is given')
     pages = []
