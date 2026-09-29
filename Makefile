@@ -63,8 +63,8 @@ wii: $(BUTTER)/CMakeLists.txt
 	cmake --build $(WII_BUILD) -j$(shell nproc)
 	mkdir -p dist/apps/am2r
 	cp -f $(WII_BUILD)/boot.dol dist/apps/am2r/boot.dol
-	cp -f wii/hbc/meta.xml dist/apps/am2r/meta.xml
-	cp -f wii/hbc/icon.png dist/apps/am2r/icon.png
+	# The Homebrew Channel art and metadata are not in the repository; they join the release when on disk.
+	for f in meta.xml icon.png; do [ ! -f wii/hbc/$$f ] || cp -f wii/hbc/$$f dist/apps/am2r/$$f; done
 	cp -f LICENSE dist/apps/am2r/LICENSE.txt
 	cp -f NOTICE dist/apps/am2r/NOTICE.txt
 	cp -f wii/src/xdelta3/LICENSE dist/apps/am2r/LICENSE-xdelta3.txt
