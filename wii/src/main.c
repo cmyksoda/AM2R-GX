@@ -44,7 +44,7 @@ static void log_mallinfo(const char *when)
 
 int main(int argc, char **argv)
 {
-	static char saveDir[80], logPath[80], why[300];
+	static char saveDir[80], logPath[80], prevLogPath[96], why[300];
 	CommandLineArgs args;
 	const char *tape;
 	int rc;
@@ -62,6 +62,7 @@ int main(int argc, char **argv)
 	}
 	snprintf(saveDir, sizeof saveDir, "%s/save", WII_APP_DIR);
 	snprintf(logPath, sizeof logPath, "%s/profile.txt", WII_APP_DIR);
+	snprintf(prevLogPath, sizeof prevLogPath, "%s/profile-previous.txt", WII_APP_DIR);
 
 	mkdir(WII_APP_DIR, 0777);
 	mkdir(WII_GAME_DIR, 0777);
@@ -70,6 +71,9 @@ int main(int argc, char **argv)
 	if (chdir(WII_APP_DIR) != 0)
 		logWarn("chdir(%s) failed — paths stay absolute\n", WII_APP_DIR);
 
+	/* A tester restarts after a freeze; the log of the boot that froze must survive that. */
+	unlink(prevLogPath);
+	rename(logPath, prevLogPath);
 	if (!WiiLog_open(logPath))
 		logWarn("could not open %s — console only\n", logPath);
 	Wii_hooksBoot(argc, argv);
