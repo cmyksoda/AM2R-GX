@@ -77,6 +77,16 @@ static float gc_axis(s8 pos)
 	return v;
 }
 
+/* A GameCube stick's gate stops it well short of 128 (Jaxi's: 88 right, 104 left), so its rim read as 68-81% pushed,
+ * under AM2R's Analog Walking run line (~62-66%): Samus walked unless the stick was pressed hard into the rim. */
+#define GC_STICK_REACH 90.0f
+
+static float gc_reach(float v)
+{
+	v *= 128.0f / GC_STICK_REACH;
+	return v > 1.0f ? 1.0f : v < -1.0f ? -1.0f : v;
+}
+
 static void apply_move(GamepadSlot *slot, float lx, float ly, bool up, bool down, bool left, bool right)
 {
 	up = up || ly < -STICK_DIGITAL;
@@ -253,6 +263,8 @@ static void poll_gcpad(GamepadSlot *slot, u16 held, const s8 *sticks, bool twoAi
 		held |= PAD_TRIGGER_R;
 	apply_move(slot, lx, ly, (held & PAD_BUTTON_UP) || (!twoAim && cup), (held & PAD_BUTTON_DOWN) || (!twoAim && cdown),
 		   held & PAD_BUTTON_LEFT, held & PAD_BUTTON_RIGHT);
+	slot->axisValue[0] = gc_reach(lx);
+	slot->axisValue[1] = gc_reach(ly);
 	apply_map(slot, gcMap, held);
 	if (cup)
 		set_btn(slot, SLOT_LB, true);
