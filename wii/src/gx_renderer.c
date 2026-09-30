@@ -868,15 +868,22 @@ static void gx_page_row(void *user, int y, const u8 *rgba, int width)
 {
 	PageRows *pr = (PageRows *)user;
 	int x, n = width < pr->w ? width : pr->w;
+	u16 *row;
 
 	if (y >= pr->h)
 		return;
-	for (x = 0; x < n; x++) {
-		const u8 *p = rgba + x * 4;
-		int off = gx_texel_off(pr->tw, x, y);
+	/* A row crosses each 4x4 tile as four neighbouring texels. */
+	row = pr->dst + gx_texel_off(pr->tw, 0, y);
+	for (x = 0; x + 4 <= n; x += 4, rgba += 16) {
+		u16 *d = row + x * 4;
 
-		pr->dst[off] = pack_rgb5a3(p[0], p[1], p[2], p[3]);
+		d[0] = pack_rgb5a3(rgba[0], rgba[1], rgba[2], rgba[3]);
+		d[1] = pack_rgb5a3(rgba[4], rgba[5], rgba[6], rgba[7]);
+		d[2] = pack_rgb5a3(rgba[8], rgba[9], rgba[10], rgba[11]);
+		d[3] = pack_rgb5a3(rgba[12], rgba[13], rgba[14], rgba[15]);
 	}
+	for (; x < n; x++, rgba += 4)
+		row[(x >> 2) * 16 + (x & 3)] = pack_rgb5a3(rgba[0], rgba[1], rgba[2], rgba[3]);
 }
 
 static char gx_fatal[320]; /* a data.win the GPU cannot draw; main shows it once the loop has ended */
