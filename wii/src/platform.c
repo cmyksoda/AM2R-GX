@@ -1,4 +1,5 @@
 #include "assets.h"
+#include "bin_files.h"
 #include "common.h"
 #include "controls.h"
 #include "gettime.h"
@@ -277,6 +278,7 @@ void platformExit(void)
 void platformInitFunctions(Runner *runner)
 {
 	g_runner = runner;
+	WiiBinFiles_install(runner->fileSystem);
 	runner->setCursor = NULL;
 	runner->currentCursor = GML_CR_DEFAULT;
 	if (runner->vmContext)
