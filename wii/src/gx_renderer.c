@@ -1006,11 +1006,15 @@ fail:
 	return false;
 }
 
-#define PREFETCH_IDLE_FRAMES 60 /* a prefetch only evicts pages nobody drew for a second */
+#define PREFETCH_IDLE_FRAMES 300 /* a prefetch only evicts pages nobody drew for five seconds */
 
-/* Per TPAG item, the next page its sprite's animation reaches (-1: none), so that page can load on the
- * loader thread while this one is shown. 1.5.5's title is 60 frames on 30 pages, one every 16 frames. */
-static int16_t *gx_ahead;
+#define STREAM_PAGES 8 /* an animation on this many pages is a stream: in 1.5.5 only the title (30) */
+
+/* Per TPAG item, the next page its sprite's animation reaches (-1: none), so it can load on the loader thread
+ * while this one is shown, and for a stream the one after too: with only the next one queued, a Wii still waited
+ * ~20 ms on every third title page. Samus's own animations span up to 4 pages; queuing two of those crowded out
+ * the room's pages at the next pause. */
+static int16_t *gx_ahead, *gx_ahead2;
 static uint32_t gx_aheadCount;
 static struct {
 	int32_t page; /* out on the loader, -1 = none */
@@ -1028,7 +1032,9 @@ static void gx_build_ahead(DataWin *dw)
 
 	gx_aheadCount = dw->tpag.count;
 	gx_ahead = (int16_t *)safeMalloc(gx_aheadCount * sizeof(int16_t));
+	gx_ahead2 = (int16_t *)safeMalloc(gx_aheadCount * sizeof(int16_t));
 	memset(gx_ahead, 0xff, gx_aheadCount * sizeof(int16_t));
+	memset(gx_ahead2, 0xff, gx_aheadCount * sizeof(int16_t));
 	for (s = 0; s < dw->sprt.count; s++)
 		if (dw->sprt.sprites[s].textureCount > most)
 			most = dw->sprt.sprites[s].textureCount;
@@ -1036,7 +1042,8 @@ static void gx_build_ahead(DataWin *dw)
 	for (s = 0; s < dw->sprt.count; s++) {
 		const Sprite *sp = &dw->sprt.sprites[s];
 		uint32_t n = sp->textureCount;
-		bool one = true;
+		uint32_t distinct = 0;
+		bool streams;
 
 		if (n < 2 || !sp->tpagIndices)
 			continue;
@@ -1044,18 +1051,30 @@ static void gx_build_ahead(DataWin *dw)
 			int32_t t = sp->tpagIndices[i];
 
 			pages[i] = t >= 0 && (uint32_t)t < gx_aheadCount ? dw->tpag.items[t].texturePageId : -1;
-			one = one && pages[i] == pages[0];
+			for (j = 0; j < i && pages[j] != pages[i]; j++)
+				;
+			if (j == i)
+				distinct++;
 		}
-		if (one)
+		if (distinct < 2)
 			continue;
+		streams = distinct >= STREAM_PAGES;
 		for (i = 0; i < n; i++) {
+			int16_t *next = &gx_ahead[sp->tpagIndices[i]];
+
 			if (pages[i] < 0)
 				continue;
 			for (j = 1; j < n; j++) {
 				int16_t q = pages[(i + j) % n];
 
-				if (q >= 0 && q != pages[i]) {
-					gx_ahead[sp->tpagIndices[i]] = q;
+				if (q < 0 || q == pages[i] || q == *next)
+					continue;
+				if (*next < 0) {
+					*next = q;
+					if (!streams)
+						break;
+				} else {
+					gx_ahead2[sp->tpagIndices[i]] = q;
 					break;
 				}
 			}
@@ -1812,8 +1831,11 @@ static void gx_draw_tpag(GxRenderer *gx, int32_t tpagIndex, float x0, float y0, 
 	page = gx_page(gx, tpag->texturePageId);
 	if (!page)
 		return;
-	if ((uint32_t)tpagIndex < gx_aheadCount && gx_ahead[tpagIndex] >= 0)
+	if ((uint32_t)tpagIndex < gx_aheadCount && gx_ahead[tpagIndex] >= 0) {
 		gx_prefetch(gx, gx_ahead[tpagIndex]);
+		if (gx->pages[gx_ahead[tpagIndex]].loaded)
+			gx_prefetch(gx, gx_ahead2[tpagIndex]);
+	}
 	u0 = (tpag->sourceX + srcX) / (float)page->texW;
 	v0 = (tpag->sourceY + srcY) / (float)page->texH;
 	u1 = (tpag->sourceX + srcX + srcW) / (float)page->texW;
@@ -1882,7 +1904,8 @@ static void gxDestroy(Renderer *renderer)
 	gx_prefetch_collect(gx, true);
 	PageLoader_stop();
 	free(gx_ahead);
-	gx_ahead = NULL;
+	free(gx_ahead2);
+	gx_ahead = gx_ahead2 = NULL;
 	gx_aheadCount = 0;
 	for (i = 0; i < gx->pageCount; i++)
 		WiiMem_texFree(gx->pages[i].texels);
