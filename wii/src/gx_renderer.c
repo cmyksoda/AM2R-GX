@@ -500,6 +500,87 @@ static GxSurf *gx_tiled_target(GxRenderer *gx)
 	return s;
 }
 
+/* emit_quad's CPU raster for an axis-aligned quad of one colour: u then depends on x alone and v on y
+ * alone, so the same interpolation runs once per column and once per row instead of per pixel. */
+static void raster_flat(GxTile *t, GxPage *pg, int ox, int oy, int x0i, int y0i, int x1i, int y1i,
+			float minx, float miny, float dx, float dy, float u0, float u1, float v0, float v3,
+			u8 cr, u8 cg, u8 cb, u8 ca)
+{
+	static int colSrc[SURF_TILE_W], colDst[SURF_TILE_W];
+	u8 *dst = (u8 *)t->texels;
+	int y, i, n = x1i - x0i;
+	bool white = cr == 255 && cg == 255 && cb == 255 && ca == 255;
+
+	if (pg && !pg->texels)
+		pg = NULL;
+	if (!pg && ca == 0)
+		return;
+	for (i = 0; i < n; i++) {
+		int lx = x0i + i - ox;
+
+		colDst[i] = (lx >> 2) * 64 + (lx & 3) * 2;
+		if (pg) {
+			float px = ((float)(x0i + i) + 0.5f - minx) / dx;
+			int tx = (int)(mixf(u0, u1, px) * (float)pg->texW);
+
+			if (tx < 0)
+				tx = 0;
+			if (tx >= pg->texW)
+				tx = pg->texW - 1;
+			colSrc[i] = (tx >> 2) * 16 + (tx & 3);
+		}
+	}
+	for (y = y0i; y < y1i; y++) {
+		int ly = y - oy;
+		u8 *row = dst + (ly >> 2) * (t->texW >> 2) * 64 + (ly & 3) * 8;
+		const u16 *src = NULL;
+
+		if (pg) {
+			float py = ((float)y + 0.5f - miny) / dy;
+			int ty = (int)(mixf(v0, v3, py) * (float)pg->texH);
+
+			if (ty < 0)
+				ty = 0;
+			if (ty >= pg->texH)
+				ty = pg->texH - 1;
+			src = pg->texels + (ty >> 2) * (pg->texW >> 2) * 16 + (ty & 3) * 4;
+		}
+		for (i = 0; i < n; i++) {
+			u8 *p = row + colDst[i];
+			u8 vr = cr, vg = cg, vb = cb, va = ca;
+
+			if (src) {
+				u8 sr, sg, sb, sa;
+
+				unpack_rgb5a3(src[colSrc[i]], &sr, &sg, &sb, &sa);
+				if (white) {
+					vr = sr;
+					vg = sg;
+					vb = sb;
+					va = sa;
+				} else {
+					vr = (u8)((vr * sr) / 255);
+					vg = (u8)((vg * sg) / 255);
+					vb = (u8)((vb * sb) / 255);
+					va = (u8)((va * sa) / 255);
+				}
+			}
+			if (va == 0)
+				continue;
+			if (va < 255) {
+				vr = (u8)((vr * va + p[1] * (255 - va)) / 255);
+				vg = (u8)((vg * va + p[32] * (255 - va)) / 255);
+				vb = (u8)((vb * va + p[33] * (255 - va)) / 255);
+				va = (u8)(va + (u16)p[0] * (255 - va) / 255);
+			}
+			p[0] = va;
+			p[1] = vr;
+			p[32] = vg;
+			p[33] = vb;
+		}
+	}
+}
+
 static void emit_quad(float x0, float y0, float x1, float y1, float x2, float y2, float x3, float y3,
 		      float u0, float v0, float u1, float v1, float u2, float v2, float u3, float v3,
 		      u8 r0, u8 g0, u8 b0, u8 a0, u8 r1, u8 g1, u8 b1, u8 a1,
@@ -508,6 +589,7 @@ static void emit_quad(float x0, float y0, float x1, float y1, float x2, float y2
 	GxSurf *s = gx_tiled_target(gx_cur);
 	float minx, maxx, miny, maxy, lift;
 	int c0, c1, tr0, tr1, c, tr;
+	bool flat;
 
 	if (gx_cur && (lift = WiiSafe_lift(gx_cur->base.runner)) != 0.0f) {
 		y0 += lift;
@@ -572,6 +654,8 @@ static void emit_quad(float x0, float y0, float x1, float y1, float x2, float y2
 		tr1 = s->tilesY - 1;
 	if (c1 < c0 || tr1 < tr0)
 		return;
+	flat = u0 == u3 && u1 == u2 && v0 == v1 && v3 == v2 && r0 == r1 && r0 == r2 && r0 == r3 &&
+	       g0 == g1 && g0 == g2 && g0 == g3 && b0 == b1 && b0 == b2 && b0 == b3 && a0 == a1 && a0 == a2 && a0 == a3;
 	/* Tiled surfaces are rasterized on the CPU: GX CopyTex of a tiled EFB never wrote texels. */
 	for (tr = tr0; tr <= tr1; tr++) {
 		for (c = c0; c <= c1; c++) {
@@ -604,6 +688,12 @@ static void emit_quad(float x0, float y0, float x1, float y1, float x2, float y2
 			t = &s->tiles[tr * s->tilesX + c];
 			if (!t->texels)
 				continue;
+			if (flat) {
+				raster_flat(t, gx_cur ? gx_cur->boundPage : NULL, ox, oy, x0i, y0i, x1i, y1i,
+					    minx, miny, dx, dy, u0, u1, v0, v3, r0, g0, b0, a0);
+				t->objReady = false;
+				continue;
+			}
 			for (y = y0i; y < y1i; y++) {
 				float py = ((float)y + 0.5f - miny) / dy;
 
