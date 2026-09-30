@@ -64,10 +64,26 @@ static bool unfilter(u8 type, u8 *cur, const u8 *prev, int n)
 	}
 }
 
-bool WiiPng_decodeRows(const u8 *png, size_t len, WiiPngRowFn emit, void *user)
+static voidpf work_alloc(voidpf opaque, uInt items, uInt size)
 {
-	/* Filter byte + pixels. Static: pages load one at a time, on the main thread. */
-	static u8 rows[2][1 + PNG_MAX_WIDTH * BPP];
+	WiiPngWork *w = (WiiPngWork *)opaque;
+	u32 n = ((u32)items * size + 31) & ~31u;
+
+	if (w->zused + n > sizeof w->zmem)
+		return Z_NULL;
+	w->zused += n;
+	return w->zmem + w->zused - n;
+}
+
+static void work_free(voidpf opaque, voidpf address)
+{
+	(void)opaque;
+	(void)address;
+}
+
+static bool decode(u8 (*rows)[1 + PNG_MAX_WIDTH * BPP], WiiPngWork *work, const u8 *png, size_t len, WiiPngRowFn emit,
+		   void *user)
+{
 	int width, height, stride, y = 0, which = 0;
 	size_t pos = 8;
 	z_stream z;
@@ -76,8 +92,14 @@ bool WiiPng_decodeRows(const u8 *png, size_t len, WiiPngRowFn emit, void *user)
 	if (!WiiPng_size(png, len, &width, &height))
 		return false;
 	stride = width * BPP;
-	memset(rows, 0, sizeof rows);
+	memset(rows, 0, sizeof(rows[0]) * 2);
 	memset(&z, 0, sizeof z);
+	if (work) {
+		work->zused = 0;
+		z.zalloc = work_alloc;
+		z.zfree = work_free;
+		z.opaque = work;
+	}
 	if (inflateInit(&z) != Z_OK)
 		return false;
 	z.next_out = rows[which];
@@ -120,4 +142,17 @@ bool WiiPng_decodeRows(const u8 *png, size_t len, WiiPngRowFn emit, void *user)
 	}
 	inflateEnd(&z);
 	return ok && y == height;
+}
+
+bool WiiPng_decodeRows(const u8 *png, size_t len, WiiPngRowFn emit, void *user)
+{
+	/* Filter byte + pixels. Static: the main thread decodes one page at a time. */
+	static u8 rows[2][1 + PNG_MAX_WIDTH * BPP];
+
+	return decode(rows, NULL, png, len, emit, user);
+}
+
+bool WiiPng_decodeRowsIn(WiiPngWork *work, const u8 *png, size_t len, WiiPngRowFn emit, void *user)
+{
+	return decode(work->rows, work, png, len, emit, user);
 }

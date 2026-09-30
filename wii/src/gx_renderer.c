@@ -1,5 +1,6 @@
 #include "gx_renderer.h"
 #include "overscan.h"
+#include "page_loader.h"
 #include "png_stream.h"
 #include "am2r.h"
 #include "controls.h"
@@ -62,6 +63,8 @@ typedef struct {
 	u16 *texels;
 	GXTexObj obj;
 	u64 lastUsed;
+	bool loading; /* out on the loader thread */
+	int32_t pngW, pngH; /* known once read; pngW < 0: never prefetched */
 } GxPage;
 
 typedef struct {
@@ -883,6 +886,37 @@ const char *GxRenderer_fatal(void)
 	return gx_fatal[0] ? gx_fatal : NULL;
 }
 
+static void gx_page_ready(GxRenderer *gx, uint32_t pageId, u16 *texels, int w, int h, int tw, int th, const char *how,
+			  u64 t0)
+{
+	GxPage *page = &gx->pages[pageId];
+
+	DCFlushRange(texels, tex_bytes(tw, th));
+	GX_InitTexObj(&page->obj, texels, (u16)tw, (u16)th, GX_TF_RGB5A3, GX_CLAMP, GX_CLAMP, GX_FALSE);
+	if (gx_cur)
+		gx_cur->texBound = false; /* the object may be the bound one */
+	GX_InitTexObjFilterMode(&page->obj, GX_NEAR, GX_NEAR);
+	page->texels = texels;
+	page->texW = tw;
+	page->texH = th;
+	page->pngW = w;
+	page->pngH = h;
+	page->loaded = true;
+	gx->pagesResident++;
+	GX_InvalidateTexAll();
+	{
+		const u32 *ck = (const u32 *)texels;
+		u32 sum = 0, i, n = tex_bytes(tw, th) / 4;
+
+		for (i = 0; i < n && i < 16384; i++)
+			sum = sum * 31 + ck[i];
+		logInfo("GX: TXTR %u %dx%d (padded %dx%d, resident %u) %s sum=%08x in %.1f ms\n", pageId, w, h, tw, th,
+			gx->pagesResident, how, sum, ticks_to_microsecs(gettime() - t0) / 1000.0);
+	}
+}
+
+static bool gx_prefetch_collect(GxRenderer *gx, bool wait);
+
 static bool gx_load_page(GxRenderer *gx, uint32_t pageId)
 {
 	DataWin *dw = gx->base.dataWin;
@@ -897,6 +931,8 @@ static bool gx_load_page(GxRenderer *gx, uint32_t pageId)
 	if (pageId >= gx->pageCount)
 		return false;
 	page = &gx->pages[pageId];
+	if (page->loading)
+		gx_prefetch_collect(gx, true);
 	if (page->loaded)
 		return page->texels != NULL;
 	if (page->failed && gx->frameCounter < page->retryAt)
@@ -947,26 +983,7 @@ static bool gx_load_page(GxRenderer *gx, uint32_t pageId)
 		free(txtr->blobData);
 		txtr->blobData = NULL;
 	}
-	DCFlushRange(texels, tex_bytes(tw, th));
-	GX_InitTexObj(&page->obj, texels, (u16)tw, (u16)th, GX_TF_RGB5A3, GX_CLAMP, GX_CLAMP, GX_FALSE);
-	if (gx_cur)
-		gx_cur->texBound = false; /* the object may be the bound one */
-	GX_InitTexObjFilterMode(&page->obj, GX_NEAR, GX_NEAR);
-	page->texels = texels;
-	page->texW = tw;
-	page->texH = th;
-	page->loaded = true;
-	gx->pagesResident++;
-	GX_InvalidateTexAll();
-	{
-		const u32 *ck = (const u32 *)texels;
-		u32 sum = 0, i, n = tex_bytes(tw, th) / 4;
-
-		for (i = 0; i < n && i < 16384; i++)
-			sum = sum * 31 + ck[i];
-		logInfo("GX: TXTR %u %dx%d (padded %dx%d, resident %u) %s sum=%08x in %.1f ms\n", pageId, w, h, tw, th,
-			gx->pagesResident, streamed ? "rows" : "rgba", sum, ticks_to_microsecs(gettime() - t0) / 1000.0);
-	}
+	gx_page_ready(gx, pageId, texels, w, h, tw, th, streamed ? "rows" : "rgba", t0);
 	return true;
 
 fail:
@@ -980,6 +997,165 @@ fail:
 	page->failed = true;
 	page->retryAt = gx->frameCounter + PAGE_RETRY_FRAMES;
 	return false;
+}
+
+#define PREFETCH_IDLE_FRAMES 60 /* a prefetch only evicts pages nobody drew for a second */
+
+/* Per TPAG item, the next page its sprite's animation reaches (-1: none), so that page can load on the
+ * loader thread while this one is shown. 1.5.5's title is 60 frames on 30 pages, one every 16 frames. */
+static int16_t *gx_ahead;
+static uint32_t gx_aheadCount;
+static struct {
+	int32_t page; /* out on the loader, -1 = none */
+	u16 *texels;
+	u8 *blob;
+	int tw, th;
+	u64 t0;
+	PageRows rows;
+} gx_pf = { -1, NULL, NULL, 0, 0, 0, { NULL, 0, 0, 0 } };
+
+static void gx_build_ahead(DataWin *dw)
+{
+	uint32_t s, i, j, most = 1;
+	int16_t *pages;
+
+	gx_aheadCount = dw->tpag.count;
+	gx_ahead = (int16_t *)safeMalloc(gx_aheadCount * sizeof(int16_t));
+	memset(gx_ahead, 0xff, gx_aheadCount * sizeof(int16_t));
+	for (s = 0; s < dw->sprt.count; s++)
+		if (dw->sprt.sprites[s].textureCount > most)
+			most = dw->sprt.sprites[s].textureCount;
+	pages = (int16_t *)safeMalloc(most * sizeof(int16_t));
+	for (s = 0; s < dw->sprt.count; s++) {
+		const Sprite *sp = &dw->sprt.sprites[s];
+		uint32_t n = sp->textureCount;
+		bool one = true;
+
+		if (n < 2 || !sp->tpagIndices)
+			continue;
+		for (i = 0; i < n; i++) {
+			int32_t t = sp->tpagIndices[i];
+
+			pages[i] = t >= 0 && (uint32_t)t < gx_aheadCount ? dw->tpag.items[t].texturePageId : -1;
+			one = one && pages[i] == pages[0];
+		}
+		if (one)
+			continue;
+		for (i = 0; i < n; i++) {
+			if (pages[i] < 0)
+				continue;
+			for (j = 1; j < n; j++) {
+				int16_t q = pages[(i + j) % n];
+
+				if (q >= 0 && q != pages[i]) {
+					gx_ahead[sp->tpagIndices[i]] = q;
+					break;
+				}
+			}
+		}
+	}
+	free(pages);
+}
+
+/* Finishes the page out on the loader once it is done, or with wait, blocks until it is. */
+static bool gx_prefetch_collect(GxRenderer *gx, bool wait)
+{
+	GxPage *page;
+	char how[40] = "ahead";
+	bool ok;
+
+	if (gx_pf.page < 0)
+		return false;
+	if (wait) {
+		u64 t = gettime();
+
+		ok = PageLoader_wait();
+		snprintf(how, sizeof how, "ahead, waited %.1f ms", ticks_to_microsecs(gettime() - t) / 1000.0);
+	} else if (!PageLoader_poll(&ok)) {
+		return false;
+	}
+	page = &gx->pages[gx_pf.page];
+	page->loading = false;
+	free(gx_pf.blob);
+	if (ok) {
+		gx_page_ready(gx, (uint32_t)gx_pf.page, gx_pf.texels, page->pngW, page->pngH, gx_pf.tw, gx_pf.th, how,
+			      gx_pf.t0);
+		page->lastUsed = gx->frameCounter;
+	} else {
+		WiiMem_texFree(gx_pf.texels);
+		page->pngW = -1; /* the main thread's own load says what is wrong with it */
+	}
+	gx_pf.page = -1;
+	return ok;
+}
+
+/* The texels are allocated before the loader starts, so the size comes from the PNG header first. */
+static bool gx_png_header(DataWin *dw, const Texture *txtr, GxPage *page)
+{
+	u8 hdr[33];
+	long back = ftell(dw->lazyLoadFile);
+	bool ok = fseek(dw->lazyLoadFile, (long)txtr->blobOffset, SEEK_SET) == 0 &&
+		  fread(hdr, 1, sizeof hdr, dw->lazyLoadFile) == sizeof hdr;
+	int w, h;
+
+	fseek(dw->lazyLoadFile, back, SEEK_SET);
+	if (!ok || !WiiPng_size(hdr, sizeof hdr, &w, &h) || w > GX_MAX_TEX_DIM || h > GX_MAX_TEX_DIM) {
+		page->pngW = -1;
+		return false;
+	}
+	page->pngW = w;
+	page->pngH = h;
+	return true;
+}
+
+/* Hands pageId to the loader thread when it is idle and the memory comes without evicting anything drawn lately. */
+static void gx_prefetch(GxRenderer *gx, int32_t pageId)
+{
+	DataWin *dw = gx->base.dataWin;
+	GxPage *page;
+	const Texture *txtr;
+	PageJob job;
+	u32 bytes;
+	uint32_t v;
+
+	if (pageId < 0 || (uint32_t)pageId >= gx->pageCount || gx_pf.page >= 0 || PageLoader_busy() ||
+	    WiiMem_texturesInHeap())
+		return;
+	page = &gx->pages[pageId];
+	if (page->loaded || page->loading || page->failed || page->pinned || page->pngW < 0)
+		return;
+	txtr = &dw->txtr.textures[pageId];
+	if (!txtr->blobOffset || !txtr->blobSize || txtr->blobData || !dw->lazyLoadFile)
+		return;
+	if (!page->pngW && !gx_png_header(dw, txtr, page))
+		return;
+	if (WiiMem_room() < txtr->blobSize + PAGE_LOAD_NEED)
+		return;
+	gx_pf.tw = pad4(page->pngW);
+	gx_pf.th = pad4(page->pngH);
+	bytes = tex_bytes(gx_pf.tw, gx_pf.th);
+	while (!(gx_pf.texels = WiiMem_texAlloc(bytes))) {
+		v = gx_evict_victim(gx);
+		if (v == UINT32_MAX || gx->pages[v].lastUsed + PREFETCH_IDLE_FRAMES > gx->frameCounter || !gx_evict_page(gx))
+			return;
+	}
+	gx_pf.blob = (u8 *)malloc(txtr->blobSize);
+	gx_pf.rows = (PageRows){ gx_pf.texels, page->pngW, page->pngH, gx_pf.tw };
+	job.offset = txtr->blobOffset;
+	job.size = txtr->blobSize;
+	job.blob = gx_pf.blob;
+	job.clear = gx_pf.texels;
+	job.clearBytes = bytes;
+	job.emit = gx_page_row;
+	job.user = &gx_pf.rows;
+	if (!gx_pf.blob || !PageLoader_submit(&job)) {
+		free(gx_pf.blob);
+		WiiMem_texFree(gx_pf.texels);
+		return;
+	}
+	gx_pf.page = pageId;
+	gx_pf.t0 = gettime();
+	page->loading = true;
 }
 
 static GxPage *gx_page(GxRenderer *gx, int16_t pageId)
@@ -1629,6 +1805,8 @@ static void gx_draw_tpag(GxRenderer *gx, int32_t tpagIndex, float x0, float y0, 
 	page = gx_page(gx, tpag->texturePageId);
 	if (!page)
 		return;
+	if ((uint32_t)tpagIndex < gx_aheadCount && gx_ahead[tpagIndex] >= 0)
+		gx_prefetch(gx, gx_ahead[tpagIndex]);
 	u0 = (tpag->sourceX + srcX) / (float)page->texW;
 	v0 = (tpag->sourceY + srcY) / (float)page->texH;
 	u1 = (tpag->sourceX + srcX + srcW) / (float)page->texW;
@@ -1651,6 +1829,9 @@ static void gxInit(Renderer *renderer, DataWin *dataWin)
 	WiiMem_reserveTextures(HEAP_RESERVE);
 	gx->pageCount = dataWin->txtr.count;
 	gx->pages = (GxPage *)safeCalloc(gx->pageCount, sizeof(GxPage));
+	gx_build_ahead(dataWin);
+	if (!PageLoader_start(WII_DATA_WIN))
+		logWarn("GX: no loader thread, every page loads on the main thread\n");
 	gx->currentTarget = HOST_TARGET;
 	gx->appSurfId = -1;
 	gx->composeId = -1;
@@ -1691,6 +1872,11 @@ static void gxDestroy(Renderer *renderer)
 	GxRenderer *gx = (GxRenderer *)renderer;
 	uint32_t i;
 
+	gx_prefetch_collect(gx, true);
+	PageLoader_stop();
+	free(gx_ahead);
+	gx_ahead = NULL;
+	gx_aheadCount = 0;
 	for (i = 0; i < gx->pageCount; i++)
 		WiiMem_texFree(gx->pages[i].texels);
 	for (i = 0; i < gx->surfCount; i++)
@@ -1909,6 +2095,7 @@ static void gxBeginFrame(Renderer *renderer, int32_t gameW, int32_t gameH, int32
 	gx->gameW = gameW;
 	gx->gameH = gameH;
 	gx->frameCounter++;
+	gx_prefetch_collect(gx, false);
 	gx->viewActive = false;
 	gx->viewSnapped = false;
 	gx_quads = 0;
