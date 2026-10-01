@@ -7,7 +7,6 @@
 #include "patcher.h"
 
 #include "log.h"
-#include "wii_log.h"
 #include "png_stream.h"
 #include "wii_paths.h"
 #include "wii_video.h"
@@ -1119,7 +1118,6 @@ bool WiiPatcher_run(void)
 		return false;
 	}
 	t0 = gettime();
-	WiiLog_setEcho(false);
 	logInfo("PATCH heap before: arena=%d mem1_free=%u mem2_free=%u\n", mallinfo().arena, (unsigned)SYS_GetArena1Size(),
 	        (unsigned)SYS_GetArena2Size());
 	printf("\n\n  AM2R GX -- first boot: building AM2R 1.5.5 from %s\n", zipName);
@@ -1159,7 +1157,6 @@ bool WiiPatcher_run(void)
 		remove(partPath);
 	ioBuf = NULL;
 	region_give_back();
-	WiiLog_setEcho(true);
 	ranFailed = !ok;
 	return ok;
 }
