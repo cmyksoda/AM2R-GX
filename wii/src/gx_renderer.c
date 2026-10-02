@@ -589,7 +589,7 @@ static void emit_quad(float x0, float y0, float x1, float y1, float x2, float y2
 		      u8 r2, u8 g2, u8 b2, u8 a2, u8 r3, u8 g3, u8 b3, u8 a3)
 {
 	GxSurf *s = gx_tiled_target(gx_cur);
-	float minx, maxx, miny, maxy, lift;
+	float minx, maxx, miny, maxy, lift, qx, qy, dx, dy;
 	int c0, c1, tr0, tr1, c, tr;
 	bool flat;
 
@@ -634,6 +634,15 @@ static void emit_quad(float x0, float y0, float x1, float y1, float x2, float y2
 		maxy = y3;
 	if (maxx <= 0.0f || maxy <= 0.0f || minx >= (float)s->w || miny >= (float)s->h)
 		return;
+	/* The texture spans the whole quad: a quad over the surface's edge is cut there, not squeezed into what is left. */
+	qx = minx;
+	qy = miny;
+	dx = maxx - minx;
+	dy = maxy - miny;
+	if (dx < 0.001f)
+		dx = 1.0f;
+	if (dy < 0.001f)
+		dy = 1.0f;
 	if (minx < 0.0f)
 		minx = 0.0f;
 	if (miny < 0.0f)
@@ -666,7 +675,6 @@ static void emit_quad(float x0, float y0, float x1, float y1, float x2, float y2
 			int tw = SURF_TILE_W;
 			int th = SURF_TILE_H;
 			int x, y, x0i, y0i, x1i, y1i;
-			float dx, dy;
 			GxTile *t;
 
 			if (ox + tw > s->w)
@@ -681,26 +689,20 @@ static void emit_quad(float x0, float y0, float x1, float y1, float x2, float y2
 			y1i = (int)(maxy > (float)(oy + th) ? (float)(oy + th) : maxy);
 			if (x0i >= x1i || y0i >= y1i)
 				continue;
-			dx = maxx - minx;
-			dy = maxy - miny;
-			if (dx < 0.001f)
-				dx = 1.0f;
-			if (dy < 0.001f)
-				dy = 1.0f;
 			t = &s->tiles[tr * s->tilesX + c];
 			if (!t->texels)
 				continue;
 			if (flat) {
 				raster_flat(t, gx_cur ? gx_cur->boundPage : NULL, ox, oy, x0i, y0i, x1i, y1i,
-					    minx, miny, dx, dy, u0, u1, v0, v3, r0, g0, b0, a0);
+					    qx, qy, dx, dy, u0, u1, v0, v3, r0, g0, b0, a0);
 				t->objReady = false;
 				continue;
 			}
 			for (y = y0i; y < y1i; y++) {
-				float py = ((float)y + 0.5f - miny) / dy;
+				float py = ((float)y + 0.5f - qy) / dy;
 
 				for (x = x0i; x < x1i; x++) {
-					float px = ((float)x + 0.5f - minx) / dx;
+					float px = ((float)x + 0.5f - qx) / dx;
 					float uu, vv;
 					u8 vr, vg, vb, va, sr, sg, sb, sa;
 					int lx = x - ox, ly = y - oy;
