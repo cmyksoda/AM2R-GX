@@ -25,7 +25,7 @@
 
 #define IO_CHUNK (256 << 10)
 #define SRC_BLOCK (1 << 20)
-#define SRC_BLOCKS 14 /* the delta copies from all over the 1.1 file: 8 blocks re-read 6 GB (trial 6) */
+#define SRC_BLOCKS 14 /* the delta copies from all over the 1.1 file: fewer blocks re-read it many times over */
 #define CANVAS_BUDGET (16 << 20) /* new pages built per pass; each old page is decoded once per pass */
 #define REGION_BYTES (48u << 20) /* borrowed from the top of MEM2 (51 MB free there at this point) */
 #define BLOB_ALIGN 128           /* GameMaker aligns every PNG in TXTR to this */
@@ -145,7 +145,7 @@ static void say(const char *fmt, ...)
 	logInfo("PATCH %6u ms: %s\n", (unsigned)ticks_to_millisecs(gettime() - t0), line);
 }
 
-/* A failure in words a player can act on; only the first is kept (a statistics line once overwrote it). */
+/* A failure in words a player can act on; only the first is kept. */
 static void fail(const char *fmt, ...)
 {
 	char line[200];

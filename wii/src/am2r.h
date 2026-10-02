@@ -5,7 +5,7 @@
 
 struct Runner;
 
-/* Object index by name, -1 if the data has none: 1.1 and 1.5.5 number objects differently. */
+/* Object index by name, -1 if the data has none. */
 int32_t Wii_objectIndex(struct Runner *runner, const char *name);
 int32_t Wii_spriteIndex(struct Runner *runner, const char *name);
 int32_t Wii_roomIndex(struct Runner *runner, const char *name);

@@ -11,7 +11,7 @@
 #include <unistd.h>
 
 /* 32 pages of 64 sectors = 1 MB of MEM1 per mounted drive: 32 KB reads stay as fast as a bigger cache, and the
- * MEM1 left over holds textures, so the pause map no longer pushes the room's pages out. */
+ * MEM1 left over holds textures. */
 #define CACHE_PAGES 32
 #define CACHE_SECTORS 64
 #define USB_WAIT_TRIES 20 /* x 250 ms */

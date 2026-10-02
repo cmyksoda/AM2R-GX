@@ -113,7 +113,7 @@ static float view_mid(Runner *runner)
 	return cam ? cam->viewX + cam->viewWidth / 2.0f : 160.0f;
 }
 
-/* Where two prompt rows would not both fit (Jaxi): the upper row's item goes to the middle and the bottom row's
+/* Where two prompt rows would not both fit: the upper row's item goes to the middle and the bottom row's
  * prompts join it in their own columns. A bottom row on its own just moves up. */
 static struct {
 	Instance *inst;

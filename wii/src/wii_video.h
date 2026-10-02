@@ -15,7 +15,7 @@ GXRModeObj *WiiVideo_rmode(void);
 u32 WiiVideo_fbWidth(void);
 u32 WiiVideo_efbHeight(void);
 /* SYSCONF 16:9: the TV stretches the 640-wide frame, so the game composes its own wide view for it
- * (platform.c, gx_renderer.c); WII_WIDE_PILLARBOX keeps 4:3 instead. */
+ * (platform.c, gx_renderer.c). */
 bool WiiVideo_isWide(void);
 void WiiVideo_set240p(bool on); /* from the next frame on */
 /* Text console on its own XFB: the panic screen and the patcher's progress display. */

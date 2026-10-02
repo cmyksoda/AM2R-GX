@@ -492,7 +492,7 @@ fail:
 	return RValue_makeReal(0.0);
 }
 
-/* surface_getpixel(surf, x, y) / surface_getpixel_ext: GameMaker's colour packing, alpha on top. */
+/* surface_getpixel_ext(surf, x, y): GameMaker's colour packing, alpha on top. */
 static RValue wii_surface_getpixel(MAYBE_UNUSED VMContext *ctx, RValue *args, int32_t argCount)
 {
 	uint8_t px[4];
@@ -505,7 +505,7 @@ static RValue wii_surface_getpixel(MAYBE_UNUSED VMContext *ctx, RValue *args, in
 
 BuiltinFunc WiiAssets_builtin(const char *name)
 {
-	if (strcmp(name, "surface_getpixel") == 0 || strcmp(name, "surface_getpixel_ext") == 0)
+	if (strcmp(name, "surface_getpixel_ext") == 0)
 		return wii_surface_getpixel;
 	if (strcmp(name, "sprite_add") == 0)
 		return wii_sprite_add;

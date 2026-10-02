@@ -68,7 +68,6 @@ typedef struct {
 } GxPage;
 
 typedef struct {
-	int32_t pixelW, pixelH;
 	int32_t texW, texH;
 	u16 *texels;
 	GXTexObj obj;
@@ -867,8 +866,8 @@ static bool gx_evict_page(GxRenderer *gx)
 
 static bool gx_reclaim_surface(GxRenderer *gx);
 
-/* Orphaned surfaces are pure garbage: drop them all, early. Dripping them out one at a time left
- * the heap in 300 KB holes that a 4 MB page decode couldn't use. Cached pages go last. */
+/* Orphaned surfaces are pure garbage: drop them all at once, so their holes merge before a page decode needs one.
+ * Cached pages go last. */
 static void gx_make_room(GxRenderer *gx, u32 want)
 {
 	/* Surfaces live wherever textures do, so that is the pool whose pressure says "collect now". */
@@ -933,15 +932,8 @@ static void gx_page_ready(GxRenderer *gx, uint32_t pageId, u16 *texels, int w, i
 	page->loaded = true;
 	gx->pagesResident++;
 	GX_InvalidateTexAll();
-	{
-		const u32 *ck = (const u32 *)texels;
-		u32 sum = 0, i, n = tex_bytes(tw, th) / 4;
-
-		for (i = 0; i < n && i < 16384; i++)
-			sum = sum * 31 + ck[i];
-		logInfo("GX: TXTR %u %dx%d (padded %dx%d, resident %u) %s sum=%08x in %.1f ms\n", pageId, w, h, tw, th,
-			gx->pagesResident, how, sum, ticks_to_microsecs(gettime() - t0) / 1000.0);
-	}
+	logInfo("GX: TXTR %u %dx%d (padded %dx%d, resident %u) %s in %.1f ms\n", pageId, w, h, tw, th, gx->pagesResident,
+		how, ticks_to_microsecs(gettime() - t0) / 1000.0);
 }
 
 static bool gx_prefetch_collect(GxRenderer *gx, bool wait);
@@ -1032,10 +1024,8 @@ fail:
 
 #define STREAM_PAGES 8 /* an animation on this many pages is a stream: in 1.5.5 only the title (30) */
 
-/* Per TPAG item, the next page its sprite's animation reaches (-1: none), so it can load on the loader thread
- * while this one is shown, and for a stream the one after too: with only the next one queued, a Wii still waited
- * ~20 ms on every third title page. Samus's own animations span up to 4 pages; queuing two of those crowded out
- * the room's pages at the next pause. */
+/* Per TPAG item, the next page its animation reaches (-1: none), to load while this one shows; a stream (the title)
+ * queues one more, other sprites only one so the room's pages stay. */
 static int16_t *gx_ahead, *gx_ahead2;
 static uint32_t gx_aheadCount;
 static struct {
@@ -1463,8 +1453,7 @@ static void gx_bind_compose(GxRenderer *gx, bool restore)
 
 static void gx_bind_host(GxRenderer *gx)
 {
-	/* Physical output is always the full framebuffer; the game's logical window
-	 * size must not shrink the present into a corner (widescreen/death/settings). */
+	/* Physical output is always the full framebuffer, whatever window size the game set. */
 	int w = (int)WiiVideo_fbWidth();
 	int h = (int)WiiVideo_efbHeight();
 
@@ -1540,7 +1529,6 @@ static bool gx_bind_surface(GxRenderer *gx, int32_t id, bool restore)
 	return true;
 }
 
-static void gx_unshare(GxRenderer *gx, GxSurf *s, bool keep);
 
 static void gx_surf_release(GxRenderer *gx, GxSurf *s)
 {
@@ -1619,8 +1607,6 @@ static bool gx_alloc_tiles(GxRenderer *gx, GxSurf *s, int32_t width, int32_t hei
 				pw = SURF_TILE_W;
 			if (ph > SURF_TILE_H)
 				ph = SURF_TILE_H;
-			t->pixelW = pw;
-			t->pixelH = ph;
 			t->texW = pad4(pw);
 			t->texH = pad4(ph);
 			t->texels = gx_surf_memalign(gx, surf_bytes(t->texW, t->texH));
@@ -2119,7 +2105,7 @@ static void gx_preload_room(GxRenderer *gx)
 	for (i = 0; i < gx->pageCount && i < PRELOAD_MAX_PAGES; i++) {
 		if (!(want[i >> 3] & (1 << (i & 7))) || gx->pages[i].loaded)
 			continue;
-		/* Nothing left to evict but this frame's own pages: the rest load on demand as before. */
+		/* Nothing left to evict but this frame's own pages: the rest load on demand. */
 		if ((WiiMem_texturesInHeap() ? WiiMem_room() : WiiMem_texFreeBytes()) < PAGE_LOAD_NEED &&
 		    gx_evict_victim(gx) == UINT32_MAX)
 			break;
@@ -2298,7 +2284,7 @@ static void gx_view_ortho(GxRenderer *gx)
 }
 
 /* A view with its own surface (1.5.5's 426-wide view) never goes through beginView: the engine binds
- * the surface and hands us the camera. Without this the room was drawn from its top-left corner. */
+ * the surface and hands us the camera. */
 static void gxApplyViewProjection(Renderer *renderer, const Matrix4f *viewMatrix, const Matrix4f *projectionMatrix)
 {
 	GxRenderer *gx = (GxRenderer *)renderer;
@@ -2426,7 +2412,6 @@ static void gx_draw_overscan_overlay(GxRenderer *gx)
 	/* Centre lines: R + Up/Down and L + Left/Right shift the whole picture; the lines show where its middle sits. */
 	gx_ov_rect(0, cy + (float)(Overscan_y() * (int)LH / WII_FB_H) - 1, LW, 2, 255, 255, 255, 200);
 	gx_ov_rect(cx + (float)Overscan_x() - 1, 0, 2, LH, 255, 255, 255, 200);
-	/* H slider (Left/Right) above center, V slider (Up/Down) below */
 	gx_ov_rect(cx - tlen * 0.5f, cy - 40 * ys, tlen, tthk * ys, 30, 30, 40, 230);
 	gx_ov_rect(cx - tlen * 0.5f, cy - 40 * ys, tlen * hf, tthk * ys, 90, 200, 255, 255);
 	gx_ov_rect(cx - tthk * 0.5f, cy + 12 * ys, tthk, tlen * 0.55f * ys, 30, 30, 40, 230);
@@ -2478,8 +2463,8 @@ static void gxEndFrameEnd(Renderer *renderer)
 	}
 	if (Overscan_active())
 		gx_draw_overscan_overlay(gx);
-	/* GameMaker forgets the shader at frame end; the subscreen leaves the palette swap set and the
-	 * next room's tiles that share Samus's colours came back blue (vWii + Dolphin, session 9). */
+	/* GameMaker forgets the shader at frame end; a palette swap the subscreen leaves set would recolour the next
+	 * room. */
 	if (renderer->currentShader >= 0) {
 		static int said;
 
@@ -3717,7 +3702,7 @@ static bool gxSurfaceGetPixels(MAYBE_UNUSED Renderer *renderer, MAYBE_UNUSED int
 	return false;
 }
 
-/* surface_getpixel(_ext): one texel of a surface. 1.5.5 does this nine times at boot on a 4×4
+/* surface_getpixel_ext: one texel of a surface. 1.5.5 does this nine times at boot on a 4×4
  * surface to learn its morph-trail colours; a live target is copied out first. */
 bool GxRenderer_surfacePixel(int32_t surfaceID, int x, int y, uint8_t rgba[4])
 {

@@ -4,7 +4,7 @@
 #include "vm.h"
 
 /* Our replacements for the asset builtins (sprite_add/replace, background_add/replace, font_replace,
- * surface_getpixel[_ext]); NULL for other names. */
+ * surface_getpixel_ext); NULL for other names. */
 BuiltinFunc WiiAssets_builtin(const char *name);
 
 /* One page from an RGBA strip and a single-frame sprite per cell (x, width; full height); -1 where it failed. */

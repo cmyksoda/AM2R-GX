@@ -15,7 +15,7 @@ static int g_vi; /* VI active width, 0 = the mode's own */
 static bool g_active;
 static char g_path[96]; /* this console's own file; the shared overscan.txt is only a fallback */
 
-/* One card can move between consoles (Jaxi's Wii and Wii U want different insets), so each
+/* One card can move between consoles (a Wii and a Wii U often want different insets), so each
  * console keeps its own file, named by its ES device id. */
 static const char *own_path(void)
 {

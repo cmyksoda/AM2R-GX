@@ -37,9 +37,6 @@
 #define STREAM_STATS_FRAMES 1800
 // Top the rings up from a worker thread: a long main-thread frame (a room load) otherwise
 // starves them, audibly cutting the music out right after a track starts.
-#ifndef WII_AUDIO_DECODE_THREAD
-#define WII_AUDIO_DECODE_THREAD 1
-#endif
 #define DECODE_STACK_BYTES (64 * 1024)
 #define DECODE_THREAD_PRIO 80
 #define DECODE_NAP_US 4000
@@ -111,7 +108,6 @@ typedef struct {
     int32_t nextInstanceId;
     float masterGain;
     uint32_t statFrames;
-    uint64_t statTicks, statMaxTicks;
     uint32_t* blobUsed;     // per AUDO entry: tick of last play, for LRU
     uint32_t blobTick;
     uint32_t blobBytes;
@@ -311,16 +307,11 @@ static void applyStreamVolume(WiiAudioSystem* a, WiiStream* s) {
     setVoiceVolume(s->pb, a->masterGain * s->fade.gain);
 }
 
-#if WII_AUDIO_DECODE_THREAD
 static mutex_t g_decodeMutex;   // recursive: streamPlay can evict (streamStop) while holding it
 static lwp_t g_decodeThread = LWP_THREAD_NULL;
 static volatile bool g_decodeQuit;
 #define DECODE_LOCK()   LWP_MutexLock(g_decodeMutex)
 #define DECODE_UNLOCK() LWP_MutexUnlock(g_decodeMutex)
-#else
-#define DECODE_LOCK()   ((void) 0)
-#define DECODE_UNLOCK() ((void) 0)
-#endif
 
 static void streamStop(WiiStream* s) {
     if (s->pb != nullptr) AESND_SetVoiceStop(s->pb, true);
@@ -456,9 +447,6 @@ static float streamPosition(WiiStream* s) {
 }
 
 static void streamsUpdate(WiiAudioSystem* a, float dt) {
-#if !WII_AUDIO_DECODE_THREAD
-    uint64_t t0 = gettime();
-#endif
     for (int i = 0; i < WII_STREAMS; i++) {
         WiiStream* s = &a->streams[i];
         if (s->pb == nullptr) continue;
@@ -480,42 +468,24 @@ static void streamsUpdate(WiiAudioSystem* a, float dt) {
                     (unsigned) (n * (STREAM_CHUNK_BYTES / (s->channels * 2)) * 1000 / s->rate));
         }
         if (s->paused) continue;
-#if !WII_AUDIO_DECODE_THREAD
-        streamFill(s, STREAM_FILL_PER_UPDATE);
-#endif
         if (s->eof && s->drained > 0) {
             logInfo("WiiAudio: stream snd %d finished\n", s->soundIndex);
             streamStop(s);
         }
     }
-#if !WII_AUDIO_DECODE_THREAD
-    uint64_t dtTicks = gettime() - t0;
-    a->statTicks += dtTicks;
-    if (dtTicks > a->statMaxTicks) a->statMaxTicks = dtTicks;
-#endif
     if (++a->statFrames >= STREAM_STATS_FRAMES) {
         uint32_t starved = 0;
         int active = 0;
         for (int i = 0; i < WII_STREAMS; i++) { starved += a->streams[i].starved; active += a->streams[i].active; }
-#if WII_AUDIO_DECODE_THREAD
-        // The worker does the decoding, so a main-thread timing here would only measure the fade loop.
         if (active > 0) logInfo("WiiAudio: %d streams, starved=%u\n", active, starved);
-#else
-        if (active > 0)
-            logInfo("WiiAudio: decode avg %u us/frame max %u us, %d streams, starved=%u\n",
-                    (unsigned) (ticks_to_microsecs(a->statTicks) / STREAM_STATS_FRAMES),
-                    (unsigned) ticks_to_microsecs(a->statMaxTicks), active, starved);
-#endif
         if (a->undoneStops + a->undoneStarts != a->undoneLogged) {
             a->undoneLogged = a->undoneStops + a->undoneStarts;
             logInfo("WiiAudio: redid %u stops and %u starts the DSP copy-back undid\n", a->undoneStops, a->undoneStarts);
         }
         a->statFrames = 0;
-        a->statTicks = a->statMaxTicks = 0;
     }
 }
 
-#if WII_AUDIO_DECODE_THREAD
 static void* decodeThreadMain(void* arg) {
     WiiAudioSystem* a = (WiiAudioSystem*) arg;
     while (!g_decodeQuit) {
@@ -529,7 +499,6 @@ static void* decodeThreadMain(void* arg) {
     }
     return nullptr;
 }
-#endif
 
 // ===[ Vtable ]===
 
@@ -559,13 +528,10 @@ static void wiiInit(AudioSystem* audio, DataWin* dataWin, FileSystem* fs) {
         s->soundIndex = -1;
         streams++;
     }
-#if WII_AUDIO_DECODE_THREAD
     LWP_MutexInit(&g_decodeMutex, true);
     g_decodeQuit = false;
     LWP_CreateThread(&g_decodeThread, decodeThreadMain, a, nullptr, DECODE_STACK_BYTES, DECODE_THREAD_PRIO);
-#endif
-    logInfo("WiiAudio: AESND up, %d voices, %d streams%s\n", WII_VOICES, streams,
-            WII_AUDIO_DECODE_THREAD ? ", decode thread" : "");
+    logInfo("WiiAudio: AESND up, %d voices, %d streams, decode thread\n", WII_VOICES, streams);
 }
 
 static void wiiStopAll(AudioSystem* audio) {
@@ -576,20 +542,16 @@ static void wiiStopAll(AudioSystem* audio) {
 
 static void wiiDestroy(AudioSystem* audio) {
     WiiAudioSystem* a = (WiiAudioSystem*) audio;
-#if WII_AUDIO_DECODE_THREAD
     g_decodeQuit = true;
     if (g_decodeThread != LWP_THREAD_NULL) LWP_JoinThread(g_decodeThread, nullptr);
     g_decodeThread = LWP_THREAD_NULL;
-#endif
     wiiStopAll(audio);
     // A round already mixing can still copy a voice back over its stop or FreeVoice and read its buffer; paused, the
     // mixer starts no new round, and a round ends inside its 2 ms DMA period.
     AESND_Pause(true);
     usleep(10000);
     for (int i = 0; i < WII_VOICES; i++) releaseBuf(&a->voices[i]);
-#if WII_AUDIO_DECODE_THREAD
     LWP_MutexDestroy(g_decodeMutex);
-#endif
     for (int i = 0; i < WII_VOICES; i++)
         if (a->voices[i].pb != nullptr) AESND_FreeVoice(a->voices[i].pb);
     for (int i = 0; i < WII_STREAMS; i++) {
@@ -703,8 +665,8 @@ static bool wiiIsPlaying(AudioSystem* audio, int32_t idOrSound) {
     WiiAudioSystem* a = (WiiAudioSystem*) audio;
     reap(a);
     if (findStream(a, idOrSound) != nullptr) return true;
-    // A stop lands at the end of the step: AM2R stops Samus's spin loop on entering water, then asks again the same step;
-    // an instant "no" restarted it under the old id, orphaned for as long as she stayed in the water.
+    // A stop lands at the end of the step: AM2R stops a loop and asks again the same step, and an instant "no" would
+    // restart the sound under the old id.
     for (int i = 0; i < a->stoppedCount; i++)
         if (a->stoppedThisStep[i] == idOrSound) return true;
     WiiVoice* v = findVoice(a, idOrSound);

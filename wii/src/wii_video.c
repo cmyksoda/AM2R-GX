@@ -107,7 +107,6 @@ bool WiiVideo_init(void)
 	modes[0] = *pick_mode();
 	make_240(&modes[0], &modes[1]);
 	rmode = &modes[0];
-	/* 16:9 TVs stretch the frame; the game composes its wide view for that unless WII_WIDE_PILLARBOX is built in. */
 	wide = (CONF_GetAspectRatio() == CONF_ASPECT_16_9);
 
 	fifty = rmode->viTVMode >> 2 == VI_PAL;
@@ -135,11 +134,8 @@ bool WiiVideo_init(void)
 	GX_Init(fifo, FIFO_SIZE);
 	GX_SetCopyClear(clear, 0x00ffffff);
 	setup_copy();
-	if (rmode->aa)
-		GX_SetPixelFmt(GX_PF_RGB565_Z16, GX_ZC_LINEAR);
-	else
-		/* RGB8 EFB has no alpha; gui_surface / oCharacter.surf need draw_clear_alpha. */
-		GX_SetPixelFmt(GX_PF_RGBA6_Z24, GX_ZC_LINEAR);
+	/* RGB8 EFB has no alpha; gui_surface / oCharacter.surf need draw_clear_alpha. */
+	GX_SetPixelFmt(GX_PF_RGBA6_Z24, GX_ZC_LINEAR);
 	GX_SetCullMode(GX_CULL_NONE);
 	GX_SetZMode(GX_FALSE, GX_ALWAYS, GX_FALSE);
 	GX_SetDispCopyGamma(GX_GM_1_0);

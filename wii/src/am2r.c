@@ -63,9 +63,8 @@ int32_t Wii_varId(Runner *runner, const char *name, int32_t scope)
 	return -1;
 }
 
-/* global.controltype picks the prompt glyph set: 0 keyboard, 1 numbered pad, 2 named A/B pad.
- * check_keys resets it every step from the last input seen. Pin it to 2 after the step so prompts
- * stay the named-button set on a controller-only console. Gameplay unaffected. */
+/* check_keys resets global.controltype (0 keyboard, 1 numbered pad, 2 named pad) every step; pinned to 2 after it,
+ * as the Wii has only controllers. */
 void Wii_forceGamepadProfile(Runner *runner)
 {
 	static int32_t varId = -2;

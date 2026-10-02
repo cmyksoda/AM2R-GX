@@ -1,6 +1,5 @@
 #include "input.h"
 
-#include "input_recording.h"
 #include "am2r.h"
 #include "controls.h"
 #include "vm.h"
@@ -9,10 +8,8 @@
 #include "instance.h"
 #include "overscan.h"
 #include "hooks.h"
-#include "platformdefs.h"
 #include "runner.h"
 #include "runner_gamepad.h"
-#include "runner_keyboard.h"
 
 #include <math.h>
 #include <ogc/pad.h>
@@ -28,7 +25,7 @@
 #define HOME_HOLD_FRAMES 60
 /* The GameCube pad has no HOME: X + B + Start, the reset its own games use. */
 #define GC_QUIT (PAD_BUTTON_X | PAD_BUTTON_B | PAD_BUTTON_START)
-/* The display screen's chords: nothing a player holds in play (L + Down + Y was "aim down and fire"). */
+/* The display screen's chords: nothing a player holds in play. */
 #define CLASSIC_DISPLAY (WPAD_CLASSIC_BUTTON_PLUS | WPAD_CLASSIC_BUTTON_MINUS)
 #define GC_DISPLAY (PAD_BUTTON_START | PAD_TRIGGER_Z)
 #define CHORD_FRAMES 6
@@ -40,6 +37,9 @@ static WiiPad pad_in_use = WII_PAD_CLASSIC;
 static bool classic_is_wiiu;
 static float rumble_level;
 static bool rumble_fresh, gc_motor, wiiu_motor;
+
+enum { SLOT_FACE1, SLOT_FACE2, SLOT_FACE3, SLOT_FACE4, SLOT_LB, SLOT_RB, SLOT_LT, SLOT_RT, SLOT_SELECT, SLOT_START,
+       SLOT_PADU = 12, SLOT_PADD, SLOT_PADL, SLOT_PADR, SLOT_HOME };
 
 static void set_btn(GamepadSlot *slot, int idx, bool down)
 {
@@ -77,7 +77,7 @@ static float gc_axis(s8 pos)
 	return v;
 }
 
-/* A GameCube stick's gate stops it well short of 128 (Jaxi's: 88 right, 104 left), so its rim read as 68-81% pushed,
+/* A GameCube stick's gate stops it well short of 128 (one measured 88 right, 104 left), so its rim read as 68-81% pushed,
  * under AM2R's Analog Walking run line (~62-66%): Samus walked unless the stick was pressed hard into the rim. */
 #define GC_STICK_REACH 90.0f
 
@@ -95,22 +95,19 @@ static void apply_move(GamepadSlot *slot, float lx, float ly, bool up, bool down
 	right = right || lx > STICK_DIGITAL;
 	slot->axisValue[0] = lx;
 	slot->axisValue[1] = ly;
-	set_btn(slot, 12, up);
-	set_btn(slot, 13, down);
-	set_btn(slot, 14, left);
-	set_btn(slot, 15, right);
+	set_btn(slot, SLOT_PADU, up);
+	set_btn(slot, SLOT_PADD, down);
+	set_btn(slot, SLOT_PADL, left);
+	set_btn(slot, SLOT_PADR, right);
 }
 
-/* Every controller reaches the game only as its gamepad (keyboard keys alongside doubled actions, session 12).
+/* Every controller reaches the game only as its gamepad.
  * Face buttons go by position, bottom = face1, so AM2R's own remap screen names them right; the layout itself
  * lives in the game's bindings (padBindings). */
 typedef struct {
 	u32 mask;
 	int slot;
 } ButtonMap;
-
-enum { SLOT_FACE1, SLOT_FACE2, SLOT_FACE3, SLOT_FACE4, SLOT_LB, SLOT_RB, SLOT_LT, SLOT_RT, SLOT_SELECT, SLOT_START,
-       SLOT_PADU = 12, SLOT_PADD, SLOT_PADL, SLOT_PADR, SLOT_HOME };
 
 static const ButtonMap classicMap[] = {
 	{ WPAD_CLASSIC_BUTTON_B, SLOT_FACE1 },      /* jump, menu accept */
@@ -203,7 +200,7 @@ static void poll_nunchuk(GamepadSlot *slot, u32 held, const expansion_t *exp, bo
 	float lx, ly;
 
 	if (exp->type != WPAD_EXP_NUNCHUK)
-		return; /* a Remote alone is not a controller for this game (Jaxi) */
+		return; /* a Remote alone is not a controller for this game */
 	nunchuk_xy(&exp->nunchuk.js, &lx, &ly);
 	/* One-button aim: the d-pad holds the aim button and says which diagonal. */
 	apply_move(slot, lx, ly, !twoAim && (held & WPAD_BUTTON_UP), !twoAim && (held & WPAD_BUTTON_DOWN), false, false);
@@ -334,7 +331,7 @@ static void overscan_input(u32 wheld, u16 gcheld, const s8 *sticks, const expans
 		(rheld ? Overscan_adjustY : Overscan_adjustV)(1);
 }
 
-/* AM2R's gamepad bindings as it ships them, then the Wii layout (Jaxi's, session 12). A config still holding the
+/* AM2R's gamepad bindings as it ships them, then the Wii layout. A config still holding the
  * stock set has never been remapped, so it takes the Wii set, one-button aim and Hold missiles; a remap is kept. */
 static const struct {
 	const char *var;

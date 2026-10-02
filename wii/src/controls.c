@@ -23,9 +23,6 @@
 #define XJOY_EXIT 15
 #define XJOY_TITLE 50 /* its op[] slot for the title */
 #define OP_SLOTS 64 /* the options screens file rows from 0 and titles, headers and Back from 50 */
-#define GP_FACE1 32769
-#define GP_SHOULDERL 32773
-#define GP_START 32778
 #define NINTENDO_NAMES 2
 
 enum { SCR_DEFAULTS, SCR_NAME, SCR_SPRITE, SCR_SAVE, SCR_LOAD, SCR_TEXT, SCR_COUNT };
@@ -53,7 +50,7 @@ static const Name nunchukNames[10] = {
 #undef W
 
 /* Button glyphs built by the rules of AM2R's own (they rebuild its "LB" pixel for pixel): a grey pill with 3x5 dark
- * letters, each pill pixel under a letter pixel a shade darker. One style for every Wii button (Jaxi). */
+ * letters, each pill pixel under a letter pixel a shade darker. One style for every Wii button. */
 enum { G_A, G_B, G_X, G_Y, G_C, G_L, G_R, G_ZL, G_ZR, G_Z, G_PLUS, G_MINUS, G_CDOWN, G_COUNT };
 static const char *const glyphText[G_COUNT] = { "A", "B", "X", "Y", "C", "L", "R", "ZL", "ZR", "Z", "+", "-", "Cv" };
 static const struct {
@@ -379,9 +376,8 @@ void WiiControls_hookScripts(VMContext *ctx)
 	}
 }
 
-/* Hidden the way the game hides its Android rows (invisible, never selected); the rows below move up a line. */
-/* Everything the menu keeps in op[] below the hidden row moves up a line: the rows, and the section headers and the
- * Back row the game files at other indices. */
+/* Hidden the way the game hides its Android rows (invisible, never selected); everything below it in op[] (rows,
+ * headers, the Back row) moves up a line. */
 static bool hide_row(Runner *runner, Instance *menu, const char *editName, const char *sepName, int32_t hidden)
 {
 	RValue *edit = array_slot(runner, menu, editName, hidden);

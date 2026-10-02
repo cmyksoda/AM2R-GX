@@ -65,9 +65,8 @@ static RValue wii_ini_read_real(VMContext *ctx, RValue *args, int32_t argCount)
 	double console = WiiVideo_isWide() ? 1.0 : 0.0;
 	double filter, value;
 
-	/* The screen is the window. Fullscreen off + Scale 2 is the pair whose window_set_size gives
-	 * the wide compose its 426-wide frame; Fullscreen on skips that call and the Display menu
-	 * once left the Wii at a quarter-size picture with the sides cut. */
+	/* The screen is the window: Fullscreen off + Scale 2 is the pair whose window_set_size gives the wide compose
+	 * its 426-wide frame. */
 	if (screen_key(args, argCount, "Fullscreen"))
 		return RValue_makeReal(0.0);
 	if (screen_key(args, argCount, "Scale"))
@@ -112,11 +111,6 @@ static RValue wii_gamepad_set_vibration(MAYBE_UNUSED VMContext *ctx, RValue *arg
 {
 	if (argCount >= 3)
 		WiiInput_rumble((float)RValue_toReal(args[1]), (float)RValue_toReal(args[2]));
-	return RValue_makeReal(0.0);
-}
-
-static RValue stub_fullscreen_off(MAYBE_UNUSED VMContext *ctx, MAYBE_UNUSED RValue *args, MAYBE_UNUSED int32_t argCount)
-{
 	return RValue_makeReal(0.0);
 }
 
@@ -174,7 +168,6 @@ static void register_stubs(VMContext *ctx)
 		"file_text_open_append",
 		"date_current_datetime",
 		"date_datetime_string",
-		"get_integer_async",
 		"show_debug_overlay",
 		"screen_save",
 		"surface_save",
@@ -182,8 +175,6 @@ static void register_stubs(VMContext *ctx)
 		"display_get_dpi_y",
 		"device_mouse_raw_x",
 		"device_mouse_raw_y",
-		"virtual_key_add",
-		"virtual_key_show",
 		"io_clear",
 		"texture_set_interpolation_ext",
 		/* 1.5.5's secret-ending hornoad is the only physics object; it sits still. */
@@ -204,8 +195,6 @@ static void register_stubs(VMContext *ctx)
 		VM_registerBuiltin(ctx, "sprite_replace", WiiAssets_builtin("sprite_replace"));
 	if (VM_findBuiltin(ctx, "background_replace") == NULL)
 		VM_registerBuiltin(ctx, "background_replace", WiiAssets_builtin("background_replace"));
-	if (VM_findBuiltin(ctx, "surface_getpixel") == NULL)
-		VM_registerBuiltin(ctx, "surface_getpixel", WiiAssets_builtin("surface_getpixel"));
 	if (VM_findBuiltin(ctx, "surface_getpixel_ext") == NULL)
 		VM_registerBuiltin(ctx, "surface_getpixel_ext", WiiAssets_builtin("surface_getpixel_ext"));
 	if (VM_findBuiltin(ctx, "font_replace") == NULL)
@@ -224,9 +213,8 @@ static void register_stubs(VMContext *ctx)
 
 			if (name == NULL)
 				continue;
-			/* A GML script shadowing a builtin (AM2R's string_split is a GM:S 1.4 compat
-			 * script returning a substring, not the builtin's array) must win, or its
-			 * result draws as "<array:0x...>". Butterscotch's cache prefers the builtin. */
+			/* A GML script shadowing a builtin must win (AM2R's string_split returns a substring, not an array);
+			 * Butterscotch's cache prefers the builtin. */
 			sidx = shgeti(ctx->codeIndexByName, (char *)name);
 			if (sidx >= 0) {
 				ctx->funcCallCache[fi].builtin = NULL;
@@ -238,7 +226,7 @@ static void register_stubs(VMContext *ctx)
 			if (engineIniWriteReal && ctx->funcCallCache[fi].builtin == (void *)engineIniWriteReal)
 				ctx->funcCallCache[fi].builtin = (void *)wii_ini_write_real;
 			if (strcmp(name, "window_get_fullscreen") == 0 || strcmp(name, "window_set_fullscreen") == 0)
-				ctx->funcCallCache[fi].builtin = (void *)stub_fullscreen_off;
+				ctx->funcCallCache[fi].builtin = (void *)stub_zero;
 			if (strcmp(name, "sprite_add") == 0 || strcmp(name, "background_add") == 0)
 				ctx->funcCallCache[fi].builtin = (void *)WiiAssets_builtin(name);
 			if (ctx->funcCallCache[fi].builtin != NULL)
