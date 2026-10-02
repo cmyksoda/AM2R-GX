@@ -4,8 +4,10 @@
 #include "common.h"
 #include "controls.h"
 #include "gettime.h"
+#include "gml_array.h"
 #include "gx_renderer.h"
 #include "input.h"
+#include "instance.h"
 #include "log.h"
 #include "platformdefs.h"
 #include "runner.h"
@@ -152,11 +154,49 @@ static RValue without_pc_key(RValue tip)
 }
 
 /* The Display menu's VSync row is the 240p switch here (wii_ini_read_real keeps it under its own key). */
+/* get_text opens the language ini, reads one key and closes it, and closing re-serializes the whole file: 256 times as
+ * the pause opens. The files never change while the game runs, so each answer is kept by language, section and key. */
+static RValue cached_text(VMContext *ctx, RValue *args, int32_t argCount)
+{
+	static struct { char *key; char *value; } *cache;
+	static int32_t langVar = -2, currentVar;
+	RValue lang, text;
+	char *file, *key;
+	size_t n;
+	ptrdiff_t at;
+
+	if (langVar == -2) {
+		sh_new_strdup(cache);
+		langVar = Wii_varId(ctx->runner, "language", INSTANCE_GLOBAL);
+		currentVar = Wii_varId(ctx->runner, "currentlanguage", INSTANCE_GLOBAL);
+	}
+	if (argCount != 2 || args[0].type != RVALUE_STRING || args[1].type != RVALUE_STRING || !args[0].string ||
+	    !args[1].string || langVar < 0 || currentVar < 0 || !ctx->globalScopeInstance)
+		return VM_callCodeIndex(ctx, getTextCode, args, argCount);
+	lang = Instance_getSelfVar(ctx->globalScopeInstance, langVar);
+	lang = GMLArray_getOnArrayRef(&lang, RValue_toInt32(Instance_getSelfVar(ctx->globalScopeInstance, currentVar)));
+	file = RValue_toString(lang, ctx->runner->dataWin);
+	n = strlen(file) + strlen(args[0].string) + strlen(args[1].string) + 3;
+	key = safeMalloc(n);
+	snprintf(key, n, "%s\x01%s\x01%s", file, args[0].string, args[1].string);
+	free(file);
+	at = shgeti(cache, key);
+	if (at >= 0) {
+		free(key);
+		return RValue_makeOwnedString(safeStrdup(cache[at].value));
+	}
+	text = VM_callCodeIndex(ctx, getTextCode, args, argCount);
+	if (text.type == RVALUE_STRING && text.string)
+		shput(cache, key, safeStrdup(text.string));
+	free(key);
+	return text;
+}
+
 static RValue wii_get_text(VMContext *ctx, RValue *args, int32_t argCount)
 {
 	if (argCount >= 2 && args[0].type == RVALUE_STRING && args[1].type == RVALUE_STRING && args[0].string &&
 	    args[1].string && strcmp(args[0].string, "ExtrasMenu") == 0 && strcmp(args[1].string, "GBFilter_Tip") == 0)
-		return without_pc_key(VM_callCodeIndex(ctx, getTextCode, args, argCount));
+		return without_pc_key(cached_text(ctx, args, argCount));
 	if (argCount >= 2 && args[0].type == RVALUE_STRING && args[1].type == RVALUE_STRING && args[0].string &&
 	    args[1].string && strcmp(args[0].string, "OptionsDisplay") == 0) {
 		if (strcmp(args[1].string, "VSync") == 0)
@@ -164,7 +204,7 @@ static RValue wii_get_text(VMContext *ctx, RValue *args, int32_t argCount)
 		if (strcmp(args[1].string, "VSync_Tip") == 0)
 			return RValue_makeOwnedString(safeStrdup("Each of the game's 240 lines drawn once, for CRT TVs"));
 	}
-	return VM_callCodeIndex(ctx, getTextCode, args, argCount);
+	return cached_text(ctx, args, argCount);
 }
 
 static void hook_get_text(VMContext *ctx)
