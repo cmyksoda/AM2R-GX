@@ -459,17 +459,25 @@ static void wii_pad_defaults(Runner *runner)
 	set_global_num(vm, "opmslstyle", 0);
 }
 
-/* Sticky: an idle frame keeps the last controller, so a GameCube player's names do not flip back when the pad rests. */
-static void note_pad(u32 wheld, u16 gcheld, s8 csticky, const expansion_t *exp)
+/* Sticky: an idle frame keeps the last controller, so a GameCube player's names do not flip back when the pad rests.
+ * A plugged-in Classic wins; otherwise a stick pushed as far as a d-pad press counts like a button. */
+static void note_pad(u32 wheld, u16 gcheld, const s8 *sticks, const expansion_t *exp)
 {
+	WiiPad was = pad_in_use;
+
 	if (exp->type == WPAD_EXP_CLASSIC) {
 		pad_in_use = WII_PAD_CLASSIC;
 		classic_is_wiiu = exp->classic.type == CLASSIC_TYPE_WIIU;
-	} else if (gcheld || fabsf(gc_axis(csticky)) > STICK_DIGITAL || PAD_TriggerL(0) > GC_TRIGGER_PRESS ||
+	} else if (gcheld || fabsf(gc_axis(sticks[0])) > STICK_DIGITAL || fabsf(gc_axis(sticks[1])) > STICK_DIGITAL ||
+		 fabsf(gc_axis(sticks[2])) > STICK_DIGITAL || PAD_TriggerL(0) > GC_TRIGGER_PRESS ||
 		 PAD_TriggerR(0) > GC_TRIGGER_PRESS)
 		pad_in_use = WII_PAD_GAMECUBE;
-	else if ((wheld & ~(u32)(WPAD_BUTTON_HOME)) && exp->type == WPAD_EXP_NUNCHUK)
+	else if (exp->type == WPAD_EXP_NUNCHUK &&
+		 ((wheld & ~(u32)(WPAD_BUTTON_HOME)) || exp->nunchuk.js.mag > STICK_DIGITAL))
 		pad_in_use = WII_PAD_NUNCHUK;
+	if (pad_in_use != was)
+		logInfo("pad in use: %s\n", pad_in_use == WII_PAD_CLASSIC ? "Classic" :
+			pad_in_use == WII_PAD_GAMECUBE ? "GameCube" : "Nunchuk");
 }
 
 WiiPad WiiInput_pad(void)
@@ -589,7 +597,7 @@ void WiiInput_poll(Runner *runner)
 	slot->guid[0] = '\0';
 
 	wii_pad_defaults(runner);
-	note_pad(wheld, gcheld, sticks[2], &exp);
+	note_pad(wheld, gcheld, sticks, &exp);
 	if (defaults_done && (pad_in_use == WII_PAD_NUNCHUK) != menus_swapped) {
 		swap_menus(runner->vmContext);
 		menus_swapped = !menus_swapped;
