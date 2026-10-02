@@ -809,20 +809,42 @@ static u8 unorm(float a)
 	return (u8)(a * 255.0f + 0.5f);
 }
 
-/* The least recently drawn resident page that this frame has not touched, or UINT32_MAX. */
+#define PRELOAD_MAX_PAGES 2048
+
+/* Pages the game will soon draw (AM2R: Samus's suit, the pause screen), most urgent first: they load on the loader thread
+ * whenever it is idle, and count as drawn ten seconds later than they were, so a room's own pages outlast idle ones. */
+#define GX_WISH_MAX 32
+#define GX_WISH_AGE 600
+static int16_t gx_wish[GX_WISH_MAX];
+static uint32_t gx_wishCount;
+/* Pages of a stream animation (the title): dead weight once their room is left. */
+static u8 gx_streamBits[PRELOAD_MAX_PAGES / 8];
+
+static bool gx_wished(uint32_t page)
+{
+	uint32_t i;
+
+	for (i = 0; i < gx_wishCount; i++)
+		if ((uint32_t)gx_wish[i] == page)
+			return true;
+	return false;
+}
+
+/* The least recently drawn resident page that this frame has not touched, wished pages younger, or UINT32_MAX. */
 static uint32_t gx_evict_victim(GxRenderer *gx)
 {
 	uint32_t i;
 	uint32_t victim = UINT32_MAX;
-	u64 oldest = UINT64_MAX;
+	u64 oldest = UINT64_MAX, age;
 
 	for (i = 0; i < gx->pageCount; i++) {
 		if (!gx->pages[i].loaded || !gx->pages[i].texels || gx->pages[i].pinned)
 			continue;
 		if (gx->pages[i].lastUsed == gx->frameCounter)
 			continue;
-		if (gx->pages[i].lastUsed < oldest) {
-			oldest = gx->pages[i].lastUsed;
+		age = gx->pages[i].lastUsed + (gx_wished(i) ? GX_WISH_AGE : 0);
+		if (age < oldest) {
+			oldest = age;
 			victim = i;
 		}
 	}
@@ -1064,6 +1086,8 @@ static void gx_build_ahead(DataWin *dw)
 
 			if (pages[i] < 0)
 				continue;
+			if (streams && pages[i] < PRELOAD_MAX_PAGES)
+				gx_streamBits[pages[i] >> 3] |= (u8)(1 << (pages[i] & 7));
 			for (j = 1; j < n; j++) {
 				int16_t q = pages[(i + j) % n];
 
@@ -1162,7 +1186,8 @@ static void gx_prefetch(GxRenderer *gx, int32_t pageId)
 	bytes = tex_bytes(gx_pf.tw, gx_pf.th);
 	while (!(gx_pf.texels = WiiMem_texAlloc(bytes))) {
 		v = gx_evict_victim(gx);
-		if (v == UINT32_MAX || gx->pages[v].lastUsed + PREFETCH_IDLE_FRAMES > gx->frameCounter || !gx_evict_page(gx))
+		if (v == UINT32_MAX || gx->pages[v].lastUsed + PREFETCH_IDLE_FRAMES > gx->frameCounter ||
+		    (gx_wished(v) && gx_wished((uint32_t)pageId)) || !gx_evict_page(gx))
 			return;
 	}
 	gx_pf.blob = (u8 *)malloc(txtr->blobSize);
@@ -1182,6 +1207,44 @@ static void gx_prefetch(GxRenderer *gx, int32_t pageId)
 	gx_pf.page = pageId;
 	gx_pf.t0 = gettime();
 	page->loading = true;
+}
+
+/* The first wished page not yet resident, while the loader has nothing else to do. */
+static void gx_prefetch_wish(GxRenderer *gx)
+{
+	uint32_t i;
+	GxPage *page;
+
+	for (i = 0; i < gx_wishCount; i++) {
+		if ((uint32_t)gx_wish[i] >= gx->pageCount)
+			continue;
+		page = &gx->pages[gx_wish[i]];
+		if (!page->loaded && !page->loading && !page->failed) {
+			gx_prefetch(gx, gx_wish[i]);
+			return;
+		}
+	}
+}
+
+void GxRenderer_wish(DataWin *dw, const int32_t *tpags, uint32_t count)
+{
+	uint32_t i;
+	int16_t page;
+
+	gx_wishCount = 0;
+	for (i = 0; i < count && gx_wishCount < GX_WISH_MAX; i++) {
+		page = tpags[i] >= 0 && (uint32_t)tpags[i] < dw->tpag.count ? dw->tpag.items[tpags[i]].texturePageId : -1;
+		if (page >= 0 && !gx_wished((uint32_t)page))
+			gx_wish[gx_wishCount++] = page;
+	}
+	if (gx_wishCount) {
+		char line[160];
+		int n = 0;
+
+		for (i = 0; i < gx_wishCount && n < (int)sizeof line - 6; i++)
+			n += snprintf(line + n, sizeof line - n, " %d", gx_wish[i]);
+		logInfo("GX: wish %u pages:%s\n", gx_wishCount, line);
+	}
 }
 
 static GxPage *gx_page(GxRenderer *gx, int16_t pageId)
@@ -1978,8 +2041,6 @@ static void gx_setup_compose(GxRenderer *gx, int32_t windowW, int32_t windowH)
 	gx->compose = true;
 }
 
-#define PRELOAD_MAX_PAGES 2048
-
 static void gx_want_tpag(DataWin *dw, u8 *want, int32_t tpagIndex)
 {
 	int16_t page;
@@ -2024,6 +2085,9 @@ static void gx_preload_room(GxRenderer *gx)
 	if (!runner || runner->currentRoomIndex == lastRoom)
 		return;
 	lastRoom = runner->currentRoomIndex;
+	for (i = 0; i < gx->pageCount && i < PRELOAD_MAX_PAGES; i++)
+		if (gx_streamBits[i >> 3] & (1 << (i & 7)))
+			gx->pages[i].lastUsed = 0;
 	if (lastRoom < 0 || (uint32_t)lastRoom >= dw->room.count || !dw->room.rooms[lastRoom].payloadLoaded)
 		return;
 	room = &dw->room.rooms[lastRoom];
@@ -2145,6 +2209,7 @@ static void gxBeginFrame(Renderer *renderer, int32_t gameW, int32_t gameH, int32
 	Wii_hooksFrame(renderer->runner);
 	Wii_forceGamepadProfile(renderer->runner);
 	Wii_setViewClears(renderer->runner);
+	Wii_wishPages(renderer->runner);
 	WiiSafe_frame(renderer->runner);
 	WiiControls_frame(renderer->runner);
 	gx->guiSurf = WiiSafe_guiSurface(renderer->runner);
@@ -2415,6 +2480,7 @@ static void gxEndFrameEnd(Renderer *renderer)
 		}
 		renderer->currentShader = -1;
 	}
+	gx_prefetch_wish(gx);
 	gx_stat.lastEnd = gettime();
 	gx_stat.drawUs += ticks_to_microsecs(gx_stat.lastEnd - gx_stat.frameStart);
 	if (++gx_stat.n == 200) {

@@ -29,5 +29,7 @@ typedef void (*GxFillProbe)(struct DataWin *dw, int32_t tpagIndex, double area);
 void GxRenderer_setFillProbe(GxFillProbe probe);
 /* Answer "no shaders" to the game, to see what it does without them. */
 void GxRenderer_setShadersOff(bool off);
+/* The pages these texture items sit on, to load in the background in this order and keep longer; none clears it. */
+void GxRenderer_wish(struct DataWin *dw, const int32_t *tpags, uint32_t count);
 
 #endif

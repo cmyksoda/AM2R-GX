@@ -1,11 +1,14 @@
 #include "am2r.h"
+#include "gx_renderer.h"
 
 #include "instance.h"
+#include "log.h"
 #include "runner.h"
 #include "rvalue.h"
 #include "stb_ds.h"
 #include "vm.h"
 
+#include <stdio.h>
 #include <string.h>
 
 int32_t Wii_objectIndex(Runner *runner, const char *name)
@@ -83,4 +86,135 @@ void Wii_setViewClears(Runner *runner)
 	if (itemRoom == -2)
 		itemRoom = Wii_roomIndex(runner, "itemroom");
 	runner->clearViewSurfaces = runner->currentRoomIndex != itemRoom;
+}
+
+static int32_t sprite_named(Runner *runner, const char *name)
+{
+	ptrdiff_t slot = shgeti(runner->assetsByName, name);
+	int32_t i = slot >= 0 ? runner->assetsByName[slot].value : -1;
+
+	if (i < 0 || (uint32_t)i >= runner->dataWin->sprt.count || !runner->dataWin->sprt.sprites[i].name ||
+	    strcmp(runner->dataWin->sprt.sprites[i].name, name) != 0)
+		return -1;
+	return i;
+}
+
+static void add_sprite(int32_t **tpags, DataWin *dw, int32_t sprite, uint32_t frames)
+{
+	const Sprite *sp;
+	uint32_t f;
+
+	if (sprite < 0 || (uint32_t)sprite >= dw->sprt.count)
+		return;
+	sp = &dw->sprt.sprites[sprite];
+	for (f = 0; sp->tpagIndices && f < sp->textureCount && f < frames; f++)
+		arrput(*tpags, sp->tpagIndices[f]);
+}
+
+static void add_background(int32_t **tpags, DataWin *dw, const char *prefix)
+{
+	uint32_t i;
+
+	for (i = 0; i < dw->bgnd.count; i++)
+		if (dw->bgnd.backgrounds[i].name && strncmp(dw->bgnd.backgrounds[i].name, prefix, strlen(prefix)) == 0)
+			arrput(*tpags, dw->bgnd.backgrounds[i].tpagIndex);
+}
+
+/* Samus's animations for one suit: the sprites with Varia and Gravity twins (sX, sVX, sGX); Fusion mode uses
+ * sX_fusion, then _varia or _gravity after it. */
+static void add_suit(int32_t **tpags, Runner *runner, int32_t suit, bool fusion)
+{
+	DataWin *dw = runner->dataWin;
+	uint32_t i;
+	char name[96];
+
+	for (i = 0; i < dw->sprt.count; i++) {
+		const char *n = dw->sprt.sprites[i].name;
+		int32_t base, gravity, pick, f;
+
+		if (!n || strncmp(n, "sV", 2) != 0 || !n[2])
+			continue;
+		snprintf(name, sizeof name, "s%s", n + 2);
+		base = sprite_named(runner, name);
+		snprintf(name, sizeof name, "sG%s", n + 2);
+		gravity = sprite_named(runner, name);
+		if (base < 0 || gravity < 0)
+			continue;
+		pick = suit == 1 ? (int32_t)i : suit == 2 ? gravity : base;
+		if (fusion) {
+			snprintf(name, sizeof name, "s%s_fusion%s", n + 2, suit == 1 ? "_varia" : suit == 2 ? "_gravity" : "");
+			f = sprite_named(runner, name);
+			if (f >= 0)
+				pick = f;
+		}
+		add_sprite(tpags, dw, pick, UINT32_MAX);
+	}
+}
+
+/* What the next seconds will draw, for the loader to fetch while idle (a page pulled mid-play stalls a Wii ~140 ms):
+ * the title's first frame, the file select, the intro's art, and in play Samus's suit, the HUD and the pause screen. */
+void Wii_wishPages(Runner *runner)
+{
+	enum { NONE = -1, TITLE_START = 100, FILE_SELECT = 101, INTRO = 200 };
+	static int32_t ingame = -2, suitVar, fusionVar, controllerRoom, titleRoom, introRoom, last = NONE;
+	DataWin *dw;
+	Instance *g;
+	int32_t key, suit, *tpags = NULL;
+	uint32_t i;
+
+	if (!runner || !runner->vmContext || !(g = runner->vmContext->globalScopeInstance))
+		return;
+	dw = runner->dataWin;
+	if (ingame == -2) {
+		ingame = Wii_varId(runner, "ingame", INSTANCE_GLOBAL);
+		suitVar = Wii_varId(runner, "currentsuit", INSTANCE_GLOBAL);
+		fusionVar = Wii_varId(runner, "mod_fusion", INSTANCE_GLOBAL);
+		controllerRoom = Wii_roomIndex(runner, "rm_controller");
+		titleRoom = Wii_roomIndex(runner, "titleroom");
+		introRoom = Wii_roomIndex(runner, "gameintroroom");
+	}
+	if (runner->currentRoomIndex == controllerRoom) {
+		key = TITLE_START;
+	} else if (runner->currentRoomIndex == titleRoom) {
+		key = FILE_SELECT;
+	} else if (runner->currentRoomIndex == introRoom ||
+		   (ingame >= 0 && RValue_toReal(Instance_getSelfVar(g, ingame)) == 1)) {
+		suit = suitVar >= 0 ? (int32_t)RValue_toReal(Instance_getSelfVar(g, suitVar)) : 0;
+		key = (suit >= 0 && suit <= 2 ? suit : 0) * 2 +
+		      (fusionVar >= 0 && RValue_toReal(Instance_getSelfVar(g, fusionVar)) == 1) +
+		      (runner->currentRoomIndex == introRoom ? INTRO : 0);
+	} else {
+		return;
+	}
+	if (key == last)
+		return;
+	last = key;
+	if (key == TITLE_START) {
+		add_sprite(&tpags, dw, sprite_named(runner, "sTitleAnimated"), 1);
+		add_background(&tpags, dw, "bgAM2RTitle");
+		add_background(&tpags, dw, "bgURL");
+		add_background(&tpags, dw, "bgVersion");
+		add_sprite(&tpags, dw, sprite_named(runner, "sVersionFont"), UINT32_MAX);
+	} else if (key == FILE_SELECT) {
+		add_background(&tpags, dw, "bgSaveSlot");
+	} else {
+		if (key >= INTRO) {
+			add_background(&tpags, dw, "bgIntro");
+			add_background(&tpags, dw, "bgLoading");
+		}
+		for (i = 0; i < dw->sprt.count; i++)
+			if (dw->sprt.sprites[i].name && (strncmp(dw->sprt.sprites[i].name, "sMap", 4) == 0 ||
+							 strncmp(dw->sprt.sprites[i].name, "sGUIFont", 8) == 0))
+				add_sprite(&tpags, dw, (int32_t)i, UINT32_MAX);
+		add_suit(&tpags, runner, key % INTRO / 2, key & 1);
+		for (i = 0; i < dw->sprt.count; i++)
+			if (dw->sprt.sprites[i].name && strncmp(dw->sprt.sprites[i].name, "sSubScr", 7) == 0)
+				add_sprite(&tpags, dw, (int32_t)i, UINT32_MAX);
+		add_background(&tpags, dw, "bg_SubScr");
+		add_background(&tpags, dw, "bgMapScreen");
+	}
+	GxRenderer_wish(dw, tpags, (uint32_t)arrlen(tpags));
+	logInfo("wish: %s, %d texture items\n", key == TITLE_START ? "title start" : key == FILE_SELECT ? "file select" :
+		key >= INTRO ? "intro" : key & 1 ? "play, fusion" : "play", (int)arrlen(tpags));
+	arrfree(tpags);
 }
