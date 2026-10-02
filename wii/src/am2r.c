@@ -156,15 +156,48 @@ static void add_suit(int32_t **tpags, Runner *runner, int32_t suit, bool fusion)
 	}
 }
 
+/* The metroid kinds whose objects (the metroid, its parts, the triggers that wake it) bring sprites on pages of their
+ * own: the Alpha's turn alone sits on an Area 2 page that loaded mid-fight. */
+static const char *const metroidKinds[] = { "MAlpha", "MGamma", "MZeta", "MOmega", "Queen" };
+#define METROID_KINDS 5
+
+/* A bit per kind with an object in the room; the objects are looked up by name once. */
+static int32_t metroids_here(Runner *runner)
+{
+	static int32_t *objs[METROID_KINDS];
+	static bool listed;
+	DataWin *dw = runner->dataWin;
+	int32_t mask = 0, k;
+	uint32_t i;
+	ptrdiff_t n;
+
+	if (!listed) {
+		listed = true;
+		for (i = 0; i < dw->objt.count; i++)
+			for (k = 0; k < METROID_KINDS; k++)
+				if (dw->objt.objects[i].name && dw->objt.objects[i].name[0] == 'o' &&
+				    strncmp(dw->objt.objects[i].name + 1, metroidKinds[k], strlen(metroidKinds[k])) == 0)
+					arrput(objs[k], (int32_t)i);
+	}
+	if (!runner->instancesByExactObject)
+		return 0;
+	for (k = 0; k < METROID_KINDS; k++)
+		for (n = 0; n < arrlen(objs[k]) && !(mask & (1 << k)); n++)
+			if (arrlen(runner->instancesByExactObject[objs[k][n]]) > 0)
+				mask |= 1 << k;
+	return mask;
+}
+
 /* What the next seconds will draw, for the loader to fetch while idle (a page pulled mid-play stalls a Wii ~140 ms):
- * the title's first frame, the file select, the intro's art, and in play Samus's suit, the HUD and the pause screen. */
+ * the title's first frame, the file select, the intro's art, and in play Samus's suit, the HUD, the pause screen and
+ * the metroid the room holds. */
 void Wii_wishPages(Runner *runner)
 {
-	enum { NONE = -1, TITLE_START = 100, FILE_SELECT = 101, INTRO = 200 };
-	static int32_t ingame = -2, suitVar, fusionVar, controllerRoom, titleRoom, introRoom, last = NONE;
+	enum { NONE = -1, TITLE_START = 100, FILE_SELECT = 101, INTRO = 200, METROID = 1000 };
+	static int32_t ingame = -2, suitVar, fusionVar, controllerRoom, titleRoom, introRoom, subscreenRoom, last = NONE;
 	DataWin *dw;
 	Instance *g;
-	int32_t key, suit, *tpags = NULL;
+	int32_t key, suit, k, *tpags = NULL;
 	uint32_t i;
 
 	if (!runner || !runner->vmContext || !(g = runner->vmContext->globalScopeInstance))
@@ -177,6 +210,7 @@ void Wii_wishPages(Runner *runner)
 		controllerRoom = Wii_roomIndex(runner, "rm_controller");
 		titleRoom = Wii_roomIndex(runner, "titleroom");
 		introRoom = Wii_roomIndex(runner, "gameintroroom");
+		subscreenRoom = Wii_roomIndex(runner, "rm_subscreen");
 	}
 	if (runner->currentRoomIndex == controllerRoom) {
 		key = TITLE_START;
@@ -187,7 +221,9 @@ void Wii_wishPages(Runner *runner)
 		suit = suitVar >= 0 ? (int32_t)RValue_toReal(Instance_getSelfVar(g, suitVar)) : 0;
 		key = (suit >= 0 && suit <= 2 ? suit : 0) * 2 +
 		      (fusionVar >= 0 && RValue_toReal(Instance_getSelfVar(g, fusionVar)) == 1) +
-		      (runner->currentRoomIndex == introRoom ? INTRO : 0);
+		      (runner->currentRoomIndex == introRoom ? INTRO : 0) +
+		      /* the pause screen's room has none of the room's objects, and play resumes in that room */
+		      (runner->currentRoomIndex == subscreenRoom && last >= 0 ? last / METROID : metroids_here(runner)) * METROID;
 	} else {
 		return;
 	}
@@ -203,7 +239,7 @@ void Wii_wishPages(Runner *runner)
 	} else if (key == FILE_SELECT) {
 		add_background(&tpags, dw, "bgSaveSlot");
 	} else {
-		if (key >= INTRO) {
+		if (key % METROID >= INTRO) {
 			add_background(&tpags, dw, "bgIntro");
 			add_background(&tpags, dw, "bgLoading");
 		}
@@ -211,16 +247,22 @@ void Wii_wishPages(Runner *runner)
 			if (dw->sprt.sprites[i].name && (strncmp(dw->sprt.sprites[i].name, "sMap", 4) == 0 ||
 							 strncmp(dw->sprt.sprites[i].name, "sGUIFont", 8) == 0))
 				add_sprite(&tpags, dw, (int32_t)i, UINT32_MAX);
-		add_suit(&tpags, runner, key % INTRO / 2, key & 1);
+		add_suit(&tpags, runner, key % METROID % INTRO / 2, key & 1);
 		for (i = 0; i < dw->sprt.count; i++)
 			if (dw->sprt.sprites[i].name && strncmp(dw->sprt.sprites[i].name, "sSubScr", 7) == 0)
 				add_sprite(&tpags, dw, (int32_t)i, UINT32_MAX);
 		add_background(&tpags, dw, "bg_SubScr");
 		add_background(&tpags, dw, "bgMapScreen");
+		for (k = 0; k < METROID_KINDS; k++)
+			for (i = 0; (key / METROID) & (1 << k) && i < dw->sprt.count; i++)
+				if (dw->sprt.sprites[i].name && dw->sprt.sprites[i].name[0] == 's' &&
+				    strncmp(dw->sprt.sprites[i].name + 1, metroidKinds[k], strlen(metroidKinds[k])) == 0)
+					add_sprite(&tpags, dw, (int32_t)i, UINT32_MAX);
 	}
 	GxRenderer_wish(dw, tpags, (uint32_t)arrlen(tpags));
-	logInfo("wish: %s, %d texture items\n", key == TITLE_START ? "title start" : key == FILE_SELECT ? "file select" :
-		key >= INTRO ? "intro" : key & 1 ? "play, fusion" : "play", (int)arrlen(tpags));
+	logInfo("wish: %s, metroids %x, %d texture items\n", key == TITLE_START ? "title start" : key == FILE_SELECT ?
+		"file select" : key % METROID >= INTRO ? "intro" : key & 1 ? "play, fusion" : "play", (int)(key / METROID),
+		(int)arrlen(tpags));
 	arrfree(tpags);
 }
 
