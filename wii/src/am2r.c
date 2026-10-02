@@ -378,7 +378,7 @@ static RValue wii_draw_map_surf(VMContext *ctx, RValue *args, int32_t argCount)
 static const char credits[] = "*AM2R GX;;;;;;;;;;;;"
 	"*Wii Port;/cmyksoda;;"
 	"*Beta Testers;bonkmaykr=Erzaui;NiuuS=Splatterpunk;;"
-	"*Controller Screen Artist;/Asophia Mills;;"
+	"*Classic Controller Pro Art;/Asophia Mills;;"
 	"*Made Possible By;/AM2R Community Developers;/Butterscotch;/Milton 'DoctorM64' Guasti;;"
 	"*Special Thanks;/My sweet girlfriend,;/for always supporting me <3;;/syl, for being the sweetest syl ever;;;;"
 	"*Another ";
