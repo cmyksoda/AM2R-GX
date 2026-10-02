@@ -1848,6 +1848,15 @@ static GxSwap *gx_swap_get(GxRenderer *gx, int32_t tpagIndex)
 	return gx_swap_build(gx, tpagIndex, &gx_swaps[slot]);
 }
 
+/* The projection's top and bottom for a quad emit_quad is about to lift into the safe area. */
+static void gx_clip_rows(float *top, float *bottom)
+{
+	float lift = gx_cur ? WiiSafe_lift(gx_cur->base.runner) : 0.0f;
+
+	*top = gx_clipT - lift;
+	*bottom = gx_clipB - lift;
+}
+
 static void gx_draw_tpag(GxRenderer *gx, int32_t tpagIndex, float x0, float y0, float x1, float y1,
 			 float x2, float y2, float x3, float y3, float srcX, float srcY, float srcW, float srcH,
 			 u8 r0, u8 g0, u8 b0, u8 a0, u8 r1, u8 g1, u8 b1, u8 a1,
@@ -1856,7 +1865,7 @@ static void gx_draw_tpag(GxRenderer *gx, int32_t tpagIndex, float x0, float y0, 
 	DataWin *dw = gx->base.dataWin;
 	TexturePageItem *tpag;
 	GxPage *page;
-	float u0, v0, u1, v1;
+	float u0, v0, u1, v1, clipT, clipB;
 
 	if (tpagIndex < 0 || (uint32_t)tpagIndex >= dw->tpag.count)
 		return;
@@ -1865,8 +1874,9 @@ static void gx_draw_tpag(GxRenderer *gx, int32_t tpagIndex, float x0, float y0, 
 		return;
 	}
 	/* Fully outside the projection: the scissor would drop it, but only after the bind and the emit. */
+	gx_clip_rows(&clipT, &clipB);
 	if (fmaxf(fmaxf(x0, x1), fmaxf(x2, x3)) <= gx_clipL || fminf(fminf(x0, x1), fminf(x2, x3)) >= gx_clipR ||
-	    fmaxf(fmaxf(y0, y1), fmaxf(y2, y3)) <= gx_clipT || fminf(fminf(y0, y1), fminf(y2, y3)) >= gx_clipB) {
+	    fmaxf(fmaxf(y0, y1), fmaxf(y2, y3)) <= clipT || fminf(fminf(y0, y1), fminf(y2, y3)) >= clipB) {
 		gx_stat.culled++;
 		return;
 	}
@@ -2676,13 +2686,15 @@ static void gxDrawTile(Renderer *renderer, RoomTile *tile, float offsetX, float 
 	GxRenderer *gx = (GxRenderer *)renderer;
 	float x0 = (float)tile->x + offsetX, y0 = (float)tile->y + offsetY;
 	float x1 = x0 + (float)tile->width * tile->scaleX, y1 = y0 + (float)tile->height * tile->scaleY;
+	float clipT, clipB;
 
 	if (gx->skipView && gx->currentTarget == gx->appSurfId) {
 		gx_stat.sprites++;
 		gx_stat.skipped++;
 		return;
 	}
-	if (fmaxf(x0, x1) <= gx_clipL || fminf(x0, x1) >= gx_clipR || fmaxf(y0, y1) <= gx_clipT || fminf(y0, y1) >= gx_clipB) {
+	gx_clip_rows(&clipT, &clipB);
+	if (fmaxf(x0, x1) <= gx_clipL || fminf(x0, x1) >= gx_clipR || fmaxf(y0, y1) <= clipT || fminf(y0, y1) >= clipB) {
 		gx_stat.sprites++;
 		gx_stat.culled++;
 		return;
@@ -2825,7 +2837,7 @@ static void gxDrawTextColor(Renderer *renderer, const char *text, float x, float
 	TexturePageItem *tpag;
 	GxPage *page;
 	int32_t textLen, lineCount, lineStart, lineIdx;
-	float lineStride, totalHeight, valignOffset, angleRad, band;
+	float lineStride, totalHeight, valignOffset, angleRad, band, clipT, clipB;
 	Matrix4f transform;
 	bool snap;
 	float cursorY;
@@ -2870,6 +2882,7 @@ static void gxDrawTextColor(Renderer *renderer, const char *text, float x, float
 	/* How far a line's glyphs can reach from its cursor, for skipping lines off the projection whole: AM2R's credits
 	 * draw all 200 rows nine times a frame with 20 on screen. */
 	band = fmaxf(lineStride, (float)font->maxGlyphHeight) + fabsf((float)font->spriteOriginYAdjust);
+	gx_clip_rows(&clipT, &clipB);
 	cursorY = valignOffset - (float)font->ascenderOffset;
 	lineStart = 0;
 	for (lineIdx = 0; lineIdx < lineCount; lineIdx++) {
@@ -2886,7 +2899,7 @@ static void gxDrawTextColor(Renderer *renderer, const char *text, float x, float
 
 			Matrix4f_transformPoint(&transform, 0, cursorY - band, &unused, &top);
 			Matrix4f_transformPoint(&transform, 0, cursorY + 2.0f * band, &unused, &bottom);
-			if (fmaxf(top, bottom) <= gx_clipT || fminf(top, bottom) >= gx_clipB) {
+			if (fmaxf(top, bottom) <= clipT || fminf(top, bottom) >= clipB) {
 				cursorY += lineStride;
 				lineStart = TextUtils_skipNewline(text, lineEnd, textLen);
 				continue;
@@ -3147,7 +3160,7 @@ static void gxDrawSpriteTiled(Renderer *renderer, int32_t tpagIndex, float origi
 	DataWin *dw = renderer->dataWin;
 	TexturePageItem *tpag;
 	float ax = fabsf(xscale), ay = fabsf(yscale);
-	float tileW, tileH, startX, endX, startY, endY, cx, cy;
+	float tileW, tileH, startX, endX, startY, endY, cx, cy, clipT, clipB;
 
 	if (tpagIndex < 0 || (uint32_t)tpagIndex >= dw->tpag.count)
 		return;
@@ -3176,8 +3189,9 @@ static void gxDrawSpriteTiled(Renderer *renderer, int32_t tpagIndex, float origi
 	}
 	if (tileX)
 		gx_tile_span(&startX, &endX, tileW, gx_clipL, gx_clipR, xscale < 0);
+	gx_clip_rows(&clipT, &clipB);
 	if (tileY)
-		gx_tile_span(&startY, &endY, tileH, gx_clipT, gx_clipB, yscale < 0);
+		gx_tile_span(&startY, &endY, tileH, clipT, clipB, yscale < 0);
 	for (cy = startY; cy < endY; cy += tileH) {
 		for (cx = startX; cx < endX; cx += tileW)
 			gxDrawSprite(renderer, tpagIndex, cx + originX * xscale, cy + originY * yscale, originX, originY,
