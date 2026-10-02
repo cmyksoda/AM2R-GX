@@ -146,7 +146,7 @@ index 0cb2834..40c5db4 100644
 +        elseif(PLATFORM STREQUAL "wii")
 +            target_include_directories(butterscotch PRIVATE $ENV{DEVKITPRO}/libogc/include $ENV{DEVKITPRO}/portlibs/ppc/include/freetype2)
 +            target_link_directories(butterscotch PRIVATE $ENV{DEVKITPRO}/libogc/lib/wii)
-+            target_compile_options(butterscotch PRIVATE -Wno-unused-parameter -Wno-unused-variable)
++            target_compile_options(butterscotch PRIVATE -Wno-unused-parameter -Wno-unused-variable "-fmacro-prefix-map=${CMAKE_SOURCE_DIR}/=")
 +            if(WII_STRICT)
 +                # The port's own files with the unused/shadow warnings back on (make wii-warn).
 +                file(GLOB WII_OWN_SOURCES src/wii/*.c)

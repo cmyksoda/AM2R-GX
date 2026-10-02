@@ -38,12 +38,13 @@ static int clampi(int v, int lo, int hi)
 void Overscan_load(void)
 {
 	FILE *f = fopen(own_path(), "r");
+	const char *from = f ? "this console's file" : "defaults";
 	char shared[96];
 	int h = 0, v = 0, vi = 0, y = 0, x = 0, n = 0;
 
 	snprintf(shared, sizeof shared, "%s/overscan.txt", WII_APP_DIR);
-	if (!f)
-		f = fopen(shared, "r");
+	if (!f && (f = fopen(shared, "r")))
+		from = "overscan.txt";
 	if (f) {
 		n = fscanf(f, "%d %d %d %d %d", &h, &v, &vi, &y, &x);
 		if (n >= 2) {
@@ -58,7 +59,8 @@ void Overscan_load(void)
 			g_x = clampi(x, -OVERSCAN_MAX_H, OVERSCAN_MAX_H);
 		fclose(f);
 	}
-	logInfo("Overscan: h=%d v=%d vi=%d y=%d x=%d (%s)\n", g_h, g_v, g_vi, g_y, g_x, own_path());
+	/* Not the file's name: testers share this log, and the name carries the console's device id. */
+	logInfo("Overscan: h=%d v=%d vi=%d y=%d x=%d (%s)\n", g_h, g_v, g_vi, g_y, g_x, from);
 }
 
 static void Overscan_save(void)
