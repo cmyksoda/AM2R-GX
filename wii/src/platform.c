@@ -17,6 +17,7 @@
 #include "vm.h"
 #include "wii_video.h"
 
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
@@ -74,6 +75,10 @@ static RValue wii_ini_read_real(VMContext *ctx, RValue *args, int32_t argCount)
 	/* The VSync row is the 240p switch here, under its own key: a PC config's VSync=1 must not turn it on. */
 	if (screen_key(args, argCount, "VSync"))
 		return ini_screen(ctx, engineIniReadReal, "Wii240p", 0.0);
+	/* Off, the game reads no controller at all: a config.ini from a PC could leave nothing but HOME. */
+	if (argCount >= 3 && args[0].type == RVALUE_STRING && args[1].type == RVALUE_STRING &&
+	    strcmp(args[0].string, "Control") == 0 && strcmp(args[1].string, "EnableXBJoypad") == 0)
+		return RValue_makeReal(1.0);
 	if (!screen_key(args, argCount, "Widescreen"))
 		return engineIniReadReal(ctx, args, argCount);
 	/* Our own key rides along: 1 = even 3:2 box filter, 0 = plain 2,1,2,1 columns. */
@@ -111,6 +116,16 @@ static RValue wii_gamepad_set_vibration(MAYBE_UNUSED VMContext *ctx, RValue *arg
 {
 	if (argCount >= 3)
 		WiiInput_rumble((float)RValue_toReal(args[1]), (float)RValue_toReal(args[2]));
+	return RValue_makeReal(0.0);
+}
+
+/* AM2R's dialogs say "Save Data Corrupted", just before it deletes that save: a Wii has no dialog, so the log keeps it. */
+static RValue stub_show_message(VMContext *ctx, RValue *args, int32_t argCount)
+{
+	char *text = argCount > 0 ? RValue_toString(args[0], ctx->runner->dataWin) : NULL;
+
+	logWarn("Wii: game message: %s\n", text ? text : "");
+	free(text);
 	return RValue_makeReal(0.0);
 }
 
@@ -162,9 +177,7 @@ static void register_stubs(VMContext *ctx)
 		"joystick_rpos",
 		"joystick_upos",
 		"joystick_vpos",
-		"show_message_async",
 		"get_integer",
-		"show_message",
 		"file_text_open_append",
 		"date_current_datetime",
 		"date_datetime_string",
@@ -176,6 +189,9 @@ static void register_stubs(VMContext *ctx)
 		"device_mouse_raw_x",
 		"device_mouse_raw_y",
 		"io_clear",
+		"window_set_position",
+		"window_get_x",
+		"window_get_y",
 		"texture_set_interpolation_ext",
 		/* 1.5.5's secret-ending hornoad is the only physics object; it sits still. */
 		"physics_apply_local_impulse",
@@ -187,6 +203,10 @@ static void register_stubs(VMContext *ctx)
 		if (VM_findBuiltin(ctx, zeros[i]) == NULL)
 			VM_registerBuiltin(ctx, zeros[i], stub_zero);
 	}
+	if (VM_findBuiltin(ctx, "show_message") == NULL)
+		VM_registerBuiltin(ctx, "show_message", stub_show_message);
+	if (VM_findBuiltin(ctx, "show_message_async") == NULL)
+		VM_registerBuiltin(ctx, "show_message_async", stub_show_message);
 	if (VM_findBuiltin(ctx, "gamepad_set_vibration") == NULL)
 		VM_registerBuiltin(ctx, "gamepad_set_vibration", wii_gamepad_set_vibration);
 	if (VM_findBuiltin(ctx, "display_reset") == NULL)
