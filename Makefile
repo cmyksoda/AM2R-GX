@@ -7,6 +7,10 @@ SHA := d05526846e75449295ed2596bd86e9db0108408a
 AM2R_DATA ?= working/extracted/win11
 SD_GAME := dist/apps/am2r/game
 DOLPHIN_USER := project-notes/research/evidence-I/dolphin-user
+# HOOKS=0 leaves the local test hooks out of the build even when wii/test/ is on disk (make release does).
+HOOKS ?= 1
+VERSION ?= $(shell sed -n 's/^.define AM2R_GX_VERSION "\([^"]*\)".*/\1/p' wii/src/main.c)
+META ?= wii/hbc/meta.xml
 WII_SD := $(DOLPHIN_USER)/Load/WiiSDSync
 WII_CMAKE_FLAGS := \
 	-DCMAKE_TOOLCHAIN_FILE="$(CURDIR)/wii/cmake/wii.cmake" \
@@ -15,12 +19,12 @@ WII_CMAKE_FLAGS := \
 	-DAUDIO_BACKEND=none \
 	-DENABLE_WAD14=ON -DENABLE_WAD16=ON -DENABLE_WAD17=OFF \
 	-DENABLE_NOOP_RENDERER=OFF -DENABLE_LEGACY_GL=OFF -DENABLE_MODERN_GL=OFF \
-	-DENABLE_VM_GML_PROFILER=ON -DENABLE_VM_STUB_LOGS=ON -DENABLE_VM_TRACING=OFF \
+	-DENABLE_VM_GML_PROFILER=ON -DENABLE_VM_STUB_LOGS=ON -DENABLE_VM_TRACING=OFF -DENABLE_VM_OPCODE_PROFILER=OFF \
 	-DENABLE_ASAN=OFF \
 	-DBUTTERSCOTCH_COMMIT_HASH="$(SHA)" \
 	-DBUTTERSCOTCH_COMMIT_DATE="2026-09-23"
 
-.PHONY: check check-bless all run-wii clean wii wii-warn wii-sd sd-pack patchkit host-smoke
+.PHONY: check check-bless all run-wii clean wii wii-warn wii-sd sd-pack patchkit host-smoke release
 
 all: wii
 
@@ -36,7 +40,7 @@ wii: $(BUTTER)/CMakeLists.txt
 	mkdir -p $(BUTTER)/src/wii
 	rsync -a --delete wii/src/ $(BUTTER)/src/wii/
 	# The local test hooks (wii/test/, never in the repository) join the build when they are on disk.
-	if [ -d wii/test/src ]; then rsync -a wii/test/src/ $(BUTTER)/src/wii/; fi
+	if [ "$(HOOKS)" != 0 ] && [ -d wii/test/src ]; then rsync -a wii/test/src/ $(BUTTER)/src/wii/; fi
 	cd $(BUTTER) && git checkout -- CMakeLists.txt src/gettime.c src/ini.c src/loop.c src/random.c src/random.h src/runner.c src/runner.h src/spatial_grid.c src/vm.c src/vm.h src/vm_builtins.c src/vm_builtins.h
 	cd $(BUTTER) && git apply ../../wii/patches/0001-cmake-add-PLATFORM-wii.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0002-gettime-wii.patch
@@ -61,7 +65,7 @@ wii: $(BUTTER)/CMakeLists.txt
 	cd $(BUTTER) && git apply ../../wii/patches/0022-random-set-seed-resets-index.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0023-vm-string-char-at-no-copies.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0024-vm-export-array-set.patch
-	if [ -f wii/test/patches/0099-debug-collision-trace.patch ]; then cd $(BUTTER) && git apply ../../wii/test/patches/0099-debug-collision-trace.patch; fi
+	if [ "$(HOOKS)" != 0 ] && [ -f wii/test/patches/0099-debug-collision-trace.patch ]; then cd $(BUTTER) && git apply ../../wii/test/patches/0099-debug-collision-trace.patch; fi
 	cmake -B $(WII_BUILD) -S $(BUTTER) $(WII_CMAKE_FLAGS)
 	cmake --build $(WII_BUILD) -j$(shell nproc)
 	mkdir -p dist/apps/am2r
@@ -113,6 +117,28 @@ wii-sd:
 # development. Never commits data.win.
 sd-pack:
 	tools/sd-pack.sh "$(CURDIR)/$(dir $(CU155))" "$(CURDIR)/dist/sd"
+
+# The release zip: the DOL built without test hooks (its symbols must say so), meta.xml at the same version, the
+# patch kit and the licences, as dist/am2r-gx-VERSION.zip. The ELF stays beside it to read a crash dump's addresses.
+REL := dist/package-$(VERSION)/am2r-gx-$(VERSION)/apps/am2r
+release:
+	@test ! -e dist/am2r-gx-$(VERSION).zip || { echo "dist/am2r-gx-$(VERSION).zip exists: bump AM2R_GX_VERSION"; exit 1; }
+	@grep -q "<version>$(VERSION)</version>" $(META) || { echo "$(META) is not version $(VERSION)"; exit 1; }
+	@test -f dist/apps/am2r/patch/data.xdelta || { echo "no patch kit in dist/apps/am2r/patch: make patchkit"; exit 1; }
+	$(MAKE) wii HOOKS=0 WII_BUILD=build/wii-release
+	@! $(DEVKITPPC)/bin/powerpc-eabi-nm build/wii-release/butterscotch | grep -q -e " T Wii_hooksBoot" -e NetLog_init || \
+		{ echo "build/wii-release has the test hooks in it"; exit 1; }
+	rm -rf dist/package-$(VERSION)
+	mkdir -p $(REL)
+	cp build/wii-release/boot.dol wii/hbc/icon.png $(REL)/
+	cp $(META) $(REL)/meta.xml
+	cp LICENSE $(REL)/LICENSE.txt
+	cp NOTICE $(REL)/NOTICE.txt
+	cp wii/src/xdelta3/LICENSE $(REL)/LICENSE-xdelta3.txt
+	rsync -a dist/apps/am2r/patch $(REL)/
+	cd dist/package-$(VERSION) && zip -qr ../am2r-gx-$(VERSION).zip am2r-gx-$(VERSION)
+	cp build/wii-release/butterscotch dist/am2r-gx-$(VERSION).elf
+	@sha1sum dist/am2r-gx-$(VERSION).zip $(REL)/boot.dol
 
 # Regression check in Dolphin: two tapes shot against a blessed reference DOL, then a short room sweep.
 # The harness lives in project-notes/research/scripts (untracked); bless a build you trust first.
