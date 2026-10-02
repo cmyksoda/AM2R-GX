@@ -2825,7 +2825,7 @@ static void gxDrawTextColor(Renderer *renderer, const char *text, float x, float
 	TexturePageItem *tpag;
 	GxPage *page;
 	int32_t textLen, lineCount, lineStart, lineIdx;
-	float lineStride, totalHeight, valignOffset, angleRad;
+	float lineStride, totalHeight, valignOffset, angleRad, band;
 	Matrix4f transform;
 	bool snap;
 	float cursorY;
@@ -2867,6 +2867,9 @@ static void gxDrawTextColor(Renderer *renderer, const char *text, float x, float
 	/* Centred odd-width lines start on a half pixel, where GX_NEAR samples sit exactly on texel
 	 * seams and real hardware garbles thin glyphs. Keep unrotated 1:1 text on the pixel grid. */
 	snap = angleDeg == 0.0f && xscale * font->scaleX == 1.0f && yscale * font->scaleY == 1.0f;
+	/* How far a line's glyphs can reach from its cursor, for skipping lines off the projection whole: AM2R's credits
+	 * draw all 200 rows nine times a frame with 20 on screen. */
+	band = fmaxf(lineStride, (float)font->maxGlyphHeight) + fabsf((float)font->spriteOriginYAdjust);
 	cursorY = valignOffset - (float)font->ascenderOffset;
 	lineStart = 0;
 	for (lineIdx = 0; lineIdx < lineCount; lineIdx++) {
@@ -2878,6 +2881,17 @@ static void gxDrawTextColor(Renderer *renderer, const char *text, float x, float
 
 		while (textLen > lineEnd && !TextUtils_isNewlineChar(text[lineEnd]))
 			lineEnd++;
+		if (angleDeg == 0.0f) {
+			float top, bottom, unused;
+
+			Matrix4f_transformPoint(&transform, 0, cursorY - band, &unused, &top);
+			Matrix4f_transformPoint(&transform, 0, cursorY + 2.0f * band, &unused, &bottom);
+			if (fmaxf(top, bottom) <= gx_clipT || fminf(top, bottom) >= gx_clipB) {
+				cursorY += lineStride;
+				lineStart = TextUtils_skipNewline(text, lineEnd, textLen);
+				continue;
+			}
+		}
 		lineLen = lineEnd - lineStart;
 		lineWidth = TextUtils_measureLineWidth(font, text + lineStart, lineLen);
 		halignOffset = 0;
