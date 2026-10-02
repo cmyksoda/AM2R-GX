@@ -250,6 +250,7 @@ static void register_stubs(VMContext *ctx)
 		WiiControls_hookScripts(ctx);
 		WiiSafe_hookScripts(ctx);
 		Wii_hookAm2rScripts(ctx);
+		Wii_addCredits(ctx->dataWin);
 		hook_get_text(ctx);
 	}
 }

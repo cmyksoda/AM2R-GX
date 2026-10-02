@@ -247,6 +247,23 @@ static RValue wii_reset_map(VMContext *ctx, RValue *args, int32_t argCount)
 	return RValue_makeUndefined();
 }
 
+/* Ours, then AM2R's, in its markup (* heading, / centred, a=b paired, ; next row). The roll scrolls at a speed set by
+ * its row count to last as long as its music, so these rows make it a little faster, not longer. */
+static const char credits[] = "*AM2R GX;;;;;;;;;;;;"
+	"*Wii Port;/cmyksoda;;"
+	"*Beta Testers;bonkmaykr=Erzaui;NiuuS=Splatterpunk;;"
+	"*Controller Screen Artist;/Asophia Mills;;"
+	"*Made Possible By;/The Butterscotch Team;/AM2R Community Developers;/DoctorM64;/devkitPro;/The Dolphin Team;;"
+	"*Special Thanks;/My sweet girlfriend,;/for always supporting me <3;;/syl, for being the sweetest syl ever;;;;"
+	"*Another ";
+
+void Wii_addCredits(DataWin *dw)
+{
+	repeat(dw->strg.count, i)
+		if (strcmp(dw->strg.strings[i], "*Another ") == 0)
+			dw->strg.strings[i] = credits;
+}
+
 void Wii_hookAm2rScripts(VMContext *ctx)
 {
 	ptrdiff_t s = shgeti(ctx->codeIndexByName, "reset_map");
