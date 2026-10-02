@@ -379,7 +379,7 @@ static const char credits[] = "*AM2R GX;;;;;;;;;;;;"
 	"*Wii Port;/cmyksoda;;"
 	"*Beta Testers;bonkmaykr=Erzaui;NiuuS=Splatterpunk;;"
 	"*Controller Screen Artist;/Asophia Mills;;"
-	"*Made Possible By;/AM2R Community Developers;/The Butterscotch Team;/devkitPro;/DoctorM64;/The Dolphin Team;;"
+	"*Made Possible By;/AM2R Community Developers;/Butterscotch;/Milton 'DoctorM64' Guasti;;"
 	"*Special Thanks;/My sweet girlfriend,;/for always supporting me <3;;/syl, for being the sweetest syl ever;;;;"
 	"*Another ";
 
