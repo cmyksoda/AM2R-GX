@@ -380,14 +380,29 @@ static const char credits[] = "*AM2R GX;;;;;;;;;;;;"
 	"*Beta Testers;bonkmaykr=Erzaui;NiuuS=Splatterpunk;;"
 	"*Controller Screen Artist;/Asophia Mills;;"
 	"*Made Possible By;/AM2R Community Developers;/The Butterscotch Team;/devkitPro;/DoctorM64;/The Dolphin Team;;"
-	"*Special Thanks;/My sweet girlfriend,;/for always supporting me <3;;/syl, for being the sweetest syl ever;;;;;;;;;;;;"
+	"*Special Thanks;/My sweet girlfriend,;/for always supporting me <3;;/syl, for being the sweetest syl ever;;;;"
 	"*Another ";
+
+/* AM2R's title card (its name, then 11 blank rows) heads its section the way AM2R heads Metroid II's staff. */
+#define AM2R_TITLE " 2 Remake;;;;;;;;;;;;"
+#define AM2R_HEADER " 2 Remake Staff;;"
 
 void Wii_addCredits(DataWin *dw)
 {
-	repeat(dw->strg.count, i)
-		if (strcmp(dw->strg.strings[i], "*Another ") == 0)
+	static char *am2r;
+
+	repeat(dw->strg.count, i) {
+		const char *s = dw->strg.strings[i];
+
+		if (strcmp(s, "*Another ") == 0) {
 			dw->strg.strings[i] = credits;
+		} else if (!am2r && strncmp(s, AM2R_TITLE, sizeof AM2R_TITLE - 1) == 0) {
+			am2r = safeMalloc(sizeof AM2R_HEADER + strlen(s + sizeof AM2R_TITLE - 1));
+			strcpy(am2r, AM2R_HEADER);
+			strcat(am2r, s + sizeof AM2R_TITLE - 1);
+			dw->strg.strings[i] = am2r;
+		}
+	}
 }
 
 void Wii_hookAm2rScripts(VMContext *ctx)
