@@ -1,11 +1,14 @@
 #include "am2r.h"
 #include "gx_renderer.h"
 
+#include "gml_array.h"
 #include "instance.h"
+#include "int_rvalue_hashmap.h"
 #include "log.h"
 #include "runner.h"
 #include "rvalue.h"
 #include "stb_ds.h"
+#include "utils.h"
 #include "vm.h"
 
 #include <stdio.h>
@@ -217,4 +220,51 @@ void Wii_wishPages(Runner *runner)
 	logInfo("wish: %s, %d texture items\n", key == TITLE_START ? "title start" : key == FILE_SELECT ? "file select" :
 		key >= INTRO ? "intro" : key & 1 ? "play, fusion" : "play", (int)arrlen(tpags));
 	arrfree(tpags);
+}
+
+static int32_t resetMapCode = -1, mapVar, dmapVar, logOptionVar, iVar, jVar;
+
+/* reset_map builds a "Resetting i,j" line for each of its 6,400 cells, which writelog drops unless AM2R's log option is
+ * on: ~120 ms of every game load. Off, the cells are set here as the script would; on, the script itself runs. */
+static RValue wii_reset_map(VMContext *ctx, RValue *args, int32_t argCount)
+{
+	Instance *g = ctx->globalScopeInstance;
+	RValue zero = RValue_makeReal(0), cell = RValue_makeString("0");
+	int32_t i, j;
+
+	if (logOptionVar < 0 || RValue_toReal(Instance_getSelfVar(g, logOptionVar)) == 1 || !ctx->currentInstance)
+		return VM_callCodeIndex(ctx, resetMapCode, args, argCount);
+	for (i = 0; i < 80; i++)
+		for (j = 0; j < 80; j++) {
+			VM_arraySetWithCoW(ctx, IntRValueHashMap_getOrInsertUndefined(&g->selfVars, mapVar),
+					   i * GML_LEGACY_ARRAY_STRIDE + j, cell);
+			VM_arraySetWithCoW(ctx, IntRValueHashMap_getOrInsertUndefined(&g->selfVars, dmapVar),
+					   i * GML_LEGACY_ARRAY_STRIDE + j, zero);
+		}
+	/* its loop counters are the caller's own variables */
+	Instance_setSelfVar(ctx->currentInstance, iVar, RValue_makeReal(80));
+	Instance_setSelfVar(ctx->currentInstance, jVar, RValue_makeReal(80));
+	return RValue_makeUndefined();
+}
+
+void Wii_hookAm2rScripts(VMContext *ctx)
+{
+	ptrdiff_t s = shgeti(ctx->codeIndexByName, "reset_map");
+
+	resetMapCode = s >= 0 ? ctx->codeIndexByName[s].value : -1;
+	mapVar = Wii_varId(ctx->runner, "map", INSTANCE_GLOBAL);
+	dmapVar = Wii_varId(ctx->runner, "dmap", INSTANCE_GLOBAL);
+	logOptionVar = Wii_varId(ctx->runner, "opwritelog", INSTANCE_GLOBAL);
+	iVar = Wii_varId(ctx->runner, "i", INSTANCE_SELF);
+	jVar = Wii_varId(ctx->runner, "j", INSTANCE_SELF);
+	if (resetMapCode < 0 || mapVar < 0 || dmapVar < 0 || iVar < 0 || jVar < 0)
+		return;
+	repeat(ctx->funcCallCacheCount, fi) {
+		const char *name = ctx->dataWin->func.functions[fi].name;
+
+		if (name && strcmp(name, "reset_map") == 0) {
+			ctx->funcCallCache[fi].builtin = (void *)wii_reset_map;
+			ctx->funcCallCache[fi].scriptCodeIndex = -1;
+		}
+	}
 }

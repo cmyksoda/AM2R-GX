@@ -1,3 +1,4 @@
+#include "am2r.h"
 #include "assets.h"
 #include "bin_files.h"
 #include "common.h"
@@ -248,6 +249,7 @@ static void register_stubs(VMContext *ctx)
 		}
 		WiiControls_hookScripts(ctx);
 		WiiSafe_hookScripts(ctx);
+		Wii_hookAm2rScripts(ctx);
 		hook_get_text(ctx);
 	}
 }

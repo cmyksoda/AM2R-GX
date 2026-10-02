@@ -1,0 +1,30 @@
+Reason: the port's native stand-in for AM2R's reset_map writes global.map and global.dmap cells; going through the VM's
+own array write keeps the copy-on-write and growth rules exactly as GML would apply them.
+Upstream: Port-only (exports one function); not proposed.
+
+diff --git a/src/vm.c b/src/vm.c
+index 993efb1..48bc0ec 100644
+--- a/src/vm.c
++++ b/src/vm.c
+@@ -261,7 +261,7 @@ static void cowForkSlotForModificationIfNeeded(VMContext* ctx, RValue* slot) {
+ // Write array[index] = val with CoW semantics. Always makes an independent copy of val, caller retains ownership and must RValue_free(&val) when done.
+ // `slot` is the RValue* holding the array (e.g. &globalVars[id], &inst->selfVars[..].value, &localVars[slot]).
+ // Returns the (possibly newly-forked) GMLArray* now in *slot.
+-static GMLArray* VM_arraySetWithCoW(VMContext* ctx, RValue* slot, int32_t index, RValue val) {
++GMLArray* VM_arraySetWithCoW(VMContext* ctx, RValue* slot, int32_t index, RValue val) {
+     require(slot != nullptr);
+     requireMessageFormatted(__FILE__, __LINE__, index >= 0, "Trying to write to an array using a negative index! Index: %d", index);
+ 
+diff --git a/src/vm.h b/src/vm.h
+index eb12f9b..9634b8a 100644
+--- a/src/vm.h
++++ b/src/vm.h
+@@ -309,6 +309,8 @@ VMContext* VM_create(DataWin* dataWin);
+ void VM_reset(VMContext* ctx);
+ RValue VM_executeCode(VMContext* ctx, int32_t codeIndex);
+ RValue VM_callCodeIndex(VMContext* ctx, int32_t codeIndex, RValue* args, int32_t argCount);
++// array[index] = val with the VM's copy-on-write rules; `slot` holds the array (e.g. a variable's slot). The caller keeps val.
++GMLArray* VM_arraySetWithCoW(VMContext* ctx, RValue* slot, int32_t index, RValue val);
+ void VM_free(VMContext* ctx);
+ bool VM_isObjectOrDescendant(DataWin* dataWin, int32_t objectIndex, int32_t targetObjectIndex);
+ int32_t VM_resolveInstanceTarget(VMContext* ctx, int32_t target);

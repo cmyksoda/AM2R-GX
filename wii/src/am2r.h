@@ -18,6 +18,10 @@ void Wii_forceGamepadProfile(struct Runner *runner);
 /* Clear the widescreen view each frame, except on the item screen: it shows the frozen game from that surface. */
 void Wii_setViewClears(struct Runner *runner);
 
+struct VMContext;
+/* Native stand-ins for AM2R scripts whose GML is slow on a Wii and whose effect is simple (reset_map). */
+void Wii_hookAm2rScripts(struct VMContext *ctx);
+
 /* Tell the renderer which pages the next seconds will draw (title, file select, intro, play), once per change. */
 void Wii_wishPages(struct Runner *runner);
 
