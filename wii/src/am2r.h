@@ -27,7 +27,7 @@ struct DataWin;
 /* Put the Wii port's credits ahead of AM2R's in the ending roll. */
 void Wii_addCredits(struct DataWin *dw);
 
-/* Tell the renderer which pages the next seconds will draw (title, file select, intro, play), once per change. */
+/* Tell the renderer which pages the next seconds will draw (title, file select, intro, play, credits), once per change. */
 void Wii_wishPages(struct Runner *runner);
 
 #endif

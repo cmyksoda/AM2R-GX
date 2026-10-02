@@ -189,12 +189,13 @@ static int32_t metroids_here(Runner *runner)
 }
 
 /* What the next seconds will draw, for the loader to fetch while idle (a page pulled mid-play stalls a Wii ~140 ms):
- * the title's first frame, the file select, the intro's art, and in play Samus's suit, the HUD, the pause screen and
- * the metroid the room holds. */
+ * the title's first frame, the file select, the intro's art, the credits' ship and score screen, and in play Samus's
+ * suit, the HUD, the pause screen and the metroid the room holds. */
 void Wii_wishPages(Runner *runner)
 {
-	enum { NONE = -1, TITLE_START = 100, FILE_SELECT = 101, INTRO = 200, METROID = 1000 };
-	static int32_t ingame = -2, suitVar, fusionVar, controllerRoom, titleRoom, introRoom, subscreenRoom, last = NONE;
+	enum { NONE = -1, TITLE_START = 100, FILE_SELECT = 101, CREDITS = 102, INTRO = 200, METROID = 1000 };
+	static int32_t ingame = -2, suitVar, fusionVar, controllerRoom, titleRoom, introRoom, subscreenRoom, creditsRoom;
+	static int32_t last = NONE;
 	DataWin *dw;
 	Instance *g;
 	int32_t key, suit, k, *tpags = NULL;
@@ -211,11 +212,14 @@ void Wii_wishPages(Runner *runner)
 		titleRoom = Wii_roomIndex(runner, "titleroom");
 		introRoom = Wii_roomIndex(runner, "gameintroroom");
 		subscreenRoom = Wii_roomIndex(runner, "rm_subscreen");
+		creditsRoom = Wii_roomIndex(runner, "rm_credits");
 	}
 	if (runner->currentRoomIndex == controllerRoom) {
 		key = TITLE_START;
 	} else if (runner->currentRoomIndex == titleRoom) {
 		key = FILE_SELECT;
+	} else if (runner->currentRoomIndex == creditsRoom) {
+		key = CREDITS;
 	} else if (runner->currentRoomIndex == introRoom ||
 		   (ingame >= 0 && RValue_toReal(Instance_getSelfVar(g, ingame)) == 1)) {
 		suit = suitVar >= 0 ? (int32_t)RValue_toReal(Instance_getSelfVar(g, suitVar)) : 0;
@@ -238,6 +242,13 @@ void Wii_wishPages(Runner *runner)
 		add_sprite(&tpags, dw, sprite_named(runner, "sVersionFont"), UINT32_MAX);
 	} else if (key == FILE_SELECT) {
 		add_background(&tpags, dw, "bgSaveSlot");
+	} else if (key == CREDITS) {
+		/* the ship that crosses the roll, then the score screen's art and lettering */
+		add_sprite(&tpags, dw, sprite_named(runner, "sShip"), UINT32_MAX);
+		add_background(&tpags, dw, "bgScoreScreen");
+		for (i = 0; i < dw->sprt.count; i++)
+			if (dw->sprt.sprites[i].name && strncmp(dw->sprt.sprites[i].name, "sGUIFont", 8) == 0)
+				add_sprite(&tpags, dw, (int32_t)i, UINT32_MAX);
 	} else {
 		if (key % METROID >= INTRO) {
 			add_background(&tpags, dw, "bgIntro");
@@ -261,8 +272,8 @@ void Wii_wishPages(Runner *runner)
 	}
 	GxRenderer_wish(dw, tpags, (uint32_t)arrlen(tpags));
 	logInfo("wish: %s, metroids %x, %d texture items\n", key == TITLE_START ? "title start" : key == FILE_SELECT ?
-		"file select" : key % METROID >= INTRO ? "intro" : key & 1 ? "play, fusion" : "play", (int)(key / METROID),
-		(int)arrlen(tpags));
+		"file select" : key == CREDITS ? "credits" : key % METROID >= INTRO ? "intro" : key & 1 ? "play, fusion" :
+		"play", (int)(key / METROID), (int)arrlen(tpags));
 	arrfree(tpags);
 }
 
