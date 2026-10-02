@@ -131,9 +131,32 @@ static RValue stub_show_message(VMContext *ctx, RValue *args, int32_t argCount)
 
 static int32_t getTextCode = -1;
 
+/* The 8-Bit filter's tip ends with its PC key in every language: "…, F9 key on PC", "… (клавиша F9 на ПК)". */
+static RValue without_pc_key(RValue tip)
+{
+	const char *t = tip.type == RVALUE_STRING ? tip.string : NULL;
+	const char *f9 = t ? strstr(t, "F9") : NULL;
+	const char *cut = NULL, *p;
+	char *trimmed;
+
+	for (p = t; f9 && p < f9; p++)
+		if (strncmp(p, ", ", 2) == 0 || strncmp(p, " (", 2) == 0 || strncmp(p, "。", 3) == 0)
+			cut = p;
+	if (!cut)
+		return tip;
+	trimmed = safeMalloc((size_t)(cut - t) + 1);
+	memcpy(trimmed, t, (size_t)(cut - t));
+	trimmed[cut - t] = '\0';
+	RValue_free(&tip);
+	return RValue_makeOwnedString(trimmed);
+}
+
 /* The Display menu's VSync row is the 240p switch here (wii_ini_read_real keeps it under its own key). */
 static RValue wii_get_text(VMContext *ctx, RValue *args, int32_t argCount)
 {
+	if (argCount >= 2 && args[0].type == RVALUE_STRING && args[1].type == RVALUE_STRING && args[0].string &&
+	    args[1].string && strcmp(args[0].string, "ExtrasMenu") == 0 && strcmp(args[1].string, "GBFilter_Tip") == 0)
+		return without_pc_key(VM_callCodeIndex(ctx, getTextCode, args, argCount));
 	if (argCount >= 2 && args[0].type == RVALUE_STRING && args[1].type == RVALUE_STRING && args[0].string &&
 	    args[1].string && strcmp(args[0].string, "OptionsDisplay") == 0) {
 		if (strcmp(args[1].string, "VSync") == 0)
