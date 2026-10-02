@@ -66,6 +66,9 @@ void platformLog(const logType type, const char *format, va_list va)
 		fputs(prefix, g_log);
 		vfprintf(g_log, format, va);
 		fflush(g_log);
+		/* An error can be the last line a run writes (a failed require() aborts): put it on the card now. */
+		if (type == LOG_TYPE_ERROR)
+			fsync(fileno(g_log));
 	}
 
 	if (g_gecko) {
