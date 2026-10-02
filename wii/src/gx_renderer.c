@@ -2123,7 +2123,8 @@ static void gx_preload_room(GxRenderer *gx)
 	for (i = 0; i < room->gameObjectCount; i++) {
 		int32_t obj = room->gameObjects[i].objectDefinition;
 
-		if (obj >= 0 && (uint32_t)obj < dw->objt.count)
+		/* An invisible object is never drawn: oSolid, in nearly every room, would hold a page of Area 5 art. */
+		if (obj >= 0 && (uint32_t)obj < dw->objt.count && dw->objt.objects[obj].visible)
 			gx_want_sprite(dw, want, dw->objt.objects[obj].spriteId);
 	}
 	for (i = 0; i < gx->pageCount && i < PRELOAD_MAX_PAGES; i++) {
