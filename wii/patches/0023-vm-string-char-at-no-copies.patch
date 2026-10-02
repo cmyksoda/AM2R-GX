@@ -1,0 +1,48 @@
+Reason: string_char_at copied its whole string argument just to read one character, then returned the character in a
+fresh allocation: two mallocs and a free per call. AM2R's pause map calls it seven times for each of ~1,700 map blocks,
+so a pause spent ~68 ms of VM time on it (Dolphin). A string argument is now read in place, and an ASCII character
+comes back as a shared constant string; the result is the same.
+Upstream: Speed only, every platform. Retires this patch when merged.
+
+--- a/src/vm_builtins.c
++++ b/src/vm_builtins.c
+@@ -2526,25 +2526,35 @@
+ 
+ static RValue builtin_string_char_at(MAYBE_UNUSED VMContext* ctx, RValue* args, int32_t argCount) {
+     REQUIRE_ARGC_AT_LEAST("string_char_at", 2, RValue_makeOwnedString(safeStrdup("")));
+-    char* str = RValue_toString(args[0], ctx->runner->dataWin);
++    // A string argument is read in place and an ASCII character comes back as a shared constant: no copies per call.
++    static char ascii[128][2];
++    bool borrowed = args[0].type == RVALUE_STRING && args[0].string != nullptr;
++    char* owned = borrowed ? nullptr : RValue_toString(args[0], ctx->runner->dataWin);
++    const char* str = borrowed ? args[0].string : owned;
+     int32_t pos = RValue_toInt32(args[1]) - 1; // 1-based
+     int32_t strLen = (int32_t) strlen(str);
+     if (0 > pos || pos >= strLen) {
+-        free(str);
++        free(owned);
+         return RValue_makeOwnedString(safeStrdup(""));
+     }
+     int32_t byteStart = TextUtils_utf8AdvanceCodepoints(str, strLen, pos);
+     if (byteStart >= strLen) {
+-        free(str);
++        free(owned);
+         return RValue_makeOwnedString(safeStrdup(""));
+     }
+     int32_t byteNext = byteStart;
+     TextUtils_decodeUtf8(str, strLen, &byteNext);
+     int32_t nbytes = byteNext - byteStart;
++    if (nbytes == 1 && (unsigned char) str[byteStart] < 128) {
++        char* one = ascii[(unsigned char) str[byteStart]];
++        one[0] = str[byteStart];
++        free(owned);
++        return RValue_makeString(one);
++    }
+     char* out = (char *)safeMalloc(nbytes + 1);
+     memcpy(out, str + byteStart, (size_t) nbytes);
+     out[nbytes] = '\0';
+-    free(str);
++    free(owned);
+     return RValue_makeOwnedString(out);
+ }
+ 

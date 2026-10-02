@@ -59,6 +59,7 @@ wii: $(BUTTER)/CMakeLists.txt
 	cd $(BUTTER) && git apply ../../wii/patches/0020-vm-random-get-seed.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0021-runner-waking-instance-joins-grid.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0022-random-set-seed-resets-index.patch
+	cd $(BUTTER) && git apply ../../wii/patches/0023-vm-string-char-at-no-copies.patch
 	if [ -f wii/test/patches/0099-debug-collision-trace.patch ]; then cd $(BUTTER) && git apply ../../wii/test/patches/0099-debug-collision-trace.patch; fi
 	cmake -B $(WII_BUILD) -S $(BUTTER) $(WII_CMAKE_FLAGS)
 	cmake --build $(WII_BUILD) -j$(shell nproc)
