@@ -242,6 +242,10 @@ void Wii_wishPages(Runner *runner)
 		add_sprite(&tpags, dw, sprite_named(runner, "sVersionFont"), UINT32_MAX);
 	} else if (key == FILE_SELECT) {
 		add_background(&tpags, dw, "bgSaveSlot");
+		for (i = 0; i < dw->sprt.count; i++)
+			if (dw->sprt.sprites[i].name && strncmp(dw->sprt.sprites[i].name, "sSaveSlot", 9) == 0)
+				add_sprite(&tpags, dw, (int32_t)i, UINT32_MAX);
+		add_background(&tpags, dw, "bgGUIMetCount");
 	} else if (key == CREDITS) {
 		/* the ship that crosses the roll, then the score screen's art and lettering */
 		add_sprite(&tpags, dw, sprite_named(runner, "sShip"), UINT32_MAX);
