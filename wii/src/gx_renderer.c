@@ -1270,6 +1270,28 @@ static GxTile *gx_tile_at(GxSurf *s, int col, int row)
 	return &s->tiles[row * s->tilesX + col];
 }
 
+/* Every texel of a tiled surface one colour: each 4x4 block is 16 alpha/red pairs, then 16 green/blue pairs. */
+static void gx_tiles_fill(GxSurf *s, u8 r, u8 g, u8 b, u8 a)
+{
+	u32 ar = ((u32)a << 8 | r) * 0x10001u, gb = ((u32)g << 8 | b) * 0x10001u;
+	int i, k;
+
+	for (i = 0; i < s->tilesX * s->tilesY; i++) {
+		GxTile *t = &s->tiles[i];
+		u32 *p, *end;
+
+		if (!t->texels)
+			continue;
+		end = (u32 *)t->texels + surf_bytes(t->texW, t->texH) / 4;
+		for (p = (u32 *)t->texels; p < end; p += 16)
+			for (k = 0; k < 8; k++) {
+				p[k] = ar;
+				p[8 + k] = gb;
+			}
+		t->objReady = false;
+	}
+}
+
 static void gx_prep_tile_obj(GxTile *t)
 {
 	if (t->objReady || !t->texels)
@@ -3104,6 +3126,11 @@ static void gxClearScreen(Renderer *renderer, uint32_t color, float alpha)
 	if (h < 1.0f)
 		h = (float)gx->gameH;
 	gx_unbind_tex(gx);
+	/* A tiled surface is drawn on the CPU, where a clear quad would blend its two million pixels one by one. */
+	if (gx_tiled_target(gx)) {
+		gx_tiles_fill(gx_tiled_target(gx), r, g, b, a);
+		return;
+	}
 	GX_SetColorUpdate(GX_TRUE);
 	GX_SetAlphaUpdate(GX_TRUE);
 	GX_SetBlendMode(GX_BM_NONE, GX_BL_ONE, GX_BL_ZERO, GX_LO_CLEAR);
@@ -3224,6 +3251,77 @@ static void gx_tile_span(float *start, float *end, float tile, float lo, float h
 		*end = last;
 }
 
+#define PATTERN_MAX 64
+
+/* An unscaled, opaque background tiled over a tiled surface comes out the same in every cell: one cell is converted and
+ * its 4x4 blocks copied across (the pause map's 2048x1024 grid). False where that does not hold. */
+static bool gx_tile_pattern(GxRenderer *gx, int32_t tpagIndex, float xscale, float yscale, uint32_t color, float alpha,
+			    float startX, float endX, float startY, float endY)
+{
+	static u8 cell[PATTERN_MAX * PATTERN_MAX * 4];
+	TexturePageItem *tpag = &gx->base.dataWin->tpag.items[tpagIndex];
+	GxSurf *s = gx_tiled_target(gx);
+	GxPage *page;
+	int w = tpag->boundingWidth, h = tpag->boundingHeight, x0 = (int)startX, y0 = (int)startY;
+	int nx = 0, ny = 0, xc0, xc1, yc0, yc1, i, j, tr, c, bx, by;
+	float f;
+
+	if (!s || xscale != 1.0f || yscale != 1.0f || (color & 0xFFFFFF) != 0xFFFFFF || alpha != 1.0f ||
+	    gx->base.currentShader >= 0 || WiiSafe_lift(gx->base.runner) != 0.0f || tpag->sourceWidth != w ||
+	    tpag->sourceHeight != h || tpag->targetX || tpag->targetY || w % 4 || h % 4 || w > PATTERN_MAX ||
+	    h > PATTERN_MAX || (float)x0 != startX || (float)y0 != startY || x0 % 4 || y0 % 4 || s->w % 4 || s->h % 4 ||
+	    gx_clipL != 0.0f || gx_clipT != 0.0f || gx_clipR != (float)s->w || gx_clipB != (float)s->h)
+		return false;
+	page = gx_page(gx, tpag->texturePageId);
+	if (!page || !page->texels)
+		return false;
+	for (j = 0; j < h; j++)
+		for (i = 0; i < w; i++) {
+			int tx = tpag->sourceX + i, ty = tpag->sourceY + j;
+			u8 r, g, b, a;
+
+			unpack_rgb5a3(page->texels[((ty >> 2) * (page->texW >> 2) + (tx >> 2)) * 16 + (ty & 3) * 4 + (tx & 3)],
+				      &r, &g, &b, &a);
+			if (a != 255)
+				return false;
+			gx_rgba8_pset(cell, w, i, j, r, g, b, a);
+		}
+	for (f = startX; f < endX; f += (float)w)
+		nx++;
+	for (f = startY; f < endY; f += (float)h)
+		ny++;
+	xc0 = x0 < 0 ? 0 : x0;
+	yc0 = y0 < 0 ? 0 : y0;
+	xc1 = x0 + nx * w < s->w ? x0 + nx * w : s->w;
+	yc1 = y0 + ny * h < s->h ? y0 + ny * h : s->h;
+	if (gx_usage && (uint32_t)tpagIndex < gx_usageCount)
+		gx_usage[tpagIndex >> 3] |= (u8)(1 << (tpagIndex & 7));
+	for (tr = 0; tr < s->tilesY; tr++)
+		for (c = 0; c < s->tilesX; c++) {
+			GxTile *t = gx_tile_at(s, c, tr);
+			int ox = c * SURF_TILE_W, oy = tr * SURF_TILE_H;
+
+			if (!t->texels)
+				continue;
+			for (by = 0; by < t->texH / 4; by++) {
+				int y = oy + by * 4;
+
+				if (y < yc0 || y >= yc1)
+					continue;
+				for (bx = 0; bx < t->texW / 4; bx++) {
+					int x = ox + bx * 4;
+
+					if (x < xc0 || x >= xc1)
+						continue;
+					memcpy((u8 *)t->texels + (by * (t->texW / 4) + bx) * 64,
+					       cell + (((y - y0) / 4 % (h / 4)) * (w / 4) + (x - x0) / 4 % (w / 4)) * 64, 64);
+				}
+			}
+			t->objReady = false;
+		}
+	return true;
+}
+
 static void gxDrawSpriteTiled(Renderer *renderer, int32_t tpagIndex, float originX, float originY, float x, float y,
 			      float xscale, float yscale, bool tileX, bool tileY, float roomW, float roomH,
 			      uint32_t color, float alpha)
@@ -3263,6 +3361,9 @@ static void gxDrawSpriteTiled(Renderer *renderer, int32_t tpagIndex, float origi
 	gx_clip_rows(&clipT, &clipB);
 	if (tileY)
 		gx_tile_span(&startY, &endY, tileH, clipT, clipB, yscale < 0);
+	if (tileX && tileY && gx_tile_pattern((GxRenderer *)renderer, tpagIndex, xscale, yscale, color, alpha, startX, endX,
+					      startY, endY))
+		return;
 	for (cy = startY; cy < endY; cy += tileH) {
 		for (cx = startX; cx < endX; cx += tileW)
 			gxDrawSprite(renderer, tpagIndex, cx + originX * xscale, cy + originY * yscale, originX, originY,
