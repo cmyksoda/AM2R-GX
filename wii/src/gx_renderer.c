@@ -3714,8 +3714,18 @@ bool GxRenderer_surfacePixel(int32_t surfaceID, int x, int y, uint8_t rgba[4])
 	if (!gx || surfaceID < 0 || (uint32_t)surfaceID >= gx->surfCount)
 		return false;
 	s = &gx->surfs[surfaceID];
-	if (!s->exists || s->tiles || !s->texels || x < 0 || y < 0 || x >= s->w || y >= s->h)
+	if (!s->exists || (!s->tiles && !s->texels) || x < 0 || y < 0 || x >= s->w || y >= s->h)
 		return false;
+	if (s->tiles) {
+		/* Drawn on the CPU, so its texels are already current. */
+		GxTile *t = gx_tile_at(s, x / SURF_TILE_W, y / SURF_TILE_H);
+
+		if (!t->texels)
+			return false;
+		gx_rgba8_pget((const u8 *)t->texels, t->texW, x % SURF_TILE_W, y % SURF_TILE_H, &rgba[0], &rgba[1], &rgba[2],
+			      &rgba[3]);
+		return true;
+	}
 	if (gx->currentTarget == surfaceID) {
 		/* Still the live target: peek the EFB itself (a 4×4 copy came back empty in Dolphin). */
 		GXColor c;
