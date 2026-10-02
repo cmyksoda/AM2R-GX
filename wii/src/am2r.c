@@ -11,6 +11,7 @@
 #include "text_utils.h"
 #include "utils.h"
 #include "vm.h"
+#include "vm_builtins.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -272,6 +273,49 @@ static RValue wii_reset_map(VMContext *ctx, RValue *args, int32_t argCount)
 	return RValue_makeUndefined();
 }
 
+static int32_t mapSurfCode = -1, mapBlockCode = -1, mystrVar, partVars[7];
+static BuiltinFunc stringFn, charAtFn;
+
+/* draw_map_surf(i, j) runs for each of the pause map's 1,682 cells and spends ~30 us a cell turning the cell's string
+ * into seven of the caller's variables; here they are set the same way, before the same draw_mapblock. */
+static RValue wii_draw_map_surf(VMContext *ctx, RValue *args, int32_t argCount)
+{
+	Instance *self = ctx->currentInstance, *g = ctx->globalScopeInstance;
+	RValue cellVal, mystr, parts[7], call[10], r;
+	int32_t cell, k;
+
+	if (argCount != 2 || !self || !g)
+		return VM_callCodeIndex(ctx, mapSurfCode, args, argCount);
+	cell = RValue_toInt32(args[0]) * GML_LEGACY_ARRAY_STRIDE + RValue_toInt32(args[1]);
+	VMBuiltins_setVariable(ctx, self, BUILTIN_VAR_X, "x", RValue_makeReal((RValue_toReal(args[0]) - 3) * 8), -1);
+	VMBuiltins_setVariable(ctx, self, BUILTIN_VAR_Y, "y", RValue_makeReal((RValue_toReal(args[1]) - 3) * 8), -1);
+	cellVal = GMLArray_getOnArrayRef(IntRValueHashMap_getOrInsertUndefined(&g->selfVars, mapVar), cell);
+	mystr = stringFn(ctx, &cellVal, 1);
+	Instance_setSelfVar(self, mystrVar, mystr);
+	if (mystr.type == RVALUE_STRING && mystr.string && strcmp(mystr.string, "0") != 0) {
+		for (k = 0; k < 7; k++) {
+			RValue a[2] = { mystr, RValue_makeInt32(k + 1) };
+
+			parts[k] = charAtFn(ctx, a, 2);
+			Instance_setSelfVar(self, partVars[k], parts[k]);
+		}
+		call[0] = VMBuiltins_getVariable(ctx, self, BUILTIN_VAR_X, "x", -1);
+		call[1] = VMBuiltins_getVariable(ctx, self, BUILTIN_VAR_Y, "y", -1);
+		for (k = 0; k < 6; k++)
+			call[2 + k] = parts[k];
+		call[8] = GMLArray_getOnArrayRef(IntRValueHashMap_getOrInsertUndefined(&g->selfVars, dmapVar), cell);
+		call[9] = parts[6];
+		r = VM_callCodeIndex(ctx, mapBlockCode, call, 10);
+		RValue_free(&r);
+		RValue_free(&call[0]);
+		RValue_free(&call[1]);
+		for (k = 0; k < 7; k++)
+			RValue_free(&parts[k]);
+	}
+	RValue_free(&mystr);
+	return RValue_makeUndefined();
+}
+
 /* Ours, then AM2R's, in its markup (* heading, / centred, a=b paired, ; next row). The roll scrolls at a speed set by
  * its row count to last as long as its music, so these rows make it a little faster, not longer. */
 static const char credits[] = "*AM2R GX;;;;;;;;;;;;"
@@ -291,8 +335,11 @@ void Wii_addCredits(DataWin *dw)
 
 void Wii_hookAm2rScripts(VMContext *ctx)
 {
+	static const char *const partNames[7] = { "wallU", "wallR", "wallD", "wallL", "color", "special", "corner" };
 	ptrdiff_t s = shgeti(ctx->codeIndexByName, "reset_map"), t = shgeti(ctx->codeIndexByName, "draw_cool_text");
-	bool resetMap;
+	ptrdiff_t m = shgeti(ctx->codeIndexByName, "draw_map_surf"), b = shgeti(ctx->codeIndexByName, "draw_mapblock");
+	bool resetMap, mapSurf;
+	int k;
 
 	resetMapCode = s >= 0 ? ctx->codeIndexByName[s].value : -1;
 	coolTextCode = t >= 0 ? ctx->codeIndexByName[t].value : -1;
@@ -302,6 +349,16 @@ void Wii_hookAm2rScripts(VMContext *ctx)
 	iVar = Wii_varId(ctx->runner, "i", INSTANCE_SELF);
 	jVar = Wii_varId(ctx->runner, "j", INSTANCE_SELF);
 	resetMap = resetMapCode >= 0 && mapVar >= 0 && dmapVar >= 0 && iVar >= 0 && jVar >= 0;
+	mapSurfCode = m >= 0 ? ctx->codeIndexByName[m].value : -1;
+	mapBlockCode = b >= 0 ? ctx->codeIndexByName[b].value : -1;
+	mystrVar = Wii_varId(ctx->runner, "mystr", INSTANCE_SELF);
+	stringFn = VM_findBuiltin(ctx, "string");
+	charAtFn = VM_findBuiltin(ctx, "string_char_at");
+	mapSurf = mapSurfCode >= 0 && mapBlockCode >= 0 && mapVar >= 0 && dmapVar >= 0 && mystrVar >= 0 && stringFn && charAtFn;
+	for (k = 0; k < 7; k++) {
+		partVars[k] = Wii_varId(ctx->runner, partNames[k], INSTANCE_SELF);
+		mapSurf = mapSurf && partVars[k] >= 0;
+	}
 	repeat(ctx->funcCallCacheCount, fi) {
 		const char *name = ctx->dataWin->func.functions[fi].name;
 		void *standIn = NULL;
@@ -310,6 +367,8 @@ void Wii_hookAm2rScripts(VMContext *ctx)
 			standIn = (void *)wii_reset_map;
 		else if (name && coolTextCode >= 0 && strcmp(name, "draw_cool_text") == 0)
 			standIn = (void *)wii_draw_cool_text;
+		else if (name && mapSurf && strcmp(name, "draw_map_surf") == 0)
+			standIn = (void *)wii_draw_map_surf;
 		if (standIn) {
 			ctx->funcCallCache[fi].builtin = standIn;
 			ctx->funcCallCache[fi].scriptCodeIndex = -1;
