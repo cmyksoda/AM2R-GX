@@ -8,10 +8,12 @@
 #include "runner.h"
 #include "rvalue.h"
 #include "stb_ds.h"
+#include "text_utils.h"
 #include "utils.h"
 #include "vm.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 int32_t Wii_objectIndex(Runner *runner, const char *name)
@@ -222,6 +224,30 @@ void Wii_wishPages(Runner *runner)
 	arrfree(tpags);
 }
 
+static int32_t coolTextCode = -1;
+
+/* draw_cool_text(x, y, text, outline, top, bottom, alpha) draws its text nine times one pixel apart, copying and laying
+ * out the string each time; the credits roll does that with all its rows every frame. */
+static RValue wii_draw_cool_text(VMContext *ctx, RValue *args, int32_t argCount)
+{
+	Renderer *r = ctx->runner->renderer;
+	PreprocessedText text;
+	char *str;
+
+	if (argCount != 7 || !r)
+		return VM_callCodeIndex(ctx, coolTextCode, args, argCount);
+	r->drawAlpha = (float)RValue_toReal(args[6]);
+	r->drawColor = RValue_toColour(args[3]);
+	str = RValue_toString(args[2], ctx->runner->dataWin);
+	text = TextUtils_preprocessGmlTextIfNeeded(ctx->runner, str);
+	GxRenderer_drawOutlinedText(r, text.text, RValue_toReal(args[0]), RValue_toReal(args[1]), (int32_t)r->drawColor,
+				    (int32_t)RValue_toColour(args[4]), (int32_t)RValue_toColour(args[5]), r->drawAlpha);
+	PreprocessedText_free(text);
+	free(str);
+	r->drawAlpha = 1.0f;
+	return RValue_makeUndefined();
+}
+
 static int32_t resetMapCode = -1, mapVar, dmapVar, logOptionVar, iVar, jVar;
 
 /* reset_map builds a "Resetting i,j" line for each of its 6,400 cells, which writelog drops unless AM2R's log option is
@@ -266,21 +292,27 @@ void Wii_addCredits(DataWin *dw)
 
 void Wii_hookAm2rScripts(VMContext *ctx)
 {
-	ptrdiff_t s = shgeti(ctx->codeIndexByName, "reset_map");
+	ptrdiff_t s = shgeti(ctx->codeIndexByName, "reset_map"), t = shgeti(ctx->codeIndexByName, "draw_cool_text");
+	bool resetMap;
 
 	resetMapCode = s >= 0 ? ctx->codeIndexByName[s].value : -1;
+	coolTextCode = t >= 0 ? ctx->codeIndexByName[t].value : -1;
 	mapVar = Wii_varId(ctx->runner, "map", INSTANCE_GLOBAL);
 	dmapVar = Wii_varId(ctx->runner, "dmap", INSTANCE_GLOBAL);
 	logOptionVar = Wii_varId(ctx->runner, "opwritelog", INSTANCE_GLOBAL);
 	iVar = Wii_varId(ctx->runner, "i", INSTANCE_SELF);
 	jVar = Wii_varId(ctx->runner, "j", INSTANCE_SELF);
-	if (resetMapCode < 0 || mapVar < 0 || dmapVar < 0 || iVar < 0 || jVar < 0)
-		return;
+	resetMap = resetMapCode >= 0 && mapVar >= 0 && dmapVar >= 0 && iVar >= 0 && jVar >= 0;
 	repeat(ctx->funcCallCacheCount, fi) {
 		const char *name = ctx->dataWin->func.functions[fi].name;
+		void *standIn = NULL;
 
-		if (name && strcmp(name, "reset_map") == 0) {
-			ctx->funcCallCache[fi].builtin = (void *)wii_reset_map;
+		if (name && resetMap && strcmp(name, "reset_map") == 0)
+			standIn = (void *)wii_reset_map;
+		else if (name && coolTextCode >= 0 && strcmp(name, "draw_cool_text") == 0)
+			standIn = (void *)wii_draw_cool_text;
+		if (standIn) {
+			ctx->funcCallCache[fi].builtin = standIn;
 			ctx->funcCallCache[fi].scriptCodeIndex = -1;
 		}
 	}

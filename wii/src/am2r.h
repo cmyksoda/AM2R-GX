@@ -19,7 +19,7 @@ void Wii_forceGamepadProfile(struct Runner *runner);
 void Wii_setViewClears(struct Runner *runner);
 
 struct VMContext;
-/* Native stand-ins for AM2R scripts whose GML is slow on a Wii and whose effect is simple (reset_map). */
+/* Native stand-ins for AM2R scripts whose GML is slow on a Wii and whose effect is simple (reset_map, draw_cool_text). */
 void Wii_hookAm2rScripts(struct VMContext *ctx);
 
 struct DataWin;

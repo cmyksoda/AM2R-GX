@@ -2826,22 +2826,83 @@ static void gxDrawTriangle(Renderer *renderer, float x1, float y1, float x2, flo
 		gx_cur->targetDirty = true;
 }
 
-static void gxDrawTextColor(Renderer *renderer, const char *text, float x, float y, float xscale, float yscale,
-			    float angleDeg, int32_t c1, int32_t c2, int32_t c3, int32_t c4, float alpha,
-			    float lineSeparation)
+/* A glyph laid out in the font's units, drawable at any offset: AM2R's outlined text is one string drawn nine times. */
+typedef struct {
+	float lx0, ly0, lx1, ly1, u0, v0, u1, v1;
+	int32_t tc1, tc2, tc3, tc4;
+	uint32_t pageId;
+} GxGlyph;
+
+/* One drawing of a laid-out string: its offset and alpha, in its own corner colours or one colour for all. */
+typedef struct {
+	double dx, dy;
+	bool uniform;
+	int32_t color;
+	float alpha;
+} GxTextPass;
+
+#define GX_TEXT_GLYPHS 1024
+static GxGlyph gx_glyphs[GX_TEXT_GLYPHS];
+
+static void gx_text_emit(GxRenderer *gx, uint32_t count, double x, double y, float sx, float sy, float angleRad,
+			 bool snap, const GxTextPass *pass)
 {
-	GxRenderer *gx = (GxRenderer *)renderer;
+	Matrix4f transform;
+	GxPage *page = NULL;
+	uint32_t i, pageId = UINT32_MAX;
+	u8 a = unorm(pass->alpha);
+
+	Matrix4f_setTransform2D(&transform, (float)(x + pass->dx), (float)(y + pass->dy), sx, sy, angleRad);
+	for (i = 0; i < count; i++) {
+		const GxGlyph *g = &gx_glyphs[i];
+		int32_t tc1 = pass->uniform ? pass->color : g->tc1, tc2 = pass->uniform ? pass->color : g->tc2;
+		int32_t tc3 = pass->uniform ? pass->color : g->tc3, tc4 = pass->uniform ? pass->color : g->tc4;
+		float px0, py0, px1, py1, px2, py2, px3, py3;
+
+		if (g->pageId != pageId) {
+			pageId = g->pageId;
+			page = gx_page(gx, pageId);
+		}
+		if (!page)
+			continue;
+		gx_bind_tex(gx, &page->obj);
+		Matrix4f_transformPoint(&transform, g->lx0, g->ly0, &px0, &py0);
+		Matrix4f_transformPoint(&transform, g->lx1, g->ly0, &px1, &py1);
+		Matrix4f_transformPoint(&transform, g->lx1, g->ly1, &px2, &py2);
+		Matrix4f_transformPoint(&transform, g->lx0, g->ly1, &px3, &py3);
+		if (snap) {
+			px0 = px3 = floorf(px0 + 0.5f);
+			px1 = px2 = floorf(px1 + 0.5f);
+			py0 = py1 = floorf(py0 + 0.5f);
+			py2 = py3 = floorf(py2 + 0.5f);
+		}
+		emit_quad(px0, py0, px1, py1, px2, py2, px3, py3,
+			  g->u0, g->v0, g->u1, g->v0, g->u1, g->v1, g->u0, g->v1,
+			  (u8)BGR_R(tc1), (u8)BGR_G(tc1), (u8)BGR_B(tc1), a,
+			  (u8)BGR_R(tc2), (u8)BGR_G(tc2), (u8)BGR_B(tc2), a,
+			  (u8)BGR_R(tc3), (u8)BGR_G(tc3), (u8)BGR_B(tc3), a,
+			  (u8)BGR_R(tc4), (u8)BGR_G(tc4), (u8)BGR_B(tc4), a);
+	}
+}
+
+/* Lays the text out once and draws it once per pass, every glyph of a pass before the next pass, as that many
+ * separate draws would. A text too long for one layout is drawn pass by pass. */
+static void gx_draw_text(GxRenderer *gx, const char *text, double x, double y, float xscale, float yscale,
+			 float angleDeg, int32_t c1, int32_t c2, int32_t c3, int32_t c4, float lineSeparation,
+			 const GxTextPass *passes, int passCount)
+{
+	Renderer *renderer = &gx->base;
 	DataWin *dw = renderer->dataWin;
 	Font *font;
 	Sprite *spriteFont;
 	TexturePageItem *tpag;
 	GxPage *page;
-	int32_t textLen, lineCount, lineStart, lineIdx;
-	float lineStride, totalHeight, valignOffset, angleRad, band, clipT, clipB;
+	int32_t textLen, lineCount, lineStart, lineIdx, p;
+	float lineStride, totalHeight, valignOffset, angleRad, band, clipT, clipB, sx, sy;
 	Matrix4f transform;
-	bool snap;
+	bool snap, overflow = false;
 	float cursorY;
-	u8 a = unorm(alpha);
+	uint32_t count = 0;
 
 	if (!text || renderer->drawFont < 0 || (uint32_t)renderer->drawFont >= dw->font.count)
 		return;
@@ -2875,17 +2936,19 @@ static void gxDrawTextColor(Renderer *renderer, const char *text, float x, float
 	else if (renderer->drawValign == 2)
 		valignOffset = -totalHeight;
 	angleRad = -angleDeg * ((float)M_PI / 180.0f);
-	Matrix4f_setTransform2D(&transform, x, y, xscale * font->scaleX, yscale * font->scaleY, angleRad);
+	sx = xscale * font->scaleX;
+	sy = yscale * font->scaleY;
+	Matrix4f_setTransform2D(&transform, (float)x, (float)y, sx, sy, angleRad);
 	/* Centred odd-width lines start on a half pixel, where GX_NEAR samples sit exactly on texel
 	 * seams and real hardware garbles thin glyphs. Keep unrotated 1:1 text on the pixel grid. */
-	snap = angleDeg == 0.0f && xscale * font->scaleX == 1.0f && yscale * font->scaleY == 1.0f;
+	snap = angleDeg == 0.0f && sx == 1.0f && sy == 1.0f;
 	/* How far a line's glyphs can reach from its cursor, for skipping lines off the projection whole: AM2R's credits
 	 * draw all 200 rows nine times a frame with 20 on screen. */
 	band = fmaxf(lineStride, (float)font->maxGlyphHeight) + fabsf((float)font->spriteOriginYAdjust);
 	gx_clip_rows(&clipT, &clipB);
 	cursorY = valignOffset - (float)font->ascenderOffset;
 	lineStart = 0;
-	for (lineIdx = 0; lineIdx < lineCount; lineIdx++) {
+	for (lineIdx = 0; lineIdx < lineCount && !overflow; lineIdx++) {
 		int32_t lineEnd = lineStart;
 		int32_t lineLen, pos;
 		float lineWidth, halignOffset, cursorX;
@@ -2925,13 +2988,10 @@ static void gxDrawTextColor(Renderer *renderer, const char *text, float x, float
 			if (hasNext)
 				nextCh = TextUtils_decodeUtf8(text + lineStart, lineLen, &pos);
 			if (glyph && glyph->sourceWidth && glyph->sourceHeight) {
-				TexturePageItem *gtpag = tpag;
-				GxPage *gpage = page;
-				float u0, v0, u1, v1, lx0, ly0, lx1, ly1;
-				float px0, py0, px1, py1, px2, py2, px3, py3;
+				GxGlyph *g = &gx_glyphs[count];
+				TexturePageItem *gtpag = NULL;
+				GxPage *gpage = NULL;
 				float leftFrac, rightFrac;
-				int32_t tc1, tc2, tc3, tc4;
-				bool ready = false;
 
 				if (spriteFont) {
 					int32_t gi = (int32_t)(glyph - font->glyphs);
@@ -2942,54 +3002,49 @@ static void gxDrawTextColor(Renderer *renderer, const char *text, float x, float
 						if (tpagIdx >= 0 && (uint32_t)tpagIdx < dw->tpag.count) {
 							gtpag = &dw->tpag.items[tpagIdx];
 							gpage = gx_page(gx, gtpag->texturePageId);
-							if (gpage) {
-								gx_bind_tex(gx, &gpage->obj);
-								u0 = (float)gtpag->sourceX / (float)gpage->texW;
-								v0 = (float)gtpag->sourceY / (float)gpage->texH;
-								u1 = (float)(gtpag->sourceX + gtpag->sourceWidth) / (float)gpage->texW;
-								v1 = (float)(gtpag->sourceY + gtpag->sourceHeight) / (float)gpage->texH;
-								lx0 = cursorX + (float)glyph->offset;
-								ly0 = cursorY + (float)(int32_t)gtpag->targetY - (float)font->spriteOriginYAdjust;
-								lx1 = lx0 + (float)gtpag->sourceWidth;
-								ly1 = ly0 + (float)gtpag->sourceHeight;
-								ready = true;
-							}
 						}
 					}
-				} else if (gtpag && gpage) {
-					u0 = (float)(gtpag->sourceX + glyph->sourceX) / (float)gpage->texW;
-					v0 = (float)(gtpag->sourceY + glyph->sourceY) / (float)gpage->texH;
-					u1 = (float)(gtpag->sourceX + glyph->sourceX + glyph->sourceWidth) / (float)gpage->texW;
-					v1 = (float)(gtpag->sourceY + glyph->sourceY + glyph->sourceHeight) / (float)gpage->texH;
-					lx0 = cursorX + (float)glyph->offset;
-					ly0 = cursorY;
-					lx1 = lx0 + (float)glyph->sourceWidth;
-					ly1 = ly0 + (float)glyph->sourceHeight;
-					ready = true;
+				} else {
+					gtpag = tpag;
+					gpage = page;
 				}
-				if (ready) {
+				if (gpage && count == GX_TEXT_GLYPHS) {
+					if (passCount > 1) {
+						overflow = true;
+						break;
+					}
+					gx_text_emit(gx, count, x, y, sx, sy, angleRad, snap, passes);
+					count = 0;
+					g = &gx_glyphs[0];
+				}
+				if (gpage && spriteFont) {
+					g->u0 = (float)gtpag->sourceX / (float)gpage->texW;
+					g->v0 = (float)gtpag->sourceY / (float)gpage->texH;
+					g->u1 = (float)(gtpag->sourceX + gtpag->sourceWidth) / (float)gpage->texW;
+					g->v1 = (float)(gtpag->sourceY + gtpag->sourceHeight) / (float)gpage->texH;
+					g->lx0 = cursorX + (float)glyph->offset;
+					g->ly0 = cursorY + (float)(int32_t)gtpag->targetY - (float)font->spriteOriginYAdjust;
+					g->lx1 = g->lx0 + (float)gtpag->sourceWidth;
+					g->ly1 = g->ly0 + (float)gtpag->sourceHeight;
+				} else if (gpage) {
+					g->u0 = (float)(gtpag->sourceX + glyph->sourceX) / (float)gpage->texW;
+					g->v0 = (float)(gtpag->sourceY + glyph->sourceY) / (float)gpage->texH;
+					g->u1 = (float)(gtpag->sourceX + glyph->sourceX + glyph->sourceWidth) / (float)gpage->texW;
+					g->v1 = (float)(gtpag->sourceY + glyph->sourceY + glyph->sourceHeight) / (float)gpage->texH;
+					g->lx0 = cursorX + (float)glyph->offset;
+					g->ly0 = cursorY;
+					g->lx1 = g->lx0 + (float)glyph->sourceWidth;
+					g->ly1 = g->ly0 + (float)glyph->sourceHeight;
+				}
+				if (gpage) {
 					leftFrac = (lineWidth > 0.0f) ? (cursorX / lineWidth) : 0.0f;
 					rightFrac = (lineWidth > 0.0f) ? ((cursorX + (float)glyph->shift) / lineWidth) : 1.0f;
-					tc1 = Color_lerp(c1, c2, leftFrac);
-					tc2 = Color_lerp(c1, c2, rightFrac);
-					tc3 = Color_lerp(c4, c3, rightFrac);
-					tc4 = Color_lerp(c4, c3, leftFrac);
-					Matrix4f_transformPoint(&transform, lx0, ly0, &px0, &py0);
-					Matrix4f_transformPoint(&transform, lx1, ly0, &px1, &py1);
-					Matrix4f_transformPoint(&transform, lx1, ly1, &px2, &py2);
-					Matrix4f_transformPoint(&transform, lx0, ly1, &px3, &py3);
-					if (snap) {
-						px0 = px3 = floorf(px0 + 0.5f);
-						px1 = px2 = floorf(px1 + 0.5f);
-						py0 = py1 = floorf(py0 + 0.5f);
-						py2 = py3 = floorf(py2 + 0.5f);
-					}
-					emit_quad(px0, py0, px1, py1, px2, py2, px3, py3,
-						  u0, v0, u1, v0, u1, v1, u0, v1,
-						  (u8)BGR_R(tc1), (u8)BGR_G(tc1), (u8)BGR_B(tc1), a,
-						  (u8)BGR_R(tc2), (u8)BGR_G(tc2), (u8)BGR_B(tc2), a,
-						  (u8)BGR_R(tc3), (u8)BGR_G(tc3), (u8)BGR_B(tc3), a,
-						  (u8)BGR_R(tc4), (u8)BGR_G(tc4), (u8)BGR_B(tc4), a);
+					g->tc1 = Color_lerp(c1, c2, leftFrac);
+					g->tc2 = Color_lerp(c1, c2, rightFrac);
+					g->tc3 = Color_lerp(c4, c3, rightFrac);
+					g->tc4 = Color_lerp(c4, c3, leftFrac);
+					g->pageId = gtpag->texturePageId;
+					count++;
 				}
 			}
 			if (glyph) {
@@ -3003,6 +3058,35 @@ static void gxDrawTextColor(Renderer *renderer, const char *text, float x, float
 		cursorY += lineStride;
 		lineStart = TextUtils_skipNewline(text, lineEnd, textLen);
 	}
+	if (overflow) {
+		for (p = 0; p < passCount; p++)
+			gx_draw_text(gx, text, x, y, xscale, yscale, angleDeg, c1, c2, c3, c4, lineSeparation, &passes[p], 1);
+		return;
+	}
+	for (p = 0; p < passCount; p++)
+		gx_text_emit(gx, count, x, y, sx, sy, angleRad, snap, &passes[p]);
+}
+
+static void gxDrawTextColor(Renderer *renderer, const char *text, float x, float y, float xscale, float yscale,
+			    float angleDeg, int32_t c1, int32_t c2, int32_t c3, int32_t c4, float alpha,
+			    float lineSeparation)
+{
+	GxTextPass pass = { 0, 0, false, 0, alpha };
+
+	gx_draw_text((GxRenderer *)renderer, text, x, y, xscale, yscale, angleDeg, c1, c2, c3, c4, lineSeparation, &pass, 1);
+}
+
+void GxRenderer_drawOutlinedText(Renderer *renderer, const char *text, double x, double y, int32_t outline,
+				 int32_t top, int32_t bottom, float alpha)
+{
+	static const int8_t offsets[8][2] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 }, { 1, 1 }, { 1, -1 }, { -1, 1 }, { -1, -1 } };
+	GxTextPass passes[9];
+	int i;
+
+	for (i = 0; i < 8; i++)
+		passes[i] = (GxTextPass){ offsets[i][0], offsets[i][1], true, outline, alpha };
+	passes[8] = (GxTextPass){ 0, 0, false, 0, alpha };
+	gx_draw_text((GxRenderer *)renderer, text, x, y, 1.0f, 1.0f, 0.0f, top, top, bottom, bottom, -1.0f, passes, 9);
 }
 
 static void gxDrawText(Renderer *renderer, const char *text, float x, float y, float xscale, float yscale,

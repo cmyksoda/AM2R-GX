@@ -31,5 +31,8 @@ void GxRenderer_setFillProbe(GxFillProbe probe);
 void GxRenderer_setShadersOff(bool off);
 /* The pages these texture items sit on, to load in the background in this order and keep longer; none clears it. */
 void GxRenderer_wish(struct DataWin *dw, const int32_t *tpags, uint32_t count);
+/* Text over a one-pixel outline in all eight directions (AM2R's draw_cool_text), laid out once for all nine draws. */
+void GxRenderer_drawOutlinedText(Renderer *renderer, const char *text, double x, double y, int32_t outline, int32_t top,
+				 int32_t bottom, float alpha);
 
 #endif
