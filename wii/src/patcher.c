@@ -206,7 +206,6 @@ static bool pad_to(FILE *f, u32 align)
 	return at >= 0 && wr(zeros, n, f) == n;
 }
 
-/* One line that keeps rewriting itself (row 20), for progress. */
 static void progress(const char *what, u64 done, u64 total)
 {
 	printf("\x1b[20;0H  %-28s %3u%%  %4u / %4u MB   \n", what, (unsigned)(total ? done * 100 / total : 0),

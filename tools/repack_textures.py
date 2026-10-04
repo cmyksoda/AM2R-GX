@@ -97,7 +97,6 @@ ORDERS = {
 
 
 def pack_into(cells, w, h, order):
-    """First-fit over as many w*h bins as it takes. cells: [(key, cw, ch)]."""
     bins = []
     for key, cw, ch in sorted(cells, key=ORDERS[order]):
         for b in bins:

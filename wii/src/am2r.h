@@ -24,7 +24,6 @@ struct VMContext;
 void Wii_hookAm2rScripts(struct VMContext *ctx);
 
 struct DataWin;
-/* Put the Wii port's credits ahead of AM2R's in the ending roll. */
 void Wii_addCredits(struct DataWin *dw);
 
 /* Tell the renderer which pages the next seconds will draw (title, file select, intro, play, credits),

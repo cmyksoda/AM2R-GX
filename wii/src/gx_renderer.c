@@ -1102,7 +1102,6 @@ static void gx_build_ahead(DataWin *dw)
 	free(pages);
 }
 
-/* Finishes the page out on the loader once it is done, or with wait, blocks until it is. */
 static bool gx_prefetch_collect(GxRenderer *gx, bool wait)
 {
 	GxPage *page;
@@ -1237,7 +1236,6 @@ static void gx_prefetch(GxRenderer *gx, int32_t pageId)
 	page->loading = true;
 }
 
-/* The first wished page not yet resident, while the loader has nothing else to do. */
 static void gx_prefetch_wish(GxRenderer *gx)
 {
 	uint32_t i;
@@ -2441,7 +2439,6 @@ static void gx_draw_overscan_overlay(GxRenderer *gx)
 	const float LH = (float)WiiVideo_efbHeight();
 	float cx = LW * 0.5f, cy = LH * 0.5f;
 	float tlen = 220.0f, tthk = 14.0f;
-	/* Fill shows how big the picture stays: full slider = no inset, empty = max inset. */
 	float hf = 1.0f - (float)Overscan_h() / (float)OVERSCAN_MAX_H;
 	float vf = 1.0f - (float)Overscan_v() / (float)OVERSCAN_MAX_V;
 	float cl = 44.0f, ct = 7.0f;
