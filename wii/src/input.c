@@ -77,8 +77,9 @@ static float gc_axis(s8 pos)
 	return v;
 }
 
-/* A GameCube stick's gate stops it well short of 128 (one measured 88 right, 104 left), so its rim read as 68-81% pushed,
- * under AM2R's Analog Walking run line (~62-66%): Samus walked unless the stick was pressed hard into the rim. */
+/* A GameCube stick's gate stops it well short of 128 (one measured 88 right, 104 left), so its rim read as
+ * 68-81% pushed, under AM2R's Analog Walking run line (~62-66%): Samus walked unless the stick was pressed hard
+ * into the rim. */
 #define GC_STICK_REACH 90.0f
 
 static float gc_reach(float v)
@@ -203,7 +204,8 @@ static void poll_nunchuk(GamepadSlot *slot, u32 held, const expansion_t *exp, bo
 		return; /* a Remote alone is not a controller for this game */
 	nunchuk_xy(&exp->nunchuk.js, &lx, &ly);
 	/* One-button aim: the d-pad holds the aim button and says which diagonal. */
-	apply_move(slot, lx, ly, !twoAim && (held & WPAD_BUTTON_UP), !twoAim && (held & WPAD_BUTTON_DOWN), false, false);
+	apply_move(slot, lx, ly, !twoAim && (held & WPAD_BUTTON_UP), !twoAim && (held & WPAD_BUTTON_DOWN),
+		   false, false);
 	apply_map(slot, nunchukMap, held);
 	if (held & WPAD_BUTTON_UP)
 		set_btn(slot, SLOT_LB, true);
@@ -258,7 +260,8 @@ static void poll_gcpad(GamepadSlot *slot, u16 held, const s8 *sticks, bool twoAi
 		held |= PAD_TRIGGER_L;
 	if (PAD_TriggerR(0) > GC_TRIGGER_PRESS)
 		held |= PAD_TRIGGER_R;
-	apply_move(slot, lx, ly, (held & PAD_BUTTON_UP) || (!twoAim && cup), (held & PAD_BUTTON_DOWN) || (!twoAim && cdown),
+	apply_move(slot, lx, ly, (held & PAD_BUTTON_UP) || (!twoAim && cup),
+		   (held & PAD_BUTTON_DOWN) || (!twoAim && cdown),
 		   held & PAD_BUTTON_LEFT, held & PAD_BUTTON_RIGHT);
 	slot->axisValue[0] = gc_reach(lx);
 	slot->axisValue[1] = gc_reach(ly);
@@ -269,9 +272,9 @@ static void poll_gcpad(GamepadSlot *slot, u16 held, const s8 *sticks, bool twoAi
 		set_btn(slot, twoAim ? SLOT_RT : SLOT_LB, true);
 }
 
-/* Opens with Plus + Minus (Classic), Start + Z (GameCube) or 1 + 2 (Remote + Nunchuk); a face button closes it. While it is up
- * Left/Right and Up/Down set the width and height, and the game gets neutral input. The shifts move the picture
- * instead: L (Nunchuk C) with Left/Right, R (Nunchuk Z) with Up/Down. Sticks count as the d-pad. */
+/* Opens with Plus + Minus (Classic), Start + Z (GameCube) or 1 + 2 (Remote + Nunchuk); a face button closes it.
+ * While it is up Left/Right and Up/Down set the width and height, and the game gets neutral input. The shifts move
+ * the picture instead: L (Nunchuk C) with Left/Right, R (Nunchuk Z) with Up/Down. Sticks count as the d-pad. */
 static void overscan_input(u32 wheld, u16 gcheld, const s8 *sticks, const expansion_t *exp)
 {
 	static bool prev_combo;
@@ -299,7 +302,8 @@ static void overscan_input(u32 wheld, u16 gcheld, const s8 *sticks, const expans
 		PAD_TriggerL(0) > 64 || (nunchuk & WPAD_NUNCHUK_BUTTON_C);
 	rheld = (classic & (WPAD_CLASSIC_BUTTON_FULL_R | WPAD_CLASSIC_BUTTON_ZR)) || (gcheld & PAD_TRIGGER_R) ||
 		PAD_TriggerR(0) > 64 || (nunchuk & WPAD_NUNCHUK_BUTTON_Z);
-	face = (classic & (WPAD_CLASSIC_BUTTON_A | WPAD_CLASSIC_BUTTON_B | WPAD_CLASSIC_BUTTON_X | WPAD_CLASSIC_BUTTON_Y)) ||
+	face = (classic & (WPAD_CLASSIC_BUTTON_A | WPAD_CLASSIC_BUTTON_B |
+			   WPAD_CLASSIC_BUTTON_X | WPAD_CLASSIC_BUTTON_Y)) ||
 	       (wheld & (WPAD_BUTTON_A | WPAD_BUTTON_B | WPAD_BUTTON_1 | WPAD_BUTTON_2)) ||
 	       (gcheld & (PAD_BUTTON_A | PAD_BUTTON_B | PAD_BUTTON_X | PAD_BUTTON_Y));
 	combo = (classic & CLASSIC_DISPLAY) == CLASSIC_DISPLAY || (gcheld & GC_DISPLAY) == GC_DISPLAY ||
@@ -447,8 +451,9 @@ static void wii_pad_defaults(Runner *runner)
 		Instance_setSelfVar(ctl, vm->varNameMap[slot].value, RValue_makeInt32(2));
 	for (k = 0; k < sizeof padBindings / sizeof padBindings[0]; k++)
 		stock = stock && global_num(vm, padBindings[k].var) == padBindings[k].stock;
-	logInfo("controller defaults: names %s, bindings %s\n", v.type != RVALUE_UNDEFINED && RValue_toReal(v) == 0 ? "-> Nintendo" : "kept",
-	        stock ? "stock -> Wii layout, one-button aim, Hold missiles" : "remapped, kept");
+	logInfo("controller defaults: names %s, bindings %s\n",
+		v.type != RVALUE_UNDEFINED && RValue_toReal(v) == 0 ? "-> Nintendo" : "kept",
+		stock ? "stock -> Wii layout, one-button aim, Hold missiles" : "remapped, kept");
 	if (!stock)
 		return;
 	WiiInput_applyLayout(vm);
@@ -525,7 +530,8 @@ static void drive_rumble(void)
 		active = level > 0.0f;
 		acc = 1.0f; /* a new rumble starts with a pulse */
 		if (active)
-			logInfo("rumble on (%.2f, %s)\n", level, pad_in_use == WII_PAD_GAMECUBE ? "GameCube" : "Wii U Pro");
+			logInfo("rumble on (%.2f, %s)\n", level,
+				pad_in_use == WII_PAD_GAMECUBE ? "GameCube" : "Wii U Pro");
 		else
 			logInfo("rumble off (motor on %d of %d frames)\n", frames_on, frames);
 		frames = frames_on = 0;

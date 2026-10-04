@@ -147,7 +147,8 @@ static void add_suit(int32_t **tpags, Runner *runner, int32_t suit, bool fusion)
 			continue;
 		pick = suit == 1 ? (int32_t)i : suit == 2 ? gravity : base;
 		if (fusion) {
-			snprintf(name, sizeof name, "s%s_fusion%s", n + 2, suit == 1 ? "_varia" : suit == 2 ? "_gravity" : "");
+			snprintf(name, sizeof name, "s%s_fusion%s", n + 2,
+				 suit == 1 ? "_varia" : suit == 2 ? "_gravity" : "");
 			f = sprite_named(runner, name);
 			if (f >= 0)
 				pick = f;
@@ -176,7 +177,8 @@ static int32_t metroids_here(Runner *runner)
 		for (i = 0; i < dw->objt.count; i++)
 			for (k = 0; k < METROID_KINDS; k++)
 				if (dw->objt.objects[i].name && dw->objt.objects[i].name[0] == 'o' &&
-				    strncmp(dw->objt.objects[i].name + 1, metroidKinds[k], strlen(metroidKinds[k])) == 0)
+				    strncmp(dw->objt.objects[i].name + 1, metroidKinds[k],
+					    strlen(metroidKinds[k])) == 0)
 					arrput(objs[k], (int32_t)i);
 	}
 	if (!runner->instancesByExactObject)
@@ -194,7 +196,8 @@ static int32_t metroids_here(Runner *runner)
 void Wii_wishPages(Runner *runner)
 {
 	enum { NONE = -1, TITLE_START = 100, FILE_SELECT = 101, CREDITS = 102, INTRO = 200, METROID = 1000 };
-	static int32_t ingame = -2, suitVar, fusionVar, controllerRoom, titleRoom, introRoom, subscreenRoom, creditsRoom;
+	static int32_t ingame = -2, suitVar, fusionVar,
+		       controllerRoom, titleRoom, introRoom, subscreenRoom, creditsRoom;
 	static int32_t last = NONE;
 	DataWin *dw;
 	Instance *g;
@@ -227,7 +230,8 @@ void Wii_wishPages(Runner *runner)
 		      (fusionVar >= 0 && RValue_toReal(Instance_getSelfVar(g, fusionVar)) == 1) +
 		      (runner->currentRoomIndex == introRoom ? INTRO : 0) +
 		      /* the pause screen's room has none of the room's objects, and play resumes in that room */
-		      (runner->currentRoomIndex == subscreenRoom && last >= 0 ? last / METROID : metroids_here(runner)) * METROID;
+		      (runner->currentRoomIndex == subscreenRoom && last >= 0 ? last / METROID :
+		       metroids_here(runner)) * METROID;
 	} else {
 		return;
 	}
@@ -273,13 +277,15 @@ void Wii_wishPages(Runner *runner)
 		for (k = 0; k < METROID_KINDS; k++)
 			for (i = 0; (key / METROID) & (1 << k) && i < dw->sprt.count; i++)
 				if (dw->sprt.sprites[i].name && dw->sprt.sprites[i].name[0] == 's' &&
-				    strncmp(dw->sprt.sprites[i].name + 1, metroidKinds[k], strlen(metroidKinds[k])) == 0)
+				    strncmp(dw->sprt.sprites[i].name + 1, metroidKinds[k],
+					    strlen(metroidKinds[k])) == 0)
 					add_sprite(&tpags, dw, (int32_t)i, UINT32_MAX);
 	}
 	GxRenderer_wish(dw, tpags, (uint32_t)arrlen(tpags));
-	logInfo("wish: %s, metroids %x, %d texture items\n", key == TITLE_START ? "title start" : key == FILE_SELECT ?
-		"file select" : key == CREDITS ? "credits" : key % METROID >= INTRO ? "intro" : key & 1 ? "play, fusion" :
-		"play", (int)(key / METROID), (int)arrlen(tpags));
+	logInfo("wish: %s, metroids %x, %d texture items\n",
+		key == TITLE_START ? "title start" : key == FILE_SELECT ? "file select" : key == CREDITS ? "credits" :
+		key % METROID >= INTRO ? "intro" : key & 1 ? "play, fusion" : "play",
+		(int)(key / METROID), (int)arrlen(tpags));
 	arrfree(tpags);
 }
 
@@ -428,7 +434,8 @@ void Wii_hookAm2rScripts(VMContext *ctx)
 	mystrVar = Wii_varId(ctx->runner, "mystr", INSTANCE_SELF);
 	stringFn = VM_findBuiltin(ctx, "string");
 	charAtFn = VM_findBuiltin(ctx, "string_char_at");
-	mapSurf = mapSurfCode >= 0 && mapBlockCode >= 0 && mapVar >= 0 && dmapVar >= 0 && mystrVar >= 0 && stringFn && charAtFn;
+	mapSurf = mapSurfCode >= 0 && mapBlockCode >= 0 && mapVar >= 0 && dmapVar >= 0 && mystrVar >= 0 &&
+		  stringFn && charAtFn;
 	for (k = 0; k < 7; k++) {
 		partVars[k] = Wii_varId(ctx->runner, partNames[k], INSTANCE_SELF);
 		mapSurf = mapSurf && partVars[k] >= 0;

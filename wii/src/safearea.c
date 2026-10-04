@@ -26,7 +26,8 @@ static Instance *first_of(Runner *runner, int32_t obj)
 {
 	Instance **list;
 
-	if (obj < 0 || !runner->instancesByExactObject || !(list = runner->instancesByExactObject[obj]) || !arrlen(list))
+	if (obj < 0 || !runner->instancesByExactObject || !(list = runner->instancesByExactObject[obj]) ||
+	    !arrlen(list))
 		return NULL;
 	return list[0];
 }
@@ -169,7 +170,8 @@ static RValue wii_draw_txt_2buttons(VMContext *ctx, RValue *args, int32_t argCou
 static BuiltinFunc engineDrawBackground, engineDrawText, engineStringWidth, engineStringHeight, engineDrawRectangle;
 static BuiltinFunc engineDrawBackgroundExt, engineDrawTextColour, engineDrawRectangleColour;
 static int32_t introText = -2, introFull = -1;
-static int32_t tipArrow = -2, subscreenFg = -2, optionsFg = -2, scoreScreen = -2, titleBg = -2, bgVersion = -1, bgUrl = -1;
+static int32_t tipArrow = -2, subscreenFg = -2, optionsFg = -2, scoreScreen = -2, titleBg = -2,
+	       bgVersion = -1, bgUrl = -1;
 static struct {
 	bool held;
 	RValue args[3];
@@ -217,7 +219,8 @@ static RValue wii_draw_text(VMContext *ctx, RValue *args, int32_t argCount)
 		RValue full = Instance_getSelfVar(ctx->currentInstance, introFull);
 		double over = RValue_toReal(args[1]) + RValue_toReal(engineStringHeight(ctx, &full, 1)) - SAFE_BOTTOM;
 
-		/* A long scene (Italian's six lines) rises as a whole, by the full scene's height, not the typed part's. */
+		/* A long scene (Italian's six lines) rises as a whole, by the full scene's height,
+		 * not the typed part's. */
 		if (over > 0) {
 			memcpy(moved, args, sizeof moved);
 			moved[1] = RValue_makeReal(RValue_toReal(args[1]) - over);
@@ -362,7 +365,8 @@ void WiiSafe_hookScripts(VMContext *ctx)
 			}
 		if (tipArrow >= 0 && strcmp(name, "draw_background") == 0)
 			ctx->funcCallCache[fi].builtin = (void *)wii_draw_background;
-		if ((tipArrow >= 0 || optionsFg >= 0 || scoreScreen >= 0 || introText >= 0) && strcmp(name, "draw_text") == 0)
+		if ((tipArrow >= 0 || optionsFg >= 0 || scoreScreen >= 0 || introText >= 0) &&
+		    strcmp(name, "draw_text") == 0)
 			ctx->funcCallCache[fi].builtin = (void *)wii_draw_text;
 		if (optionsFg >= 0 && strcmp(name, "draw_rectangle") == 0)
 			ctx->funcCallCache[fi].builtin = (void *)wii_draw_rectangle;

@@ -447,8 +447,10 @@ static RValue wii_font_replace(VMContext *ctx, RValue *args, int32_t argCount)
 	}
 	item = tpag_append(dw);
 	dw->tpag.items[item].present = true;
-	dw->tpag.items[item].sourceWidth = dw->tpag.items[item].targetWidth = dw->tpag.items[item].boundingWidth = (uint16_t)atlasW;
-	dw->tpag.items[item].sourceHeight = dw->tpag.items[item].targetHeight = dw->tpag.items[item].boundingHeight = (uint16_t)atlasH;
+	dw->tpag.items[item].sourceWidth = dw->tpag.items[item].targetWidth =
+		dw->tpag.items[item].boundingWidth = (uint16_t)atlasW;
+	dw->tpag.items[item].sourceHeight = dw->tpag.items[item].targetHeight =
+		dw->tpag.items[item].boundingHeight = (uint16_t)atlasH;
 	dw->tpag.items[item].texturePageId = (int16_t)page;
 	glyphs = (FontGlyph *)safeMalloc((size_t)n * sizeof(FontGlyph));
 	memset(glyphs, 0, (size_t)n * sizeof(FontGlyph));
@@ -500,7 +502,8 @@ static RValue wii_surface_getpixel(MAYBE_UNUSED VMContext *ctx, RValue *args, in
 	if (argCount < 3 || !GxRenderer_surfacePixel(arg_int(args, argCount, 0), arg_int(args, argCount, 1),
 						      arg_int(args, argCount, 2), px))
 		return RValue_makeReal(0.0);
-	return RValue_makeReal((GMLReal)(((uint32_t)px[3] << 24) | ((uint32_t)px[2] << 16) | ((uint32_t)px[1] << 8) | px[0]));
+	return RValue_makeReal((GMLReal)(((uint32_t)px[3] << 24) | ((uint32_t)px[2] << 16) |
+					 ((uint32_t)px[1] << 8) | px[0]));
 }
 
 BuiltinFunc WiiAssets_builtin(const char *name)

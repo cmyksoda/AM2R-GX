@@ -121,7 +121,8 @@ static RValue wii_gamepad_set_vibration(MAYBE_UNUSED VMContext *ctx, RValue *arg
 	return RValue_makeReal(0.0);
 }
 
-/* AM2R's dialogs say "Save Data Corrupted", just before it deletes that save: a Wii has no dialog, so the log keeps it. */
+/* AM2R's dialogs say "Save Data Corrupted", just before it deletes that save: a Wii has no dialog,
+ * so the log keeps it. */
 static RValue stub_show_message(VMContext *ctx, RValue *args, int32_t argCount)
 {
 	char *text = argCount > 0 ? RValue_toString(args[0], ctx->runner->dataWin) : NULL;
@@ -202,7 +203,8 @@ static RValue wii_get_text(VMContext *ctx, RValue *args, int32_t argCount)
 		if (strcmp(args[1].string, "VSync") == 0)
 			return RValue_makeOwnedString(safeStrdup("240p"));
 		if (strcmp(args[1].string, "VSync_Tip") == 0)
-			return RValue_makeOwnedString(safeStrdup("Each of the game's 240 lines drawn once, for CRT TVs"));
+			return RValue_makeOwnedString(
+				safeStrdup("Each of the game's 240 lines drawn once, for CRT TVs"));
 	}
 	return cached_text(ctx, args, argCount);
 }
@@ -296,8 +298,8 @@ static void register_stubs(VMContext *ctx)
 
 			if (name == NULL)
 				continue;
-			/* A GML script shadowing a builtin must win (AM2R's string_split returns a substring, not an array);
-			 * Butterscotch's cache prefers the builtin. */
+			/* A GML script shadowing a builtin must win (AM2R's string_split returns a substring,
+			 * not an array); Butterscotch's cache prefers the builtin. */
 			sidx = shgeti(ctx->codeIndexByName, (char *)name);
 			if (sidx >= 0) {
 				ctx->funcCallCache[fi].builtin = NULL;

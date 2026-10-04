@@ -166,7 +166,8 @@ static void write_failed(void)
 		return;
 	writeFailed = true;
 	if (errno == ENOSPC || errno == 0)
-		fail("%s is full (the first boot needs about 190 MB free); free some space and start again", WiiPaths_media());
+		fail("%s is full (the first boot needs about 190 MB free); free some space and start again",
+		     WiiPaths_media());
 	else
 		fail("could not write to %s (error %d)", WiiPaths_media(), errno);
 }
@@ -346,7 +347,8 @@ static bool zip_inflate(FILE *zf, u32 dataOff, u32 csize, u32 usize, int method,
 	if (!close_written(out))
 		ok = false;
 	if (ok && (got != usize || have != crc)) {
-		fail("a file in %s is damaged (%s: %u of %u bytes, or a bad checksum); download the zip again", zipName, dst, (unsigned)got, (unsigned)usize);
+		fail("a file in %s is damaged (%s: %u of %u bytes, or a bad checksum); download the zip again",
+		     zipName, dst, (unsigned)got, (unsigned)usize);
 		ok = false;
 	}
 	return ok;
@@ -431,10 +433,12 @@ static bool find_zip(void)
 				snprintf(first, sizeof first, "%s", path);
 			if (!(zf = fopen(path, "rb")))
 				continue;
-			if (zip_directory(zf, &cdOff, &cdN) && zip_find_data(zf, cdOff, cdN, zipPrefix, sizeof zipPrefix)) {
+			if (zip_directory(zf, &cdOff, &cdN) &&
+			    zip_find_data(zf, cdOff, cdN, zipPrefix, sizeof zipPrefix)) {
 				fclose(zf);
 				snprintf(zipPath, sizeof zipPath, "%s", path);
-				snprintf(zipName, sizeof zipName, "%s", e->d_name); /* e belongs to dir: before closedir */
+				/* e belongs to dir: before closedir */
+				snprintf(zipName, sizeof zipName, "%s", e->d_name);
 				closedir(dir);
 				return true;
 			}
@@ -617,7 +621,8 @@ static bool apply_delta(void)
 			written += stream.avail_out;
 			xd3_consume_output(&stream);
 			if ((written & ((8u << 20) - 1)) < (u64)stream.avail_out + 1)
-				progress("applying 1.5.5 delta", (u64)(inSize - (ftell(in) - (long)stream.avail_in)) , (u64)inSize);
+				progress("applying 1.5.5 delta", (u64)(inSize - (ftell(in) - (long)stream.avail_in)),
+					 (u64)inSize);
 			continue;
 		}
 		if (ret == XD3_GOTHEADER || ret == XD3_WINSTART || ret == XD3_WINFINISH)
@@ -788,7 +793,9 @@ static bool png_write_chunk(FILE *f, const char *kind, const u8 *body, u32 len)
 static bool png_write(FILE *f, const u8 *canvas, int w, int h)
 {
 	static const u8 sig[8] = { 0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n' };
-	u8 ihdr[13] = { (u8)(w >> 24), (u8)(w >> 16), (u8)(w >> 8), (u8)w, (u8)(h >> 24), (u8)(h >> 16), (u8)(h >> 8), (u8)h, 8, 6, 0, 0, 0 };
+	u8 ihdr[13] = { (u8)(w >> 24), (u8)(w >> 16), (u8)(w >> 8), (u8)w,
+			(u8)(h >> 24), (u8)(h >> 16), (u8)(h >> 8), (u8)h,
+			8, 6, 0, 0, 0 };
 	u8 *row = ioBuf, *out = ioBuf + (w * 4 + 1);
 	u32 outCap = IO_CHUNK - (u32)(w * 4 + 1);
 	z_stream z;
@@ -888,8 +895,8 @@ static bool repack(void)
 		rects[i].h = rd16le(e + 6);
 		rects[i].page = (s16)rd16le(e + 20);
 		pg = &plan.pages[plan.items[i].page];
-		if (plan.items[i].x < GUTTER || plan.items[i].y < GUTTER || plan.items[i].x + rects[i].w + GUTTER > pg->w ||
-		    plan.items[i].y + rects[i].h + GUTTER > pg->h) {
+		if (plan.items[i].x < GUTTER || plan.items[i].y < GUTTER ||
+		    plan.items[i].x + rects[i].w + GUTTER > pg->w || plan.items[i].y + rects[i].h + GUTTER > pg->h) {
 			fail("patch/plan.bin is damaged (item %u); copy the whole release again", (unsigned)i);
 			goto done;
 		}
@@ -982,7 +989,8 @@ static bool repack(void)
 			bool needed = false;
 
 			for (i = 0; i < n && !needed; i++)
-				needed = rects[i].page == (s16)o && plan.items[i].page >= first && plan.items[i].page < first + pass.n;
+				needed = rects[i].page == (s16)o &&
+					 plan.items[i].page >= first && plan.items[i].page < first + pass.n;
 			if (!needed)
 				continue;
 			fseek(in, (long)oldOff[o], SEEK_SET);
@@ -1118,8 +1126,8 @@ bool WiiPatcher_run(void)
 		return false;
 	}
 	t0 = gettime();
-	logInfo("PATCH heap before: arena=%d mem1_free=%u mem2_free=%u\n", mallinfo().arena, (unsigned)SYS_GetArena1Size(),
-	        (unsigned)SYS_GetArena2Size());
+	logInfo("PATCH heap before: arena=%d mem1_free=%u mem2_free=%u\n", mallinfo().arena,
+		(unsigned)SYS_GetArena1Size(), (unsigned)SYS_GetArena2Size());
 	printf("\n\n  AM2R GX -- first boot: building AM2R 1.5.5 from %s\n", zipName);
 	printf("  This happens once and takes a few minutes. Do not turn the Wii off.\n\n");
 	ok = file_exists(filesDir);
@@ -1143,7 +1151,8 @@ bool WiiPatcher_run(void)
 		if (!ok)
 			fail("could not copy patch/files into %s", WII_GAME_DIR);
 	}
-	/* data.win appears last: a boot cut short anywhere before this starts over instead of playing a half-built game */
+	/* data.win appears last: a boot cut short anywhere before this starts over instead of playing
+	 * a half-built game */
 	if (ok && rename(partPath, WII_DATA_WIN) != 0) {
 		fail("could not finish %s (error %d)", WII_DATA_WIN, errno);
 		ok = false;
@@ -1167,6 +1176,7 @@ const char *WiiPatcher_error(void)
 
 	if (!ranFailed)
 		return NULL;
-	snprintf(msg, sizeof msg, "The first boot could not build AM2R 1.5.5: %s.", errLine[0] ? errLine : "see the log");
+	snprintf(msg, sizeof msg, "The first boot could not build AM2R 1.5.5: %s.",
+		 errLine[0] ? errLine : "see the log");
 	return msg;
 }

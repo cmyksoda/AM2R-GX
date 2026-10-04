@@ -85,7 +85,8 @@ typedef struct {
 	GxTile *tiles;
 	u64 lastUsed;
 	bool retired; /* reclaimed by us: the id is never handed out again, a stale holder draws nothing */
-	int32_t sharer; /* the surface these texels are also lent to or borrowed from; 0 = none (slot 0 is never used) */
+	int32_t sharer; /* the surface these texels are also lent to or borrowed from;
+			   0 = none (slot 0 is never used) */
 	u16 *spare;     /* a borrower's own buffer, idle until it or its lender is written */
 } GxSurf;
 
@@ -634,7 +635,8 @@ static void emit_quad(float x0, float y0, float x1, float y1, float x2, float y2
 		maxy = y3;
 	if (maxx <= 0.0f || maxy <= 0.0f || minx >= (float)s->w || miny >= (float)s->h)
 		return;
-	/* The texture spans the whole quad: a quad over the surface's edge is cut there, not squeezed into what is left. */
+	/* The texture spans the whole quad: a quad over the surface's edge is cut there,
+	 * not squeezed into what is left. */
 	qx = minx;
 	qy = miny;
 	dx = maxx - minx;
@@ -812,8 +814,9 @@ static u8 unorm(float a)
 
 #define PRELOAD_MAX_PAGES 2048
 
-/* Pages the game will soon draw (AM2R: Samus's suit, the pause screen), most urgent first: they load on the loader thread
- * whenever it is idle, and count as drawn ten seconds later than they were, so a room's own pages outlast idle ones. */
+/* Pages the game will soon draw (AM2R: Samus's suit, the pause screen), most urgent first: they load on the
+ * loader thread whenever it is idle, and count as drawn ten seconds later than they were, so a room's own pages
+ * outlast idle ones. */
 #define GX_WISH_MAX 32
 #define GX_WISH_AGE 600
 static int16_t gx_wish[GX_WISH_MAX];
@@ -934,8 +937,8 @@ static void gx_page_ready(GxRenderer *gx, uint32_t pageId, u16 *texels, int w, i
 	page->loaded = true;
 	gx->pagesResident++;
 	GX_InvalidateTexAll();
-	logInfo("GX: TXTR %u %dx%d (padded %dx%d, resident %u) %s in %.1f ms\n", pageId, w, h, tw, th, gx->pagesResident,
-		how, ticks_to_microsecs(gettime() - t0) / 1000.0);
+	logInfo("GX: TXTR %u %dx%d (padded %dx%d, resident %u) %s in %.1f ms\n", pageId, w, h, tw, th,
+		gx->pagesResident, how, ticks_to_microsecs(gettime() - t0) / 1000.0);
 }
 
 static bool gx_prefetch_collect(GxRenderer *gx, bool wait);
@@ -1258,7 +1261,8 @@ void GxRenderer_wish(DataWin *dw, const int32_t *tpags, uint32_t count)
 
 	gx_wishCount = 0;
 	for (i = 0; i < count && gx_wishCount < GX_WISH_MAX; i++) {
-		page = tpags[i] >= 0 && (uint32_t)tpags[i] < dw->tpag.count ? dw->tpag.items[tpags[i]].texturePageId : -1;
+		page = tpags[i] >= 0 && (uint32_t)tpags[i] < dw->tpag.count ?
+		       dw->tpag.items[tpags[i]].texturePageId : -1;
 		if (page >= 0 && !gx_wished((uint32_t)page))
 			gx_wish[gx_wishCount++] = page;
 	}
@@ -1556,7 +1560,8 @@ static bool gx_bind_surface(GxRenderer *gx, int32_t id, bool restore)
 	if (!s->exists)
 		return false;
 	s->lastUsed = gx->frameCounter;
-	/* Setting the target already in the EFB keeps drawing into it; a restore would repaint its last copy over the frame. */
+	/* Setting the target already in the EFB keeps drawing into it; a restore would repaint its last copy
+	 * over the frame. */
 	live = gx->currentTarget == id && gx->targetBound;
 	if (!live)
 		gx_flush_target(gx);
@@ -1752,7 +1757,8 @@ int32_t GxRenderer_addImage(const uint8_t *rgba, int w, int h)
 	int tw, th;
 	u16 *texels;
 
-	if (!gx || w < 1 || h < 1 || w > GX_MAX_TEX_DIM || h > GX_MAX_TEX_DIM || gx->pageCount >= INT16_MAX) /* TexturePageItem.texturePageId */
+	if (!gx || w < 1 || h < 1 || w > GX_MAX_TEX_DIM || h > GX_MAX_TEX_DIM ||
+	    gx->pageCount >= INT16_MAX) /* TexturePageItem.texturePageId */
 		return -1;
 	tw = pad4(w);
 	th = pad4(h);
@@ -2082,7 +2088,8 @@ static void gx_setup_compose(GxRenderer *gx, int32_t windowW, int32_t windowH)
 		if (gx->composeId < 0) {
 			if (!said) {
 				said = true;
-				logWarn("GX: wide compose %dx%d: no surface memory (window %dx%d)\n", cw, ch, windowW, windowH);
+				logWarn("GX: wide compose %dx%d: no surface memory (window %dx%d)\n", cw, ch,
+					windowW, windowH);
 			}
 			return;
 		}
@@ -2468,7 +2475,8 @@ static void gx_draw_overscan_overlay(GxRenderer *gx)
 	gx_ov_rect(LW - cl, LH - ct, cl, ct, 255, 225, 40, 255);
 	gx_ov_rect(LW - ct, LH - cl, ct, cl, 255, 225, 40, 255);
 
-	/* Centre lines: R + Up/Down and L + Left/Right shift the whole picture; the lines show where its middle sits. */
+	/* Centre lines: R + Up/Down and L + Left/Right shift the whole picture;
+	 * the lines show where its middle sits. */
 	gx_ov_rect(0, cy + (float)(Overscan_y() * (int)LH / WII_FB_H) - 1, LW, 2, 255, 255, 255, 200);
 	gx_ov_rect(cx + (float)Overscan_x() - 1, 0, 2, LH, 255, 255, 255, 200);
 	gx_ov_rect(cx - tlen * 0.5f, cy - 40 * ys, tlen, tthk * ys, 30, 30, 40, 230);
@@ -2541,8 +2549,9 @@ static void gxEndFrameEnd(Renderer *renderer)
 		logInfo("GXSTAT draw %.2f ms/frame: emit %.2f ms in %u quads (%u tiles, %u sprites, %u skipped, %u culled), "
 			"%u copies %.2f ms, %u binds, %u targets; between draws %.2f ms; fill %.2f Mpx\n",
 			gx_stat.drawUs / 200000.0, gx_stat.emitUs / 200000.0, gx_stat.quads / 200, gx_stat.tiles / 200,
-			gx_stat.sprites / 200, gx_stat.skipped / 200, gx_stat.culled / 200, gx_stat.copies / 200, gx_stat.copyUs / 200000.0,
-			gx_stat.binds / 200, gx_stat.targets / 200, gx_stat.otherUs / 200000.0, gx_stat.area / 200e6);
+			gx_stat.sprites / 200, gx_stat.skipped / 200, gx_stat.culled / 200,
+			gx_stat.copies / 200, gx_stat.copyUs / 200000.0, gx_stat.binds / 200, gx_stat.targets / 200,
+			gx_stat.otherUs / 200000.0, gx_stat.area / 200e6);
 		gx_stat.area = 0;
 		if (gx_fill_probe)
 			gx_fill_probe(renderer->dataWin, -1, 0.0);
@@ -2665,8 +2674,8 @@ static void gxDrawSprite(Renderer *renderer, int32_t tpagIndex, float x, float y
 }
 
 static void gx_part_corners(float x, float y, int32_t srcW, int32_t srcH, float xscale, float yscale, float angleDeg,
-			    float pivotX, float pivotY, float *x0, float *y0, float *x1, float *y1, float *x2, float *y2,
-			    float *x3, float *y3)
+			    float pivotX, float pivotY, float *x0, float *y0, float *x1, float *y1,
+			    float *x2, float *y2, float *x3, float *y3)
 {
 	float qx0 = x, qy0 = y;
 	float qx1 = x + (float)srcW * xscale, qy1 = y;
@@ -2717,7 +2726,8 @@ static void gxDrawSpritePart(Renderer *renderer, int32_t tpagIndex, int32_t srcO
 	float x0, y0, x1, y1, x2, y2, x3, y3;
 	u8 r = (u8)BGR_R(color), g = (u8)BGR_G(color), b = (u8)BGR_B(color), a = unorm(alpha);
 
-	gx_part_corners(x, y, srcW, srcH, xscale, yscale, angleDeg, pivotX, pivotY, &x0, &y0, &x1, &y1, &x2, &y2, &x3, &y3);
+	gx_part_corners(x, y, srcW, srcH, xscale, yscale, angleDeg, pivotX, pivotY,
+			&x0, &y0, &x1, &y1, &x2, &y2, &x3, &y3);
 	gx_draw_tpag(gx, tpagIndex, x0, y0, x1, y1, x2, y2, x3, y3,
 		     (float)srcOffX, (float)srcOffY, (float)srcW, (float)srcH,
 		     r, g, b, a, r, g, b, a, r, g, b, a, r, g, b, a);
@@ -2738,7 +2748,8 @@ static void gxDrawTile(Renderer *renderer, RoomTile *tile, float offsetX, float 
 		return;
 	}
 	gx_clip_rows(&clipT, &clipB);
-	if (fmaxf(x0, x1) <= gx_clipL || fminf(x0, x1) >= gx_clipR || fmaxf(y0, y1) <= clipT || fminf(y0, y1) >= clipB) {
+	if (fmaxf(x0, x1) <= gx_clipL || fminf(x0, x1) >= gx_clipR ||
+	    fmaxf(y0, y1) <= clipT || fminf(y0, y1) >= clipB) {
 		gx_stat.sprites++;
 		gx_stat.culled++;
 		return;
@@ -2750,14 +2761,16 @@ static void gxDrawTile(Renderer *renderer, RoomTile *tile, float offsetX, float 
 
 static void gxDrawSpritePartColor(Renderer *renderer, int32_t tpagIndex, int32_t srcOffX, int32_t srcOffY, int32_t srcW,
 				  int32_t srcH, float x, float y, float xscale, float yscale, float angleDeg,
-				  float pivotX, float pivotY, uint32_t c1, uint32_t c2, uint32_t c3, uint32_t c4, float alpha)
+				  float pivotX, float pivotY, uint32_t c1, uint32_t c2, uint32_t c3, uint32_t c4,
+				  float alpha)
 {
 	gx_stat.sprites++;
 	GxRenderer *gx = (GxRenderer *)renderer;
 	float x0, y0, x1, y1, x2, y2, x3, y3;
 	u8 a = unorm(alpha);
 
-	gx_part_corners(x, y, srcW, srcH, xscale, yscale, angleDeg, pivotX, pivotY, &x0, &y0, &x1, &y1, &x2, &y2, &x3, &y3);
+	gx_part_corners(x, y, srcW, srcH, xscale, yscale, angleDeg, pivotX, pivotY,
+			&x0, &y0, &x1, &y1, &x2, &y2, &x3, &y3);
 	gx_draw_tpag(gx, tpagIndex, x0, y0, x1, y1, x2, y2, x3, y3,
 		     (float)srcOffX, (float)srcOffY, (float)srcW, (float)srcH,
 		     (u8)BGR_R(c1), (u8)BGR_G(c1), (u8)BGR_B(c1), a,
@@ -2986,8 +2999,8 @@ static void gx_draw_text(GxRenderer *gx, const char *text, double x, double y, f
 	/* Centred odd-width lines start on a half pixel, where GX_NEAR samples sit exactly on texel
 	 * seams and real hardware garbles thin glyphs. Keep unrotated 1:1 text on the pixel grid. */
 	snap = angleDeg == 0.0f && sx == 1.0f && sy == 1.0f;
-	/* How far a line's glyphs can reach from its cursor, for skipping lines off the projection whole: AM2R's credits
-	 * draw all 200 rows nine times a frame with 20 on screen. */
+	/* How far a line's glyphs can reach from its cursor, for skipping lines off the projection whole:
+	 * AM2R's credits draw all 200 rows nine times a frame with 20 on screen. */
 	band = fmaxf(lineStride, (float)font->maxGlyphHeight) + fabsf((float)font->spriteOriginYAdjust);
 	gx_clip_rows(&clipT, &clipB);
 	cursorY = valignOffset - (float)font->ascenderOffset;
@@ -3067,14 +3080,17 @@ static void gx_draw_text(GxRenderer *gx, const char *text, double x, double y, f
 					g->u1 = (float)(gtpag->sourceX + gtpag->sourceWidth) / (float)gpage->texW;
 					g->v1 = (float)(gtpag->sourceY + gtpag->sourceHeight) / (float)gpage->texH;
 					g->lx0 = cursorX + (float)glyph->offset;
-					g->ly0 = cursorY + (float)(int32_t)gtpag->targetY - (float)font->spriteOriginYAdjust;
+					g->ly0 = cursorY + (float)(int32_t)gtpag->targetY -
+						 (float)font->spriteOriginYAdjust;
 					g->lx1 = g->lx0 + (float)gtpag->sourceWidth;
 					g->ly1 = g->ly0 + (float)gtpag->sourceHeight;
 				} else if (gpage) {
 					g->u0 = (float)(gtpag->sourceX + glyph->sourceX) / (float)gpage->texW;
 					g->v0 = (float)(gtpag->sourceY + glyph->sourceY) / (float)gpage->texH;
-					g->u1 = (float)(gtpag->sourceX + glyph->sourceX + glyph->sourceWidth) / (float)gpage->texW;
-					g->v1 = (float)(gtpag->sourceY + glyph->sourceY + glyph->sourceHeight) / (float)gpage->texH;
+					g->u1 = (float)(gtpag->sourceX + glyph->sourceX + glyph->sourceWidth) /
+						(float)gpage->texW;
+					g->v1 = (float)(gtpag->sourceY + glyph->sourceY + glyph->sourceHeight) /
+						(float)gpage->texH;
 					g->lx0 = cursorX + (float)glyph->offset;
 					g->ly0 = cursorY;
 					g->lx1 = g->lx0 + (float)glyph->sourceWidth;
@@ -3082,7 +3098,8 @@ static void gx_draw_text(GxRenderer *gx, const char *text, double x, double y, f
 				}
 				if (gpage) {
 					leftFrac = (lineWidth > 0.0f) ? (cursorX / lineWidth) : 0.0f;
-					rightFrac = (lineWidth > 0.0f) ? ((cursorX + (float)glyph->shift) / lineWidth) : 1.0f;
+					rightFrac = (lineWidth > 0.0f) ? ((cursorX + (float)glyph->shift) / lineWidth) :
+						    1.0f;
 					g->tc1 = Color_lerp(c1, c2, leftFrac);
 					g->tc2 = Color_lerp(c1, c2, rightFrac);
 					g->tc3 = Color_lerp(c4, c3, rightFrac);
@@ -3104,7 +3121,8 @@ static void gx_draw_text(GxRenderer *gx, const char *text, double x, double y, f
 	}
 	if (overflow) {
 		for (p = 0; p < passCount; p++)
-			gx_draw_text(gx, text, x, y, xscale, yscale, angleDeg, c1, c2, c3, c4, lineSeparation, &passes[p], 1);
+			gx_draw_text(gx, text, x, y, xscale, yscale, angleDeg, c1, c2, c3, c4, lineSeparation,
+				     &passes[p], 1);
 		return;
 	}
 	for (p = 0; p < passCount; p++)
@@ -3117,13 +3135,15 @@ static void gxDrawTextColor(Renderer *renderer, const char *text, float x, float
 {
 	GxTextPass pass = { 0, 0, false, 0, alpha };
 
-	gx_draw_text((GxRenderer *)renderer, text, x, y, xscale, yscale, angleDeg, c1, c2, c3, c4, lineSeparation, &pass, 1);
+	gx_draw_text((GxRenderer *)renderer, text, x, y, xscale, yscale, angleDeg, c1, c2, c3, c4, lineSeparation,
+		     &pass, 1);
 }
 
 void GxRenderer_drawOutlinedText(Renderer *renderer, const char *text, double x, double y, int32_t outline,
 				 int32_t top, int32_t bottom, float alpha)
 {
-	static const int8_t offsets[8][2] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 }, { 1, 1 }, { 1, -1 }, { -1, 1 }, { -1, -1 } };
+	static const int8_t offsets[8][2] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 },
+					      { 1, 1 }, { 1, -1 }, { -1, 1 }, { -1, -1 } };
 	GxTextPass passes[9];
 	int i;
 
@@ -3138,7 +3158,8 @@ static void gxDrawText(Renderer *renderer, const char *text, float x, float y, f
 {
 	int32_t c = (int32_t)renderer->drawColor;
 
-	gxDrawTextColor(renderer, text, x, y, xscale, yscale, angleDeg, c, c, c, c, renderer->drawAlpha, lineSeparation);
+	gxDrawTextColor(renderer, text, x, y, xscale, yscale, angleDeg, c, c, c, c, renderer->drawAlpha,
+			lineSeparation);
 }
 
 static void gxFlush(MAYBE_UNUSED Renderer *renderer) {}
@@ -3315,7 +3336,8 @@ static bool gx_tile_pattern(GxRenderer *gx, int32_t tpagIndex, float xscale, flo
 			int tx = tpag->sourceX + i, ty = tpag->sourceY + j;
 			u8 r, g, b, a;
 
-			unpack_rgb5a3(page->texels[((ty >> 2) * (page->texW >> 2) + (tx >> 2)) * 16 + (ty & 3) * 4 + (tx & 3)],
+			unpack_rgb5a3(page->texels[((ty >> 2) * (page->texW >> 2) + (tx >> 2)) * 16 +
+						   (ty & 3) * 4 + (tx & 3)],
 				      &r, &g, &b, &a);
 			if (a != 255)
 				return false;
@@ -3349,7 +3371,8 @@ static bool gx_tile_pattern(GxRenderer *gx, int32_t tpagIndex, float xscale, flo
 					if (x < xc0 || x >= xc1)
 						continue;
 					memcpy((u8 *)t->texels + (by * (t->texW / 4) + bx) * 64,
-					       cell + (((y - y0) / 4 % (h / 4)) * (w / 4) + (x - x0) / 4 % (w / 4)) * 64, 64);
+					       cell + (((y - y0) / 4 % (h / 4)) * (w / 4) +
+						       (x - x0) / 4 % (w / 4)) * 64, 64);
 				}
 			}
 			t->objReady = false;
@@ -3396,13 +3419,13 @@ static void gxDrawSpriteTiled(Renderer *renderer, int32_t tpagIndex, float origi
 	gx_clip_rows(&clipT, &clipB);
 	if (tileY)
 		gx_tile_span(&startY, &endY, tileH, clipT, clipB, yscale < 0);
-	if (tileX && tileY && gx_tile_pattern((GxRenderer *)renderer, tpagIndex, xscale, yscale, color, alpha, startX, endX,
-					      startY, endY))
+	if (tileX && tileY && gx_tile_pattern((GxRenderer *)renderer, tpagIndex, xscale, yscale, color, alpha,
+					      startX, endX, startY, endY))
 		return;
 	for (cy = startY; cy < endY; cy += tileH) {
 		for (cx = startX; cx < endX; cx += tileW)
-			gxDrawSprite(renderer, tpagIndex, cx + originX * xscale, cy + originY * yscale, originX, originY,
-				     xscale, yscale, 0, color, alpha);
+			gxDrawSprite(renderer, tpagIndex, cx + originX * xscale, cy + originY * yscale,
+				     originX, originY, xscale, yscale, 0, color, alpha);
 	}
 }
 
@@ -3547,7 +3570,8 @@ static bool gx_gb_begin(GxRenderer *gx)
 	GX_SetNumTevStages(9);
 	for (i = 0; i < 9; i++) {
 		GX_SetTevOrder(i, GX_TEXCOORD0, i == 6 ? GX_TEXMAP1 : GX_TEXMAP0, GX_COLOR0A0);
-		GX_SetTevSwapMode(i, GX_TEV_SWAP0, i == 0 ? GX_TEV_SWAP1 : i == 1 ? GX_TEV_SWAP2 : i == 3 ? GX_TEV_SWAP3 : GX_TEV_SWAP0);
+		GX_SetTevSwapMode(i, GX_TEV_SWAP0,
+				  i == 0 ? GX_TEV_SWAP1 : i == 1 ? GX_TEV_SWAP2 : i == 3 ? GX_TEV_SWAP3 : GX_TEV_SWAP0);
 		GX_SetTevColorIn(i, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO);
 		GX_SetTevColorOp(i, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
 	}
@@ -3835,7 +3859,8 @@ static void gxSurfaceCopy(Renderer *renderer, int32_t destSurfaceID, int32_t des
 		gx_bind_surface(gx, saved, true);
 }
 
-static bool gxSurfaceGetPixels(MAYBE_UNUSED Renderer *renderer, MAYBE_UNUSED int32_t surfaceID, MAYBE_UNUSED uint8_t *outRGBA)
+static bool gxSurfaceGetPixels(MAYBE_UNUSED Renderer *renderer, MAYBE_UNUSED int32_t surfaceID,
+			       MAYBE_UNUSED uint8_t *outRGBA)
 {
 	return false;
 }
@@ -3858,8 +3883,8 @@ bool GxRenderer_surfacePixel(int32_t surfaceID, int x, int y, uint8_t rgba[4])
 
 		if (!t->texels)
 			return false;
-		gx_rgba8_pget((const u8 *)t->texels, t->texW, x % SURF_TILE_W, y % SURF_TILE_H, &rgba[0], &rgba[1], &rgba[2],
-			      &rgba[3]);
+			gx_rgba8_pget((const u8 *)t->texels, t->texW, x % SURF_TILE_W, y % SURF_TILE_H,
+				      &rgba[0], &rgba[1], &rgba[2], &rgba[3]);
 		return true;
 	}
 	if (gx->currentTarget == surfaceID) {
@@ -3880,8 +3905,8 @@ bool GxRenderer_surfacePixel(int32_t surfaceID, int x, int y, uint8_t rgba[4])
 	return true;
 }
 
-static void gxDrawTiledPart(Renderer *renderer, int32_t tpagIndex, int32_t srcX, int32_t srcY, int32_t srcW, int32_t srcH,
-			    float dstX, float dstY, float dstW, float dstH, uint32_t color, float alpha)
+static void gxDrawTiledPart(Renderer *renderer, int32_t tpagIndex, int32_t srcX, int32_t srcY, int32_t srcW,
+			    int32_t srcH, float dstX, float dstY, float dstW, float dstH, uint32_t color, float alpha)
 {
 	gx_stat.tiles++;
 	float x, y;
@@ -3898,7 +3923,8 @@ static void gxDrawTiledPart(Renderer *renderer, int32_t tpagIndex, int32_t srcX,
 			if (y + h > dstY + dstH)
 				h = (int32_t)(dstY + dstH - y);
 			if (w > 0 && h > 0)
-				gxDrawSpritePart(renderer, tpagIndex, srcX, srcY, w, h, x, y, 1, 1, 0, x, y, color, alpha);
+				gxDrawSpritePart(renderer, tpagIndex, srcX, srcY, w, h, x, y, 1, 1, 0, x, y,
+						 color, alpha);
 		}
 	}
 }
@@ -3956,9 +3982,9 @@ static void gxShaderSetUniformFArray(MAYBE_UNUSED Renderer *renderer, MAYBE_UNUS
 {
 }
 
-static void gxShaderSetUniformI(MAYBE_UNUSED Renderer *renderer, MAYBE_UNUSED int32_t handle, MAYBE_UNUSED int32_t count,
-				MAYBE_UNUSED int32_t v1, MAYBE_UNUSED int32_t v2, MAYBE_UNUSED int32_t v3,
-				MAYBE_UNUSED int32_t v4)
+static void gxShaderSetUniformI(MAYBE_UNUSED Renderer *renderer, MAYBE_UNUSED int32_t handle,
+				MAYBE_UNUSED int32_t count, MAYBE_UNUSED int32_t v1, MAYBE_UNUSED int32_t v2,
+				MAYBE_UNUSED int32_t v3, MAYBE_UNUSED int32_t v4)
 {
 }
 
@@ -4123,8 +4149,8 @@ static void gxPrimitiveEnd(Renderer *renderer)
 }
 
 static void gxDrawVertexBuffer(MAYBE_UNUSED Renderer *renderer, MAYBE_UNUSED VertexBuffer *buffer,
-			       MAYBE_UNUSED int32_t primitive, MAYBE_UNUSED int32_t texture, MAYBE_UNUSED int32_t offset,
-			       MAYBE_UNUSED int32_t count)
+			       MAYBE_UNUSED int32_t primitive, MAYBE_UNUSED int32_t texture,
+			       MAYBE_UNUSED int32_t offset, MAYBE_UNUSED int32_t count)
 {
 }
 

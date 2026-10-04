@@ -17,6 +17,7 @@ bool Wii_hooksEvents(struct Runner *runner);  /* each frame, after the controlle
 void Wii_hooksBeforeCopy(void);               /* the frame is drawn, not yet copied out */
 void Wii_hooksAfterPresent(void);
 /* what the pads read this frame; sticks = GameCube main X, main Y, C-stick Y */
-void Wii_hooksPad(struct Runner *runner, unsigned int *wheld, unsigned short *gcheld, struct expansion_t *exp, signed char *sticks);
+void Wii_hooksPad(struct Runner *runner, unsigned int *wheld, unsigned short *gcheld, struct expansion_t *exp,
+		  signed char *sticks);
 
 #endif

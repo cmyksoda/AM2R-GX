@@ -16,7 +16,8 @@
 #include <stdio.h>
 #include <string.h>
 
-/* AM2R's Control Options rows (oOptionsControl): 6 is Keyboard Settings, 7 and 9 are Android-only and already hidden. */
+/* AM2R's Control Options rows (oOptionsControl): 6 is Keyboard Settings, 7 and 9 are Android-only
+ * and already hidden. */
 #define ROW_KEYBOARD 6
 #define ROW_EXIT 10
 #define XJOY_VIBRATION 0 /* oOptionsXJoypad's rows */
@@ -40,11 +41,14 @@ typedef struct {
 #define W(key, key2) { NULL, key, key2 }
 /* By GameMaker constant from gp_face1: face1-4, LB, RB, LT, RT, select, start; see the maps in input.c. */
 static const Name gcNames[10] = {
-	T("A"), T("X"), T("B"), T("Y"), W("LeftShoulder", NULL), W("RightShoulder", NULL), T("Z"), { "C-", "Down", NULL }, T(""),
-	W("Start", NULL),
+	T("A"), T("X"), T("B"), T("Y"),
+	W("LeftShoulder", NULL), W("RightShoulder", NULL), T("Z"), { "C-", "Down", NULL },
+	T(""), W("Start", NULL),
 };
 static const Name nunchukNames[10] = {
-	T("B"), T("C"), T("A"), T("-"), W("Up", "Down"), T("Z"), W("Left", "Right"), W("Down", NULL), T(""), T("+"),
+	T("B"), T("C"), T("A"), T("-"),
+	W("Up", "Down"), T("Z"), W("Left", "Right"), W("Down", NULL),
+	T(""), T("+"),
 };
 #undef T
 #undef W
@@ -71,12 +75,21 @@ static const char *const gameGlyphs[N_COUNT] = { "sDPadBtn", "sBtnUp", "sBtnDown
 #define OURS(g) ((g) + 1)
 #define GAME(n) (-1 - (n))
 /* Slots as in the name tables; KEEP leaves AM2R's own glyph. */
-static const signed char classicGlyphs[10] = { OURS(G_B), OURS(G_A), OURS(G_Y), OURS(G_X), OURS(G_L), OURS(G_R), OURS(G_ZL),
-					       OURS(G_ZR), OURS(G_MINUS), OURS(G_PLUS) };
-static const signed char gcGlyphs[10] = { OURS(G_A), OURS(G_X), OURS(G_B), OURS(G_Y), OURS(G_L), OURS(G_R), OURS(G_Z),
-					  OURS(G_CDOWN), KEEP, KEEP };
-static const signed char nunchukGlyphs[10] = { OURS(G_B), OURS(G_C), OURS(G_A), OURS(G_MINUS), GAME(N_DPAD), OURS(G_Z),
-					       GAME(N_DPAD), GAME(N_DOWN), KEEP, OURS(G_PLUS) };
+static const signed char classicGlyphs[10] = {
+	OURS(G_B), OURS(G_A), OURS(G_Y), OURS(G_X),
+	OURS(G_L), OURS(G_R), OURS(G_ZL), OURS(G_ZR),
+	OURS(G_MINUS), OURS(G_PLUS)
+};
+static const signed char gcGlyphs[10] = {
+	OURS(G_A), OURS(G_X), OURS(G_B), OURS(G_Y),
+	OURS(G_L), OURS(G_R), OURS(G_Z), OURS(G_CDOWN),
+	KEEP, KEEP
+};
+static const signed char nunchukGlyphs[10] = {
+	OURS(G_B), OURS(G_C), OURS(G_A), OURS(G_MINUS),
+	GAME(N_DPAD), OURS(G_Z), GAME(N_DPAD), GAME(N_DOWN),
+	KEEP, OURS(G_PLUS)
+};
 
 /* Looked up by scope: canedit, for one, is also a global somewhere in the data, listed first. */
 static int32_t var_id(Runner *runner, const char *name, int32_t scope)
@@ -173,7 +186,8 @@ static char *name_text(VMContext *ctx, const Name *n)
 
 static bool nintendo_names(Runner *runner)
 {
-	return var_num(runner, first_instance(runner, "oControl"), "mod_buttonsconfig", INSTANCE_SELF, 0) == NINTENDO_NAMES;
+	return var_num(runner, first_instance(runner, "oControl"), "mod_buttonsconfig", INSTANCE_SELF, 0) ==
+	       NINTENDO_NAMES;
 }
 
 /* A fresh options file says Xbox; every other setting than Nintendo Pro draws buttons no Wii pad has. */
@@ -319,7 +333,8 @@ static RValue wii_get_xjoybtnname(VMContext *ctx, RValue *args, int32_t argCount
 	if (i < 0 || i >= 10 || !nintendo_names(ctx->runner))
 		return call_script(ctx, SCR_NAME, args, argCount);
 	if (!names) /* the Classic Controller: AM2R's Nintendo names, but its Start button is printed "+" */
-		return i == GP_START - GP_FACE1 ? RValue_makeOwnedString(safeStrdup("+")) : call_script(ctx, SCR_NAME, args, argCount);
+		return i == GP_START - GP_FACE1 ? RValue_makeOwnedString(safeStrdup("+")) :
+		       call_script(ctx, SCR_NAME, args, argCount);
 	n = names[i];
 	/* two-button aim: the Nunchuk's d-pad Up alone is the aim-up button */
 	if (pad == WII_PAD_NUNCHUK && n.key2 && two_button_aim(ctx->runner))
@@ -332,7 +347,8 @@ static RValue wii_get_xjoybtnsprite(VMContext *ctx, RValue *args, int32_t argCou
 	static int32_t ours[G_COUNT], game[N_COUNT];
 	static bool built;
 	WiiPad pad = WiiInput_pad();
-	const signed char *table = pad == WII_PAD_GAMECUBE ? gcGlyphs : pad == WII_PAD_NUNCHUK ? nunchukGlyphs : classicGlyphs;
+	const signed char *table = pad == WII_PAD_GAMECUBE ? gcGlyphs :
+				   pad == WII_PAD_NUNCHUK ? nunchukGlyphs : classicGlyphs;
 	int32_t i = argCount > 0 ? RValue_toInt32(args[0]) - GP_FACE1 : -1, sprite = -1;
 	int g, k;
 
@@ -356,8 +372,10 @@ static RValue wii_get_xjoybtnsprite(VMContext *ctx, RValue *args, int32_t argCou
 
 void WiiControls_hookScripts(VMContext *ctx)
 {
-	static const BuiltinFunc standIns[SCR_COUNT] = { wii_set_default_xjoypad, wii_get_xjoybtnname, wii_get_xjoybtnsprite,
-							 wii_save_gameoptions, wii_load_gameoptions, NULL };
+	static const BuiltinFunc standIns[SCR_COUNT] = {
+		wii_set_default_xjoypad, wii_get_xjoybtnname, wii_get_xjoybtnsprite,
+		wii_save_gameoptions, wii_load_gameoptions, NULL
+	};
 	int k;
 
 	for (k = 0; k < SCR_COUNT; k++) {
@@ -404,7 +422,8 @@ static void cursor_to(Runner *runner, Instance *menu, int32_t row)
 {
 	Instance *global = runner->vmContext->globalScopeInstance;
 	RValue *tip = array_slot(runner, menu, "tip", row);
-	int32_t curropt = var_id(runner, "curropt", INSTANCE_GLOBAL), tiptext = var_id(runner, "tiptext", INSTANCE_GLOBAL);
+	int32_t curropt = var_id(runner, "curropt", INSTANCE_GLOBAL),
+		tiptext = var_id(runner, "tiptext", INSTANCE_GLOBAL);
 
 	if (curropt >= 0)
 		Instance_setSelfVar(global, curropt, RValue_makeInt32(row));
@@ -459,7 +478,8 @@ static void retitle_joypad(Runner *runner, Instance *menu)
 }
 
 /* AM2R's options screens leave only by their Back row, so Menu Back picks it. In play the pause screen already takes
- * Menu Back out of its options, so only the title side needs this. rowVar: a screen that keeps its Back row in a variable. */
+ * Menu Back out of its options, so only the title side needs this.
+ * rowVar: a screen that keeps its Back row in a variable. */
 static const struct {
 	const char *object, *rowVar;
 	int32_t row;
@@ -487,7 +507,8 @@ bool WiiControls_menuBack(Runner *runner)
 		if (!menu || var_num(runner, menu, "active", INSTANCE_SELF, 0) == 0 ||
 		    var_num(runner, menu, "editing", INSTANCE_SELF, 0) != 0)
 			continue;
-		row = backRows[k].rowVar ? (int32_t)var_num(runner, menu, backRows[k].rowVar, INSTANCE_SELF, -1) : backRows[k].row;
+		row = backRows[k].rowVar ? (int32_t)var_num(runner, menu, backRows[k].rowVar, INSTANCE_SELF, -1) :
+		      backRows[k].row;
 		if (row < 0)
 			return false;
 		Instance_setSelfVar(runner->vmContext->globalScopeInstance, curropt, RValue_makeInt32(row));

@@ -56,7 +56,8 @@ bool WiiPaths_init(int argc, char **argv)
 
 	if (launch_dir(launch, "usb:", dir, sizeof dir)) {
 		/* A drive can still be waking up after the Homebrew Channel hands over. */
-		for (tries = 0; tries < USB_WAIT_TRIES && !dvmProbeMountDiscIface("usb", &__io_usbstorage, CACHE_PAGES, CACHE_SECTORS); tries++)
+		for (tries = 0; tries < USB_WAIT_TRIES &&
+				!dvmProbeMountDiscIface("usb", &__io_usbstorage, CACHE_PAGES, CACHE_SECTORS); tries++)
 			usleep(250 * 1000);
 		if (tries < USB_WAIT_TRIES && is_dir(dir)) {
 			use_dir(dir, "usb:");
