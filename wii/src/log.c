@@ -15,7 +15,8 @@ bool WiiLog_open(const char *path)
 	g_log = fopen(path, "w");
 	if (!g_log)
 		return false;
-	setvbuf(g_log, NULL, _IONBF, 0);
+	/* Buffered: an unbuffered line waited for the card behind the page loader's reads, mid-frame. */
+	setvbuf(g_log, NULL, _IOFBF, 16 * 1024);
 	fprintf(g_log, "=== AM2R GX log ===\n");
 	return true;
 }
@@ -23,8 +24,10 @@ bool WiiLog_open(const char *path)
 /* Push the log through libfat's cache onto the card, for a run that may end in a power-off. */
 void WiiLog_sync(void)
 {
-	if (g_log)
-		fsync(fileno(g_log));
+	if (!g_log)
+		return;
+	fflush(g_log);
+	fsync(fileno(g_log));
 }
 
 void WiiLog_close(void)
@@ -65,10 +68,9 @@ void platformLog(const logType type, const char *format, va_list va)
 	if (g_log) {
 		fputs(prefix, g_log);
 		vfprintf(g_log, format, va);
-		fflush(g_log);
 		/* An error can be the last line a run writes (a failed require() aborts): put it on the card now. */
 		if (type == LOG_TYPE_ERROR)
-			fsync(fileno(g_log));
+			WiiLog_sync();
 	}
 
 	if (g_gecko) {
