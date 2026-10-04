@@ -1131,23 +1131,56 @@ static bool gx_prefetch_collect(GxRenderer *gx, bool wait)
 	return ok;
 }
 
+static bool gx_png_size_at(FILE *f, const Texture *txtr, int *w, int *h)
+{
+	u8 hdr[33];
+
+	return fseek(f, (long)txtr->blobOffset, SEEK_SET) == 0 && fread(hdr, 1, sizeof hdr, f) == sizeof hdr &&
+	       WiiPng_size(hdr, sizeof hdr, w, h) && *w <= GX_MAX_TEX_DIM && *h <= GX_MAX_TEX_DIM;
+}
+
 /* The texels are allocated before the loader starts, so the size comes from the PNG header first. */
 static bool gx_png_header(DataWin *dw, const Texture *txtr, GxPage *page)
 {
-	u8 hdr[33];
 	long back = ftell(dw->lazyLoadFile);
-	bool ok = fseek(dw->lazyLoadFile, (long)txtr->blobOffset, SEEK_SET) == 0 &&
-		  fread(hdr, 1, sizeof hdr, dw->lazyLoadFile) == sizeof hdr;
 	int w, h;
+	bool ok = gx_png_size_at(dw->lazyLoadFile, txtr, &w, &h);
 
 	fseek(dw->lazyLoadFile, back, SEEK_SET);
-	if (!ok || !WiiPng_size(hdr, sizeof hdr, &w, &h) || w > GX_MAX_TEX_DIM || h > GX_MAX_TEX_DIM) {
+	if (!ok) {
 		page->pngW = -1;
 		return false;
 	}
 	page->pngW = w;
 	page->pngH = h;
 	return true;
+}
+
+/* Every page's size before the first frame: a header read mid-game went through data.win's 128 KB-buffered
+ * FILE, refilling the whole buffer on the main thread. */
+static void gx_read_page_sizes(GxRenderer *gx)
+{
+	DataWin *dw = gx->base.dataWin;
+	FILE *f = fopen(WII_DATA_WIN, "rb");
+	u64 t0 = gettime();
+	uint32_t i, known = 0;
+	int w, h;
+
+	if (!f)
+		return;
+	setvbuf(f, NULL, _IONBF, 0);
+	for (i = 0; i < gx->pageCount; i++) {
+		const Texture *txtr = &dw->txtr.textures[i];
+
+		if (txtr->blobOffset && txtr->blobSize && !txtr->blobData && gx_png_size_at(f, txtr, &w, &h)) {
+			gx->pages[i].pngW = w;
+			gx->pages[i].pngH = h;
+			known++;
+		}
+	}
+	fclose(f);
+	logInfo("GX: %u of %u page sizes read in %.1f ms\n", known, gx->pageCount,
+		ticks_to_microsecs(gettime() - t0) / 1000.0);
 }
 
 /* Hands pageId to the loader thread when it is idle and the memory comes without evicting anything drawn lately. */
@@ -1942,6 +1975,7 @@ static void gxInit(Renderer *renderer, DataWin *dataWin)
 	gx->pageCount = dataWin->txtr.count;
 	gx->pages = (GxPage *)safeCalloc(gx->pageCount, sizeof(GxPage));
 	gx_build_ahead(dataWin);
+	gx_read_page_sizes(gx);
 	if (!PageLoader_start(WII_DATA_WIN))
 		logWarn("GX: no loader thread, every page loads on the main thread\n");
 	gx->currentTarget = HOST_TARGET;
