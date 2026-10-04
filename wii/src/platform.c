@@ -154,7 +154,6 @@ static RValue without_pc_key(RValue tip)
 	return RValue_makeOwnedString(trimmed);
 }
 
-/* The Display menu's VSync row is the 240p switch here (wii_ini_read_real keeps it under its own key). */
 /* get_text opens the language ini, reads one key and closes it, and closing re-serializes the whole file: 256 times as
  * the pause opens. The files never change while the game runs, so each answer is kept by language, section and key. */
 static RValue cached_text(VMContext *ctx, RValue *args, int32_t argCount)
@@ -198,6 +197,7 @@ static RValue wii_get_text(VMContext *ctx, RValue *args, int32_t argCount)
 	if (argCount >= 2 && args[0].type == RVALUE_STRING && args[1].type == RVALUE_STRING && args[0].string &&
 	    args[1].string && strcmp(args[0].string, "ExtrasMenu") == 0 && strcmp(args[1].string, "GBFilter_Tip") == 0)
 		return without_pc_key(cached_text(ctx, args, argCount));
+	/* The Display menu's VSync row is the 240p switch here (wii_ini_read_real keeps it under its own key). */
 	if (argCount >= 2 && args[0].type == RVALUE_STRING && args[1].type == RVALUE_STRING && args[0].string &&
 	    args[1].string && strcmp(args[0].string, "OptionsDisplay") == 0) {
 		if (strcmp(args[1].string, "VSync") == 0)
