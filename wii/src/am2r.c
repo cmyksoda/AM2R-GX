@@ -190,7 +190,7 @@ static int32_t metroids_here(Runner *runner)
 
 /* What the next seconds will draw, for the loader to fetch while idle (a page pulled mid-play stalls a Wii ~140 ms):
  * the title's first frame, the file select, the intro's art, the credits' ship and score screen, and in play Samus's
- * suit, the HUD, the pause screen and the metroid the room holds. */
+ * suit and muzzle flash, the HUD, the pause screen and the metroid the room holds. */
 void Wii_wishPages(Runner *runner)
 {
 	enum { NONE = -1, TITLE_START = 100, FILE_SELECT = 101, CREDITS = 102, INTRO = 200, METROID = 1000 };
@@ -263,6 +263,8 @@ void Wii_wishPages(Runner *runner)
 							 strncmp(dw->sprt.sprites[i].name, "sGUIFont", 8) == 0))
 				add_sprite(&tpags, dw, (int32_t)i, UINT32_MAX);
 		add_suit(&tpags, runner, key % METROID % INTRO / 2, key & 1);
+		/* the beam's muzzle flash: the first shot after a load pulled its page mid-play */
+		add_sprite(&tpags, dw, sprite_named(runner, "sMflash"), UINT32_MAX);
 		for (i = 0; i < dw->sprt.count; i++)
 			if (dw->sprt.sprites[i].name && strncmp(dw->sprt.sprites[i].name, "sSubScr", 7) == 0)
 				add_sprite(&tpags, dw, (int32_t)i, UINT32_MAX);
