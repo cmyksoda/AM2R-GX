@@ -200,6 +200,15 @@ static RValue wii_get_text(VMContext *ctx, RValue *args, int32_t argCount)
 	/* The Display menu's VSync row is the 240p switch here (wii_ini_read_real keeps it under its own key). */
 	if (argCount >= 2 && args[0].type == RVALUE_STRING && args[1].type == RVALUE_STRING && args[0].string &&
 	    args[1].string && strcmp(args[0].string, "OptionsDisplay") == 0) {
+		/* Fullscreen and Window Size are the two adjust pages here (controls.c, input.c). */
+		if (strcmp(args[1].string, "Fullscreen") == 0)
+			return RValue_makeOwnedString(safeStrdup("Resize/Move Screen"));
+		if (strcmp(args[1].string, "Fullscreen_Tip") == 0)
+			return RValue_makeOwnedString(safeStrdup("Fit the picture to your TV"));
+		if (strcmp(args[1].string, "WindowSize") == 0 || strcmp(args[1].string, "DisplayScale") == 0)
+			return RValue_makeOwnedString(safeStrdup("HUD Margins"));
+		if (strcmp(args[1].string, "WindowSize_Tip") == 0 || strcmp(args[1].string, "DisplayScale_Tip") == 0)
+			return RValue_makeOwnedString(safeStrdup("Keep the HUD inside your TV's edges"));
 		if (strcmp(args[1].string, "VSync") == 0)
 			return RValue_makeOwnedString(safeStrdup("240p"));
 		if (strcmp(args[1].string, "VSync_Tip") == 0)

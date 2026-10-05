@@ -3,14 +3,13 @@
 
 #include <stdint.h>
 
-/* Game rows a CRT hides per edge: the 240p Test Suite's green lines sit at 22 and 457 of 480. */
-#define WII_SAFE_ROWS 11
-
 struct Runner;
 struct VMContext;
 
+int WiiSafe_rows(void);
 int32_t WiiSafe_guiSurface(struct Runner *runner);
 float WiiSafe_lift(struct Runner *runner);
+float WiiSafe_shift(struct Runner *runner);
 void WiiSafe_frame(struct Runner *runner);
 void WiiSafe_hookScripts(struct VMContext *ctx);
 

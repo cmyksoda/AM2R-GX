@@ -132,7 +132,7 @@ typedef struct {
 	 * box filter, instead of the game's blit landing at 1.5 screen pixels per game pixel. */
 	bool compose;
 	int32_t composeId;
-	int32_t guiSurf; /* oControl's HUD layer, drawn WII_SAFE_ROWS lower */
+	int32_t guiSurf; /* oControl's HUD layer, drawn inside the HUD margins */
 	int32_t shPal, shGB; /* SHDR indices of the two shaders we do natively, -1 if absent */
 	int32_t palTpag; /* palette sprite bound with texture_set_stage while shPal is set */
 	int palIndex; /* column of the palette to replace with (the game always passes 1) */
@@ -304,6 +304,9 @@ static void gx_vtx_fmt(void)
 
 /* The projection in force, in the units quads are drawn in: what the rasterizer keeps. */
 static float gx_clipT = -1e9f, gx_clipB = 1e9f, gx_clipL = -1e9f, gx_clipR = 1e9f;
+
+/* The Display menu's adjust pages draw over everything: none of the game's safe-area moves apply to them. */
+static bool gx_ov_drawing;
 
 static void gx_ortho(float top, float bottom, float left, float right)
 {
@@ -590,15 +593,21 @@ static void emit_quad(float x0, float y0, float x1, float y1, float x2, float y2
 		      u8 r2, u8 g2, u8 b2, u8 a2, u8 r3, u8 g3, u8 b3, u8 a3)
 {
 	GxSurf *s = gx_tiled_target(gx_cur);
-	float minx, maxx, miny, maxy, lift, qx, qy, dx, dy;
+	float minx, maxx, miny, maxy, lift, shift, qx, qy, dx, dy;
 	int c0, c1, tr0, tr1, c, tr;
 	bool flat;
 
-	if (gx_cur && (lift = WiiSafe_lift(gx_cur->base.runner)) != 0.0f) {
+	if (gx_cur && !gx_ov_drawing && (lift = WiiSafe_lift(gx_cur->base.runner)) != 0.0f) {
 		y0 += lift;
 		y1 += lift;
 		y2 += lift;
 		y3 += lift;
+	}
+	if (gx_cur && !gx_ov_drawing && (shift = WiiSafe_shift(gx_cur->base.runner)) != 0.0f) {
+		x0 += shift;
+		x1 += shift;
+		x2 += shift;
+		x3 += shift;
 	}
 	if (!s) {
 		emit_quad_raw(x0, y0, x1, y1, x2, y2, x3, y3, u0, v0, u1, v1, u2, v2, u3, v3,
@@ -2431,60 +2440,7 @@ static void gx_ov_rect(float x, float y, float w, float h, u8 r, u8 g, u8 b, u8 
 		  r, g, b, a, r, g, b, a, r, g, b, a, r, g, b, a);
 }
 
-/* Full-screen calibration overlay (Plus + Minus, Start + Z, 1 + 2): grid + a bright safe-area border to
- * line up against the CRT edge, plus H/V magnitude sliders. Drawn in the inset viewport. */
-static void gx_draw_overscan_overlay(GxRenderer *gx)
-{
-	const float LW = (float)WiiVideo_fbWidth();
-	const float LH = (float)WiiVideo_efbHeight();
-	float cx = LW * 0.5f, cy = LH * 0.5f;
-	float tlen = 220.0f, tthk = 14.0f;
-	float hf = 1.0f - (float)Overscan_h() / (float)OVERSCAN_MAX_H;
-	float vf = 1.0f - (float)Overscan_v() / (float)OVERSCAN_MAX_V;
-	float cl = 44.0f, ct = 7.0f;
-	float ys = LH / (float)WII_FB_H; /* the sliders keep their on-screen size in 240p */
-	int i;
-
-	gx_bind_host(gx);
-	gx_ortho(0, LH, 0, LW);
-	gx_unbind_tex(gx);
-	GX_SetColorUpdate(GX_TRUE);
-	GX_SetAlphaUpdate(GX_TRUE);
-	GX_SetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA, GX_LO_CLEAR);
-
-	gx_ov_rect(0, 0, LW, LH, 0, 0, 0, 160);
-	for (i = 0; i <= (int)LW; i += 32)
-		gx_ov_rect((float)i, 0, 1, LH, 90, 200, 220, 110);
-	for (i = 0; i <= (int)LH; i += 32)
-		gx_ov_rect(0, (float)i, LW, 1, 90, 200, 220, 110);
-
-	gx_ov_rect(0, 0, LW, 3, 70, 255, 130, 255);
-	gx_ov_rect(0, LH - 3, LW, 3, 70, 255, 130, 255);
-	gx_ov_rect(0, 0, 3, LH, 70, 255, 130, 255);
-	gx_ov_rect(LW - 3, 0, 3, LH, 70, 255, 130, 255);
-
-	gx_ov_rect(0, 0, cl, ct, 255, 225, 40, 255);
-	gx_ov_rect(0, 0, ct, cl, 255, 225, 40, 255);
-	gx_ov_rect(LW - cl, 0, cl, ct, 255, 225, 40, 255);
-	gx_ov_rect(LW - ct, 0, ct, cl, 255, 225, 40, 255);
-	gx_ov_rect(0, LH - ct, cl, ct, 255, 225, 40, 255);
-	gx_ov_rect(0, LH - cl, ct, cl, 255, 225, 40, 255);
-	gx_ov_rect(LW - cl, LH - ct, cl, ct, 255, 225, 40, 255);
-	gx_ov_rect(LW - ct, LH - cl, ct, cl, 255, 225, 40, 255);
-
-	/* Centre lines: R + Up/Down and L + Left/Right shift the whole picture;
-	 * the lines show where its middle sits. */
-	gx_ov_rect(0, cy + (float)(Overscan_y() * (int)LH / WII_FB_H) - 1, LW, 2, 255, 255, 255, 200);
-	gx_ov_rect(cx + (float)Overscan_x() - 1, 0, 2, LH, 255, 255, 255, 200);
-	gx_ov_rect(cx - tlen * 0.5f, cy - 40 * ys, tlen, tthk * ys, 30, 30, 40, 230);
-	gx_ov_rect(cx - tlen * 0.5f, cy - 40 * ys, tlen * hf, tthk * ys, 90, 200, 255, 255);
-	gx_ov_rect(cx - tthk * 0.5f, cy + 12 * ys, tthk, tlen * 0.55f * ys, 30, 30, 40, 230);
-	gx_ov_rect(cx - tthk * 0.5f, cy + 12 * ys, tthk, tlen * 0.55f * vf * ys, 255, 170, 90, 255);
-
-	gx_apply_blend(gx);
-	GX_SetColorUpdate(gx->colorWriteR || gx->colorWriteG || gx->colorWriteB);
-	GX_SetAlphaUpdate(gx->colorWriteA);
-}
+static void gx_draw_overscan_overlay(GxRenderer *gx);
 
 static void gxEndFrameEnd(Renderer *renderer)
 {
@@ -3609,6 +3565,8 @@ static void gx_gb_end(GxRenderer *gx)
 	gx_unbind_tex(gx); /* GX_SetTevOp puts stage 0's colour and alpha inputs back */
 }
 
+static bool gx_hud_half;
+
 static void gxDrawSurfaceColor(Renderer *renderer, int32_t surfaceID, int32_t srcLeft, int32_t srcTop, int32_t srcWidth,
 			       int32_t srcHeight, float x, float y, float xscale, float yscale, float angleDeg,
 			       uint32_t c1, uint32_t c2, uint32_t c3, uint32_t c4, float alpha)
@@ -3634,8 +3592,20 @@ static void gxDrawSurfaceColor(Renderer *renderer, int32_t surfaceID, int32_t sr
 		srcWidth = s->w;
 	if (srcHeight <= 0)
 		srcHeight = s->h;
+	/* The HUD's two corner groups slide in from the sides as two halves: its middle is empty. */
+	if (surfaceID == gx->guiSurf && !gx_hud_half && Overscan_marginH() > 0 && angleDeg == 0.0f) {
+		int32_t half = srcWidth / 2, mh = Overscan_marginH();
+
+		gx_hud_half = true;
+		gxDrawSurfaceColor(renderer, surfaceID, srcLeft, srcTop, half, srcHeight, x + (float)mh * xscale, y,
+				   xscale, yscale, 0.0f, c1, c2, c3, c4, alpha);
+		gxDrawSurfaceColor(renderer, surfaceID, srcLeft + half, srcTop, srcWidth - half, srcHeight,
+				   x + (float)(half - mh) * xscale, y, xscale, yscale, 0.0f, c1, c2, c3, c4, alpha);
+		gx_hud_half = false;
+		return;
+	}
 	if (surfaceID == gx->guiSurf)
-		y += WII_SAFE_ROWS * yscale;
+		y += (float)WiiSafe_rows() * yscale;
 	angleRad = -angleDeg * ((float)M_PI / 180.0f);
 	Matrix4f_setTransform2D(&transform, x, y, xscale, yscale, angleRad);
 	if (s->tiles) {
@@ -3705,6 +3675,134 @@ static void gxDrawSurfaceColor(Renderer *renderer, int32_t surfaceID, int32_t sr
 		  (u8)BGR_R(c2), (u8)BGR_G(c2), (u8)BGR_B(c2), a,
 		  (u8)BGR_R(c3), (u8)BGR_G(c3), (u8)BGR_B(c3), a,
 		  (u8)BGR_R(c4), (u8)BGR_G(c4), (u8)BGR_B(c4), a);
+}
+
+/* A line of the adjust pages' own text in the menus' font (AM2R keeps its fonts' indices in globals), centred on x
+ * and outlined to read over any picture. */
+static void gx_ov_text(GxRenderer *gx, const char *text, float x, float y, float scale)
+{
+	static const int8_t ring[8][2] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 },
+					   { 1, 1 }, { 1, -1 }, { -1, 1 }, { -1, -1 } };
+	static int32_t fontVar = -2;
+	Renderer *r = &gx->base;
+	int32_t oldFont = r->drawFont, oldHalign = r->drawHalign, oldValign = r->drawValign, font;
+	GxTextPass passes[9];
+	int i;
+
+	if (!r->runner || !r->runner->vmContext)
+		return;
+	if (fontVar == -2)
+		fontVar = Wii_varId(r->runner, "fontGUI2", INSTANCE_GLOBAL);
+	if (fontVar < 0)
+		return;
+	font = RValue_toInt32(Instance_getSelfVar(r->runner->vmContext->globalScopeInstance, fontVar));
+	for (i = 0; i < 8; i++)
+		passes[i] = (GxTextPass){ ring[i][0], ring[i][1], true, 0x000000, 1.0f };
+	passes[8] = (GxTextPass){ 0, 0, false, 0, 1.0f };
+	r->drawFont = font;
+	r->drawHalign = 1;
+	r->drawValign = 0;
+	gx_draw_text(gx, text, x, y, scale, scale, 0.0f, 0xFFFFFF, 0xFFFFFF, 0xFFFFFF, 0xFFFFFF, -1.0f, passes, 9);
+	r->drawFont = oldFont;
+	r->drawHalign = oldHalign;
+	r->drawValign = oldValign;
+}
+
+/* Resize/Move Screen: a grid and a bright border to line up against the TV's edge, plus the width and height
+ * sliders. Drawn in the inset viewport. */
+static void gx_draw_screen_page(GxRenderer *gx, float LW, float LH, float ys)
+{
+	float cx = LW * 0.5f, cy = LH * 0.5f;
+	float tlen = 220.0f, tthk = 14.0f;
+	float hf = 1.0f - (float)Overscan_h() / (float)OVERSCAN_MAX_H;
+	float vf = 1.0f - (float)Overscan_v() / (float)OVERSCAN_MAX_V;
+	float cl = 44.0f, ct = 7.0f;
+	int i;
+
+	gx_ov_rect(0, 0, LW, LH, 0, 0, 0, 160);
+	for (i = 0; i <= (int)LW; i += 32)
+		gx_ov_rect((float)i, 0, 1, LH, 90, 200, 220, 110);
+	for (i = 0; i <= (int)LH; i += 32)
+		gx_ov_rect(0, (float)i, LW, 1, 90, 200, 220, 110);
+
+	gx_ov_rect(0, 0, LW, 3, 70, 255, 130, 255);
+	gx_ov_rect(0, LH - 3, LW, 3, 70, 255, 130, 255);
+	gx_ov_rect(0, 0, 3, LH, 70, 255, 130, 255);
+	gx_ov_rect(LW - 3, 0, 3, LH, 70, 255, 130, 255);
+
+	gx_ov_rect(0, 0, cl, ct, 255, 225, 40, 255);
+	gx_ov_rect(0, 0, ct, cl, 255, 225, 40, 255);
+	gx_ov_rect(LW - cl, 0, cl, ct, 255, 225, 40, 255);
+	gx_ov_rect(LW - ct, 0, ct, cl, 255, 225, 40, 255);
+	gx_ov_rect(0, LH - ct, cl, ct, 255, 225, 40, 255);
+	gx_ov_rect(0, LH - cl, ct, cl, 255, 225, 40, 255);
+	gx_ov_rect(LW - cl, LH - ct, cl, ct, 255, 225, 40, 255);
+	gx_ov_rect(LW - ct, LH - cl, ct, cl, 255, 225, 40, 255);
+
+	/* Centre lines: A with the d-pad moves the whole picture; the lines show where its middle sits. */
+	gx_ov_rect(0, cy + (float)(Overscan_y() * (int)LH / WII_FB_H) - 1, LW, 2, 255, 255, 255, 200);
+	gx_ov_rect(cx + (float)Overscan_x() - 1, 0, 2, LH, 255, 255, 255, 200);
+	gx_ov_rect(cx - tlen * 0.5f, cy - 40 * ys, tlen, tthk * ys, 30, 30, 40, 230);
+	gx_ov_rect(cx - tlen * 0.5f, cy - 40 * ys, tlen * hf, tthk * ys, 90, 200, 255, 255);
+	gx_ov_rect(cx - tthk * 0.5f, cy + 12 * ys, tthk, tlen * 0.55f * ys, 30, 30, 40, 230);
+	gx_ov_rect(cx - tthk * 0.5f, cy + 12 * ys, tthk, tlen * 0.55f * vf * ys, 255, 170, 90, 255);
+
+	gx_ov_rect(cx - 200 * ys, cy - 106 * ys, 400 * ys, 48 * ys, 0, 0, 0, 190);
+	gx_ov_text(gx, "Hold A to move screen", cx, cy - 100 * ys, 2 * ys);
+	gx_ov_text(gx, "Press B to exit", cx, cy - 80 * ys, 2 * ys);
+}
+
+/* HUD Margins: green lines where the HUD and prompts stop, over the HUD itself when a game is running. */
+static void gx_draw_hud_page(GxRenderer *gx, float LW, float LH, float ys)
+{
+	GMLCamera *cam = gx->base.runner && gx->base.runner->viewsEnabled ?
+			 Runner_getCameraById(gx->base.runner, gx->base.runner->views[0].cameraId) : NULL;
+	float sx = LW / (cam && cam->viewWidth > 0 ? cam->viewWidth : 320.0f), sy = 2 * ys;
+	float mx = (float)Overscan_marginH() * sx, my = (float)Overscan_marginV() * sy;
+	float cx = LW * 0.5f, cy = LH * 0.5f;
+	char line[64];
+
+	gx_ov_rect(0, 0, LW, LH, 0, 0, 0, 110);
+	gx_ov_rect(mx, 0, 2, LH, 70, 255, 130, 255);
+	gx_ov_rect(LW - mx - 2, 0, 2, LH, 70, 255, 130, 255);
+	gx_ov_rect(0, my, LW, 2, 70, 255, 130, 255);
+	gx_ov_rect(0, LH - my - 2, LW, 2, 70, 255, 130, 255);
+	if (gx->guiSurf >= 0 && (uint32_t)gx->guiSurf < gx->surfCount && gx->surfs[gx->guiSurf].exists)
+		gxDrawSurfaceColor(&gx->base, gx->guiSurf, 0, 0, 0, 0, 0.0f, 0.0f, sx, sy, 0.0f,
+				   0xFFFFFF, 0xFFFFFF, 0xFFFFFF, 0xFFFFFF, 1.0f);
+	gx_unbind_tex(gx);
+
+	snprintf(line, sizeof line, "Sides %d   Top and bottom %d", Overscan_marginH(), Overscan_marginV());
+	gx_ov_rect(cx - 260 * ys, cy - 36 * ys, 520 * ys, 68 * ys, 0, 0, 0, 190);
+	gx_ov_text(gx, "Use the d-pad to move the HUD", cx, cy - 30 * ys, 2 * ys);
+	gx_ov_text(gx, line, cx, cy - 10 * ys, 2 * ys);
+	gx_ov_text(gx, "Press B to exit", cx, cy + 10 * ys, 2 * ys);
+}
+
+static void gx_draw_overscan_overlay(GxRenderer *gx)
+{
+	const float LW = (float)WiiVideo_fbWidth();
+	const float LH = (float)WiiVideo_efbHeight();
+	float ys = LH / (float)WII_FB_H; /* the overlay keeps its on-screen size in 240p */
+
+	gx_ov_drawing = true;
+	gx_bind_host(gx);
+	gx_ortho(0, LH, 0, LW);
+	gx_unbind_tex(gx);
+	GX_SetColorUpdate(GX_TRUE);
+	GX_SetAlphaUpdate(GX_TRUE);
+	GX_SetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA, GX_LO_CLEAR);
+
+	if (Overscan_page() == OVERSCAN_HUD)
+		gx_draw_hud_page(gx, LW, LH, ys);
+	else
+		gx_draw_screen_page(gx, LW, LH, ys);
+
+	gx_unbind_tex(gx);
+	gx_apply_blend(gx);
+	GX_SetColorUpdate(gx->colorWriteR || gx->colorWriteG || gx->colorWriteB);
+	GX_SetAlphaUpdate(gx->colorWriteA);
+	gx_ov_drawing = false;
 }
 
 static void gxDrawSurface(Renderer *renderer, int32_t surfaceID, int32_t srcLeft, int32_t srcTop, int32_t srcWidth,

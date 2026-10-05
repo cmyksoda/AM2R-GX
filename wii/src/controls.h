@@ -1,6 +1,8 @@
 #ifndef AM2R_WII_CONTROLS_H
 #define AM2R_WII_CONTROLS_H
 
+#include "overscan.h"
+
 #include <stdbool.h>
 
 struct Runner;
@@ -10,5 +12,6 @@ struct VMContext;
 void WiiControls_hookScripts(struct VMContext *ctx); /* after the call cache is built */
 void WiiControls_frame(struct Runner *runner);       /* after the step, before the draw */
 bool WiiControls_menuBack(struct Runner *runner);    /* puts an options screen's cursor on its Back row */
+OverscanPage WiiControls_displayRow(struct Runner *runner); /* the adjust page the Display menu's cursor is on */
 
 #endif

@@ -8,10 +8,20 @@
 #define OVERSCAN_MAX_H 160
 #define OVERSCAN_MAX_V 120
 
+/* HUD margins in game pixels: what the HUD and prompts keep clear of each edge, the world staying put.
+ * The vertical default is the 240p Test Suite's green lines (22 and 457 of 480). */
+#define MARGIN_MAX_H 24
+#define MARGIN_MAX_V 20
+#define MARGIN_DEFAULT_V 11
+
+typedef enum { OVERSCAN_OFF, OVERSCAN_SCREEN, OVERSCAN_HUD } OverscanPage;
+
 void Overscan_load(void);
 
 bool Overscan_active(void);
-void Overscan_toggle(void);
+OverscanPage Overscan_page(void);
+void Overscan_open(OverscanPage page);
+void Overscan_close(void);
 
 int Overscan_h(void);
 int Overscan_v(void);
@@ -22,5 +32,9 @@ void Overscan_adjustH(int delta);
 void Overscan_adjustV(int delta);
 void Overscan_adjustY(int delta);
 void Overscan_adjustX(int delta);
+int Overscan_marginH(void);
+int Overscan_marginV(void);
+void Overscan_adjustMarginH(int delta);
+void Overscan_adjustMarginV(int delta);
 
 #endif

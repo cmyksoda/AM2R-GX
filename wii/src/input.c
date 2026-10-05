@@ -25,10 +25,6 @@
 #define HOME_HOLD_FRAMES 60
 /* The GameCube pad has no HOME: X + B + Start, the reset its own games use. */
 #define GC_QUIT (PAD_BUTTON_X | PAD_BUTTON_B | PAD_BUTTON_START)
-/* The display screen's chords: nothing a player holds in play. */
-#define CLASSIC_DISPLAY (WPAD_CLASSIC_BUTTON_PLUS | WPAD_CLASSIC_BUTTON_MINUS)
-#define GC_DISPLAY (PAD_BUTTON_START | PAD_TRIGGER_Z)
-#define CHORD_FRAMES 6
 
 static int home_held;
 static u32 polled_wheld; /* the last poll's reading, test hooks included */
@@ -215,37 +211,6 @@ static void poll_nunchuk(GamepadSlot *slot, u32 held, const expansion_t *exp, bo
 		set_btn(slot, SLOT_START, true);
 }
 
-/* 1 pauses when it is let go, so holding 1 + 2 for the overscan screen doesn't pause the game on the way. */
-static bool remote_one_released(u32 wheld, bool overscan)
-{
-	static bool armed, prev;
-	bool down = wheld & WPAD_BUTTON_1, fire = !down && prev && armed;
-
-	if (down && !prev)
-		armed = true;
-	if (!down || (wheld & WPAD_BUTTON_2) || overscan)
-		armed = false;
-	prev = down;
-	return fire;
-}
-
-/* Start reaches the game a few frames late, so its display chord never pauses on the way; a tap pauses on release. */
-static bool start_for_game(bool start, bool partner)
-{
-	static int frames;
-	static bool chord;
-	bool tap;
-
-	if (start) {
-		chord = chord || partner;
-		return !chord && ++frames > CHORD_FRAMES;
-	}
-	tap = !chord && frames > 0 && frames <= CHORD_FRAMES;
-	frames = 0;
-	chord = false;
-	return tap;
-}
-
 /* Held partway down: a long hold of a GameCube trigger to its click is tiring. */
 #define GC_TRIGGER_PRESS 96
 
@@ -272,19 +237,30 @@ static void poll_gcpad(GamepadSlot *slot, u16 held, const s8 *sticks, bool twoAi
 		set_btn(slot, twoAim ? SLOT_RT : SLOT_LB, true);
 }
 
-/* Opens with Plus + Minus (Classic), Start + Z (GameCube) or 1 + 2 (Remote + Nunchuk); a face button closes it.
- * While it is up Left/Right and Up/Down set the width and height, and the game gets neutral input. The shifts move
- * the picture instead: L (Nunchuk C) with Left/Right, R (Nunchuk Z) with Up/Down. Sticks count as the d-pad. */
-static void overscan_input(u32 wheld, u16 gcheld, const s8 *sticks, const expansion_t *exp)
+/* A tap moves one step; a hold repeats after a beat, every few frames. */
+static bool repeat_step(bool held, int *frames, int first, int every)
 {
-	static bool prev_combo;
-	static bool prev_face;
-	static bool guard;
-	static unsigned rate;
+	if (!held) {
+		*frames = 0;
+		return false;
+	}
+	++*frames;
+	return *frames == 1 || (*frames > first && (*frames - first) % every == 0);
+}
+
+/* The Display menu's Resize/Move Screen and HUD Margins rows open these pages with A or B (the menus' OK is the bottom
+ * button, B on a Classic Controller). The d-pad (or a stick) sizes the picture or sets the margins, A held moves the
+ * picture, and B closes. True while the game must see neutral input: the page is up, or the B that closed it is
+ * still down and would also leave the menu underneath. */
+static bool overscan_input(u32 wheld, u16 gcheld, const s8 *sticks, const expansion_t *exp, OverscanPage row)
+{
+	static bool opening, closing, prev_b, prev_ok;
+	static int rep[4];
 	float sx = gc_axis(sticks[0]), sy = -gc_axis(sticks[1]), wx = 0.0f, wy = 0.0f;
 	/* the Nunchuk's Z and C share their bits with the Classic's Up and Left */
-	u32 classic = exp->type == WPAD_EXP_CLASSIC ? wheld : 0, nunchuk = exp->type == WPAD_EXP_NUNCHUK ? wheld : 0;
-	bool up, down, left, right, lheld, rheld, face, combo;
+	u32 classic = exp->type == WPAD_EXP_CLASSIC ? wheld : 0;
+	bool up, down, left, right, a, b, face, screen;
+	int first, every, step;
 
 	if (exp->type == WPAD_EXP_CLASSIC)
 		joy_xy(&exp->classic.ljs, &wx, &wy);
@@ -298,41 +274,44 @@ static void overscan_input(u32 wheld, u16 gcheld, const s8 *sticks, const expans
 	       wx < -STICK_DIGITAL || sx < -STICK_DIGITAL;
 	right = (classic & WPAD_CLASSIC_BUTTON_RIGHT) || (wheld & WPAD_BUTTON_RIGHT) || (gcheld & PAD_BUTTON_RIGHT) ||
 		wx > STICK_DIGITAL || sx > STICK_DIGITAL;
-	lheld = (classic & (WPAD_CLASSIC_BUTTON_FULL_L | WPAD_CLASSIC_BUTTON_ZL)) || (gcheld & PAD_TRIGGER_L) ||
-		PAD_TriggerL(0) > 64 || (nunchuk & WPAD_NUNCHUK_BUTTON_C);
-	rheld = (classic & (WPAD_CLASSIC_BUTTON_FULL_R | WPAD_CLASSIC_BUTTON_ZR)) || (gcheld & PAD_TRIGGER_R) ||
-		PAD_TriggerR(0) > 64 || (nunchuk & WPAD_NUNCHUK_BUTTON_Z);
-	face = (classic & (WPAD_CLASSIC_BUTTON_A | WPAD_CLASSIC_BUTTON_B |
-			   WPAD_CLASSIC_BUTTON_X | WPAD_CLASSIC_BUTTON_Y)) ||
-	       (wheld & (WPAD_BUTTON_A | WPAD_BUTTON_B | WPAD_BUTTON_1 | WPAD_BUTTON_2)) ||
-	       (gcheld & (PAD_BUTTON_A | PAD_BUTTON_B | PAD_BUTTON_X | PAD_BUTTON_Y));
-	combo = (classic & CLASSIC_DISPLAY) == CLASSIC_DISPLAY || (gcheld & GC_DISPLAY) == GC_DISPLAY ||
-		(wheld & (WPAD_BUTTON_1 | WPAD_BUTTON_2)) == (WPAD_BUTTON_1 | WPAD_BUTTON_2);
+	a = (classic & WPAD_CLASSIC_BUTTON_A) || (wheld & WPAD_BUTTON_A) || (gcheld & PAD_BUTTON_A);
+	b = (classic & WPAD_CLASSIC_BUTTON_B) || (wheld & WPAD_BUTTON_B) || (gcheld & PAD_BUTTON_B);
+	face = a || b || (classic & (WPAD_CLASSIC_BUTTON_X | WPAD_CLASSIC_BUTTON_Y)) ||
+	       (wheld & (WPAD_BUTTON_1 | WPAD_BUTTON_2)) || (gcheld & (PAD_BUTTON_X | PAD_BUTTON_Y));
 
 	if (!Overscan_active()) {
-		if (combo && !prev_combo) {
-			Overscan_toggle();
-			guard = true; /* ignore the opening buttons until they're released */
+		closing = closing && b;
+		if (!closing && row != OVERSCAN_OFF && (a || b) && !prev_ok) {
+			Overscan_open(row);
+			opening = true; /* the button that opened the page is still down on its first frames */
 		}
-	} else if (guard) {
-		if (!face && !down)
-			guard = false;
-	} else if (face && !prev_face) {
-		Overscan_toggle();
+		prev_ok = a || b;
+		prev_b = b;
+		return closing || Overscan_active();
 	}
-	prev_combo = combo;
-	prev_face = face;
-
-	if (!Overscan_active() || guard || (++rate & 1))
-		return;
-	if (left)
-		(lheld ? Overscan_adjustX : Overscan_adjustH)(-1);
-	if (right)
-		(lheld ? Overscan_adjustX : Overscan_adjustH)(1);
-	if (up)
-		(rheld ? Overscan_adjustY : Overscan_adjustV)(-1);
-	if (down)
-		(rheld ? Overscan_adjustY : Overscan_adjustV)(1);
+	prev_ok = a || b;
+	if (opening) {
+		opening = face;
+		prev_b = b;
+		return true;
+	}
+	if (b && !prev_b) {
+		Overscan_close();
+		closing = true;
+		prev_b = b;
+		return true;
+	}
+	prev_b = b;
+	screen = Overscan_page() == OVERSCAN_SCREEN;
+	first = screen ? 10 : 15;
+	every = screen ? 2 : 5;
+	step = repeat_step(right, &rep[0], first, every) - repeat_step(left, &rep[1], first, every);
+	if (step)
+		(!screen ? Overscan_adjustMarginH : a ? Overscan_adjustX : Overscan_adjustH)(step);
+	step = repeat_step(down, &rep[2], first, every) - repeat_step(up, &rep[3], first, every);
+	if (step)
+		(!screen ? Overscan_adjustMarginV : a ? Overscan_adjustY : Overscan_adjustV)(step);
+	return true;
 }
 
 /* AM2R's gamepad bindings as it ships them, then the Wii layout. A config still holding the
@@ -568,7 +547,8 @@ void WiiInput_poll(Runner *runner)
 	u16 gcheld;
 	s8 sticks[3];
 	int i;
-	bool overscan, pause, classic, start;
+	bool neutral, pause, classic, start;
+	OverscanPage row;
 	expansion_t exp;
 
 	if (!runner || !runner->gamepads)
@@ -607,14 +587,13 @@ void WiiInput_poll(Runner *runner)
 		logInfo("menu buttons: %s\n", menus_swapped ? "Nunchuk (A = OK)" : "real");
 	}
 	drive_rumble();
-	overscan = Overscan_active();
-	overscan_input(wheld, gcheld, sticks, &exp);
-	pause = remote_one_released(wheld, overscan || Overscan_active());
+	row = Overscan_active() ? OVERSCAN_OFF : WiiControls_displayRow(runner);
+	neutral = overscan_input(wheld, gcheld, sticks, &exp, row);
+	pause = wheld & WPAD_BUTTON_1;
 	classic = exp.type == WPAD_EXP_CLASSIC;
-	start = start_for_game(classic ? wheld & WPAD_CLASSIC_BUTTON_PLUS : gcheld & PAD_BUTTON_START,
-			       classic ? wheld & WPAD_CLASSIC_BUTTON_MINUS : gcheld & PAD_TRIGGER_Z);
-	if (Overscan_active())
-		; /* overlay owns input; leave the slot neutral */
+	start = classic ? wheld & WPAD_CLASSIC_BUTTON_PLUS : gcheld & PAD_BUTTON_START;
+	if (neutral)
+		;
 	else if (classic)
 		poll_classic(slot, wheld & ~(u32)WPAD_CLASSIC_BUTTON_PLUS, &exp);
 	else if (gcheld || sticks[0] || sticks[1] || gc_axis(sticks[2]) != 0.0f || PAD_TriggerL(0) > GC_TRIGGER_PRESS ||
@@ -622,8 +601,14 @@ void WiiInput_poll(Runner *runner)
 		poll_gcpad(slot, gcheld & ~PAD_BUTTON_START, sticks, two_button_aim(runner));
 	else
 		poll_nunchuk(slot, wheld, &exp, two_button_aim(runner), pause);
-	if (start && !Overscan_active())
+	if (start && !neutral)
 		set_btn(slot, SLOT_START, true);
+	/* Left/Right on the two adjust rows would still flip the window settings the rows stand in for. */
+	if (row != OVERSCAN_OFF) {
+		slot->buttonDown[SLOT_PADL] = slot->buttonDown[SLOT_PADR] = false;
+		slot->buttonValue[SLOT_PADL] = slot->buttonValue[SLOT_PADR] = 0.0f;
+		slot->axisValue[0] = 0.0f;
+	}
 
 	for (i = 0; i < GP_BUTTON_COUNT; i++) {
 		bool was = slot->buttonDownPrev[i];

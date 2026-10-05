@@ -440,22 +440,48 @@ static void hide_vibration_row(Runner *runner, Instance *menu)
 	logInfo("controls: Vibration hidden (no pad with a motor in use)\n");
 }
 
-/* Fullscreen and Window Size mean nothing on a TV (the game leaves both out on Android the same way); Controller
- * Tips is pinned to Nintendo Pro, the one setting that draws Wii buttons. */
-static void hide_pc_rows(Runner *runner, Instance *menu)
+/* Fullscreen and Window Size mean nothing on a TV, so their rows become Resize/Move Screen and HUD Margins (labels in
+ * get_text, opened from input.c); Controller Tips is pinned to Nintendo Pro, the one setting that draws Wii buttons. */
+static void fit_display_rows(Runner *runner, Instance *menu)
 {
-	int32_t full = (int32_t)var_num(runner, menu, "opFullscreen", INSTANCE_SELF, -1);
 	int32_t scale = (int32_t)var_num(runner, menu, "opScale", INSTANCE_SELF, -1);
 	int32_t tips = (int32_t)var_num(runner, menu, "opButtonType", INSTANCE_SELF, -1);
 
 	if (tips > scale && hide_row(runner, menu, "canEdit", "SPACER", tips))
 		logInfo("controls: Controller Tips hidden\n");
-	if (full != 0 || scale != 1)
+}
+
+/* A value beside the two adjust rows would only show the window settings they stand in for. */
+static void blank_value(Runner *runner, Instance *menu, const char *rowVar)
+{
+	Instance *row = op_row(runner, menu, (int32_t)var_num(runner, menu, rowVar, INSTANCE_SELF, -1));
+	int32_t optext = var_id(runner, "optext", INSTANCE_SELF);
+	RValue v, empty;
+
+	if (!row || optext < 0)
 		return;
-	if (!hide_row(runner, menu, "canEdit", "SPACER", full) || !hide_row(runner, menu, "canEdit", "SPACER", scale))
+	v = Instance_getSelfVar(row, optext);
+	if (v.type == RVALUE_STRING && v.string && !v.string[0])
 		return;
-	cursor_to(runner, menu, scale + 1);
-	logInfo("controls: Fullscreen and Window Size hidden\n");
+	empty = RValue_makeOwnedString(safeStrdup(""));
+	Instance_setSelfVar(row, optext, empty);
+	RValue_free(&empty);
+}
+
+OverscanPage WiiControls_displayRow(Runner *runner)
+{
+	int32_t curropt, row;
+	Instance *menu;
+
+	if (!runner || !runner->vmContext || (curropt = var_id(runner, "curropt", INSTANCE_GLOBAL)) < 0 ||
+	    !(menu = first_instance(runner, "oOptionsDisplay")) || var_num(runner, menu, "active", INSTANCE_SELF, 0) == 0)
+		return OVERSCAN_OFF;
+	row = RValue_toInt32(Instance_getSelfVar(runner->vmContext->globalScopeInstance, curropt));
+	if (row == (int32_t)var_num(runner, menu, "opFullscreen", INSTANCE_SELF, -1))
+		return OVERSCAN_SCREEN;
+	if (row == (int32_t)var_num(runner, menu, "opScale", INSTANCE_SELF, -1))
+		return OVERSCAN_HUD;
+	return OVERSCAN_OFF;
 }
 
 /* "Joypad Configuration": the title the game already has, in every language, for its other pad screen. */
@@ -531,9 +557,13 @@ void WiiControls_frame(Runner *runner)
 		if (hide_row(runner, menu, "canedit", "sep", ROW_KEYBOARD))
 			logInfo("controls: Keyboard Settings hidden\n");
 	}
-	if ((menu = first_instance(runner, "oOptionsDisplay")) && menu->instanceId != displayMenu) {
-		displayMenu = menu->instanceId;
-		hide_pc_rows(runner, menu);
+	if ((menu = first_instance(runner, "oOptionsDisplay"))) {
+		if (menu->instanceId != displayMenu) {
+			displayMenu = menu->instanceId;
+			fit_display_rows(runner, menu);
+		}
+		blank_value(runner, menu, "opFullscreen");
+		blank_value(runner, menu, "opScale");
 	}
 	if ((menu = first_instance(runner, "oOptionsXJoypad")) && menu->instanceId != joypadMenu) {
 		joypadMenu = menu->instanceId;

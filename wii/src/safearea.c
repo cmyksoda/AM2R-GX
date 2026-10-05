@@ -1,6 +1,7 @@
 #include "safearea.h"
 
 #include "am2r.h"
+#include "overscan.h"
 #include "instance.h"
 #include "runner.h"
 #include "rvalue.h"
@@ -16,7 +17,8 @@
 #define NOTIFY_HIDDEN 30 /* oNotification's offset when it is fully slid out */
 #define TITLE_MID 120 /* the title's version line is above, its links below */
 #define SCORE_BOTTOM 200 /* the score screen's closing lines sit on row 220 */
-#define SAFE_BOTTOM (240 - WII_SAFE_ROWS)
+#define SAFE_BOTTOM (240 - WiiSafe_rows())
+#define PROMPT_EDGE 8 /* prompts this close to a side are corner prompts (AM2R puts them at 2 and 318) */
 
 enum { SCR_1BUTTON, SCR_2BUTTONS, SCR_COUNT };
 static const char *const scriptNames[SCR_COUNT] = { "draw_txt_1button", "draw_txt_2buttons" };
@@ -30,6 +32,12 @@ static Instance *first_of(Runner *runner, int32_t obj)
 	    !arrlen(list))
 		return NULL;
 	return list[0];
+}
+
+/* Game rows the HUD and prompts keep clear of the top and bottom edges: the player's HUD margin. */
+int WiiSafe_rows(void)
+{
+	return Overscan_marginV();
 }
 
 /* The surface oControl paints the HUD into every step (1.5.5), or -1. */
@@ -71,7 +79,7 @@ float WiiSafe_lift(Runner *runner)
 	}
 	if (inst->objectIndex == popup || inst->objectIndex == scanning || inst->objectIndex == scanMonster ||
 	    inst->objectIndex == intro)
-		return -WII_SAFE_ROWS;
+		return -WiiSafe_rows();
 	if (inst->objectIndex != notify || offset < 0)
 		return 0.0f;
 	off = (float)RValue_toReal(Instance_getSelfVar(inst, offset));
@@ -79,7 +87,20 @@ float WiiSafe_lift(Runner *runner)
 		off = 0.0f;
 	if (off > NOTIFY_HIDDEN)
 		off = NOTIFY_HIDDEN;
-	return -WII_SAFE_ROWS * (NOTIFY_HIDDEN - off) / NOTIFY_HIDDEN;
+	return -WiiSafe_rows() * (NOTIFY_HIDDEN - off) / NOTIFY_HIDDEN;
+}
+
+/* How far right to draw what the current instance draws: the notification box sits in the bottom-left corner. */
+float WiiSafe_shift(Runner *runner)
+{
+	static int32_t notify = -2;
+	Instance *inst = runner && runner->vmContext ? runner->vmContext->currentInstance : NULL;
+
+	if (!inst)
+		return 0.0f;
+	if (notify == -2)
+		notify = Wii_objectIndex(runner, "oNotification");
+	return inst->objectIndex == notify ? (float)Overscan_marginH() : 0.0f;
 }
 
 /* The first screen is one picture whose legal lines reach row 236; it rises with its caption (oIntroController). */
@@ -92,7 +113,7 @@ void WiiSafe_frame(Runner *runner)
 	if (controllerRoom == -2)
 		controllerRoom = Wii_roomIndex(runner, "rm_controller");
 	if (runner->currentRoomIndex == controllerRoom)
-		runner->backgrounds[0].y = -WII_SAFE_ROWS;
+		runner->backgrounds[0].y = (float)-WiiSafe_rows();
 }
 
 static GMLCamera *view0(Runner *runner)
@@ -112,6 +133,19 @@ static float view_mid(Runner *runner)
 	GMLCamera *cam = view0(runner);
 
 	return cam ? cam->viewX + cam->viewWidth / 2.0f : 160.0f;
+}
+
+/* A corner prompt's x moved in by the side margin; a centred one stays. */
+static float prompt_x(Runner *runner, float x)
+{
+	GMLCamera *cam = view0(runner);
+	float left = cam ? cam->viewX : 0.0f, width = cam ? cam->viewWidth : 320.0f;
+
+	if (x - left < PROMPT_EDGE)
+		return x + (float)Overscan_marginH();
+	if (left + width - x < PROMPT_EDGE)
+		return x - (float)Overscan_marginH();
+	return x;
 }
 
 /* Where two prompt rows would not both fit: the upper row's item goes to the middle and the bottom row's
@@ -149,8 +183,9 @@ static RValue draw_prompt(VMContext *ctx, int which, RValue *args, int32_t argCo
 			args[3] = RValue_makeReal(0.0);
 			row_seen(ctx, y);
 		} else if (rel >= ROW_LOWER) {
-			args[1] = RValue_makeReal(row_open(ctx) ? row.y : y - WII_SAFE_ROWS);
+			args[1] = RValue_makeReal(row_open(ctx) ? row.y : y - WiiSafe_rows());
 		}
+		args[0] = RValue_makeReal(prompt_x(ctx->runner, (float)RValue_toReal(args[0])));
 	}
 	return VM_callCodeIndex(ctx, scriptCode[which], args, argCount);
 }
@@ -196,7 +231,7 @@ static RValue wii_draw_rectangle(VMContext *ctx, RValue *args, int32_t argCount)
 	if (argCount != 5 || !in_object(ctx, optionsFg))
 		return engineDrawRectangle(ctx, args, argCount);
 	memcpy(lifted, args, sizeof lifted);
-	lifted[1] = RValue_makeReal(RValue_toReal(args[1]) - WII_SAFE_ROWS);
+	lifted[1] = RValue_makeReal(RValue_toReal(args[1]) - WiiSafe_rows());
 	return engineDrawRectangle(ctx, lifted, 5);
 }
 
@@ -230,7 +265,7 @@ static RValue wii_draw_text(VMContext *ctx, RValue *args, int32_t argCount)
 	if (argCount == 3 && (in_object(ctx, optionsFg) ||
 			      (in_object(ctx, scoreScreen) && RValue_toReal(args[1]) >= SCORE_BOTTOM))) {
 		memcpy(moved, args, sizeof moved);
-		moved[1] = RValue_makeReal(RValue_toReal(args[1]) - WII_SAFE_ROWS);
+		moved[1] = RValue_makeReal(RValue_toReal(args[1]) - WiiSafe_rows());
 		return engineDrawText(ctx, moved, 3);
 	}
 	if (!arrow.held || argCount != 3 || !in_subscreen_fg(ctx))
@@ -268,17 +303,17 @@ static RValue wii_draw_background_ext(VMContext *ctx, RValue *args, int32_t argC
 		return engineDrawBackgroundExt(ctx, args, argCount);
 	memcpy(fill, args, sizeof fill);
 	if (bg == bgVersion) {
-		fill[4] = RValue_makeReal(RValue_toReal(args[4]) + (double)WII_SAFE_ROWS / ver->boundingHeight);
+		fill[4] = RValue_makeReal(RValue_toReal(args[4]) + (double)WiiSafe_rows() / ver->boundingHeight);
 		return engineDrawBackgroundExt(ctx, fill, 8);
 	}
-	y = RValue_toReal(args[2]) - WII_SAFE_ROWS;
+	y = RValue_toReal(args[2]) - WiiSafe_rows();
 	h = url->boundingHeight * RValue_toReal(args[4]);
 	fill[2] = RValue_makeReal(y);
 	out = engineDrawBackgroundExt(ctx, fill, 8);
 	fill[0] = RValue_makeInt32(bgVersion);
 	fill[2] = RValue_makeReal(y + h);
 	fill[3] = RValue_makeReal(url->boundingWidth * RValue_toReal(args[3]) / ver->boundingWidth);
-	fill[4] = RValue_makeReal((double)WII_SAFE_ROWS / ver->boundingHeight);
+	fill[4] = RValue_makeReal((double)WiiSafe_rows() / ver->boundingHeight);
 	engineDrawBackgroundExt(ctx, fill, 8);
 	return out;
 }
@@ -292,7 +327,7 @@ static RValue wii_draw_text_colour(VMContext *ctx, RValue *args, int32_t argCoun
 		return engineDrawTextColour(ctx, args, argCount);
 	memcpy(moved, args, sizeof moved);
 	y = RValue_toReal(args[1]);
-	moved[1] = RValue_makeReal(y < TITLE_MID ? y + WII_SAFE_ROWS : y - WII_SAFE_ROWS);
+	moved[1] = RValue_makeReal(y < TITLE_MID ? y + WiiSafe_rows() : y - WiiSafe_rows());
 	return engineDrawTextColour(ctx, moved, 8);
 }
 
@@ -303,8 +338,8 @@ static RValue wii_draw_rectangle_colour(VMContext *ctx, RValue *args, int32_t ar
 	if (argCount != 9 || !in_object(ctx, titleBg))
 		return engineDrawRectangleColour(ctx, args, argCount);
 	memcpy(lifted, args, sizeof lifted);
-	lifted[1] = RValue_makeReal(RValue_toReal(args[1]) - WII_SAFE_ROWS);
-	lifted[3] = RValue_makeReal(RValue_toReal(args[3]) - WII_SAFE_ROWS);
+	lifted[1] = RValue_makeReal(RValue_toReal(args[1]) - WiiSafe_rows());
+	lifted[3] = RValue_makeReal(RValue_toReal(args[3]) - WiiSafe_rows());
 	return engineDrawRectangleColour(ctx, lifted, 9);
 }
 
