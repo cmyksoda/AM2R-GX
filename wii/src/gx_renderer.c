@@ -3784,7 +3784,7 @@ static void gx_draw_screen_page(GxRenderer *gx, float LW, float LH, float ys)
 	gx_ov_rect(cx - tthk * 0.5f, cy + 12 * ys, tthk, tlen * 0.55f * ys, 30, 30, 40, 230);
 	gx_ov_rect(cx - tthk * 0.5f, cy + 12 * ys, tthk, tlen * 0.55f * vf * ys, 255, 170, 90, 255);
 
-	gx_ov_rect(cx - 200 * ys, cy - 106 * ys, 400 * ys, 48 * ys, 0, 0, 0, 190);
+	gx_ov_rect(cx - 200 * ys, cy - 100 * ys, 400 * ys, 48 * ys, 0, 0, 0, 190);
 	gx_ov_text(gx, "Hold A to move screen", cx, cy - 100 * ys, 2 * ys);
 	gx_ov_text(gx, "Press B to exit", cx, cy - 80 * ys, 2 * ys);
 }
@@ -3803,7 +3803,7 @@ static void gx_draw_hud_page(GxRenderer *gx, float LW, float LH, float ys)
 	gx_ov_rect(0, my, LW, 2, 70, 255, 130, 255);
 	gx_ov_rect(0, LH - my - 2, LW, 2, 70, 255, 130, 255);
 
-	gx_ov_rect(cx - 260 * ys, cy - 26 * ys, 520 * ys, 48 * ys, 0, 0, 0, 190);
+	gx_ov_rect(cx - 260 * ys, cy - 20 * ys, 520 * ys, 48 * ys, 0, 0, 0, 190);
 	gx_ov_text(gx, "Use the d-pad to move the HUD", cx, cy - 20 * ys, 2 * ys);
 	gx_ov_text(gx, "Press B to exit", cx, cy, 2 * ys);
 }
