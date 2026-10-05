@@ -40,23 +40,62 @@ int WiiSafe_rows(void)
 	return Overscan_marginV();
 }
 
-/* The surface oControl paints the HUD into every step (1.5.5), or -1. */
-int32_t WiiSafe_guiSurface(Runner *runner)
+static int32_t control_surface(Runner *runner, const char *name, int32_t *var)
 {
-	static int32_t obj = -2, var = -2;
+	static int32_t obj = -2;
 	Instance *control;
 	RValue v;
 
 	if (!runner)
 		return -1;
-	if (obj == -2) {
+	if (obj == -2)
 		obj = Wii_objectIndex(runner, "oControl");
-		var = Wii_varId(runner, "gui_surface", INSTANCE_SELF);
-	}
-	if (var < 0 || !(control = first_of(runner, obj)))
+	if (*var == -2)
+		*var = Wii_varId(runner, name, INSTANCE_SELF);
+	if (*var < 0 || !(control = first_of(runner, obj)))
 		return -1;
-	v = Instance_getSelfVar(control, var);
+	v = Instance_getSelfVar(control, *var);
 	return v.type == RVALUE_UNDEFINED ? -1 : RValue_toInt32(v);
+}
+
+/* The surface oControl paints the HUD into every step (1.5.5), or -1. */
+int32_t WiiSafe_guiSurface(Runner *runner)
+{
+	static int32_t var = -2;
+
+	return control_surface(runner, "gui_surface", &var);
+}
+
+/* The game view oControl froze when the player paused, without the HUD, or -1. */
+int32_t WiiSafe_screenSurface(Runner *runner)
+{
+	static int32_t var = -2;
+
+	return control_surface(runner, "screen_surface", &var);
+}
+
+/* A game is being played: AM2R paints the HUD layer only then. */
+bool WiiSafe_ingame(Runner *runner)
+{
+	static int32_t var = -2;
+
+	if (!runner || !runner->vmContext)
+		return false;
+	if (var == -2)
+		var = Wii_varId(runner, "ingame", INSTANCE_GLOBAL);
+	return var >= 0 && RValue_toReal(Instance_getSelfVar(runner->vmContext->globalScopeInstance, var)) == 1;
+}
+
+/* The pause screen, where screen_surface holds the game the player left. */
+bool WiiSafe_paused(Runner *runner)
+{
+	static int32_t subscreen = -2;
+
+	if (!runner)
+		return false;
+	if (subscreen == -2)
+		subscreen = Wii_roomIndex(runner, "rm_subscreen");
+	return subscreen >= 0 && runner->currentRoomIndex == subscreen;
 }
 
 /* How far up to draw what the current instance draws. The notification box lifts as it slides in, so a box that is

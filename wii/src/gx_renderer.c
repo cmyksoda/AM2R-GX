@@ -3125,6 +3125,11 @@ static void gxClearScreen(Renderer *renderer, uint32_t color, float alpha)
 	u8 a = unorm(alpha);
 	u8 r = (u8)BGR_R(color), g = (u8)BGR_G(color), b = (u8)BGR_B(color);
 
+	/* Out of play AM2R still wipes the HUD layer every step, though it only shows it in play: keeping the last
+	 * picture lets the pause screen's adjust pages show the real HUD. */
+	if (gx->guiSurf >= 0 && gx->currentTarget == gx->guiSurf && !WiiSafe_ingame(renderer->runner))
+		return;
+
 	if (gx->currentTarget >= 0 && (uint32_t)gx->currentTarget < gx->surfCount &&
 	    gx->surfs[gx->currentTarget].exists) {
 		w = (float)gx->surfs[gx->currentTarget].w;
@@ -3708,6 +3713,37 @@ static void gx_ov_text(GxRenderer *gx, const char *text, float x, float y, float
 	r->drawValign = oldValign;
 }
 
+/* Under the adjust pages in the pause screen: the game the player left (AM2R froze it without the HUD) and the HUD
+ * drawn where the margins put it. Anywhere else the frozen picture is stale or missing. */
+static bool gx_draw_preview(GxRenderer *gx, float LW, float LH, float sx, float sy, float viewW)
+{
+	Runner *runner = gx->base.runner;
+	int32_t frozen = WiiSafe_screenSurface(runner);
+
+	if (!WiiSafe_paused(runner) || frozen < 0 || (uint32_t)frozen >= gx->surfCount || !gx->surfs[frozen].exists)
+		return false;
+	gx_ov_rect(0, 0, LW, LH, 0, 0, 0, 255);
+	gxDrawSurfaceColor(&gx->base, frozen, 0, 0, (int32_t)viewW, 240, 0.0f, 0.0f, sx, sy, 0.0f,
+			   0xFFFFFF, 0xFFFFFF, 0xFFFFFF, 0xFFFFFF, 1.0f);
+	if (gx->guiSurf >= 0 && (uint32_t)gx->guiSurf < gx->surfCount && gx->surfs[gx->guiSurf].exists)
+		gxDrawSurfaceColor(&gx->base, gx->guiSurf, 0, 0, 0, 0, 0.0f, 0.0f, sx, sy, 0.0f,
+				   0xFFFFFF, 0xFFFFFF, 0xFFFFFF, 0xFFFFFF, 1.0f);
+	gx_unbind_tex(gx);
+	return true;
+}
+
+/* The game's width in game pixels (320, or 426 in widescreen): AM2R sizes the HUD layer to it, while the pause
+ * screen's own camera can be narrower. */
+static float gx_view_width(GxRenderer *gx)
+{
+	Runner *runner = gx->base.runner;
+	GMLCamera *cam = runner && runner->viewsEnabled ? Runner_getCameraById(runner, runner->views[0].cameraId) : NULL;
+
+	if (gx->guiSurf >= 0 && (uint32_t)gx->guiSurf < gx->surfCount && gx->surfs[gx->guiSurf].exists)
+		return (float)gx->surfs[gx->guiSurf].w;
+	return cam && cam->viewWidth > 0 ? cam->viewWidth : 320.0f;
+}
+
 /* Resize/Move Screen: a grid and a bright border to line up against the TV's edge, plus the width and height
  * sliders. Drawn in the inset viewport. */
 static void gx_draw_screen_page(GxRenderer *gx, float LW, float LH, float ys)
@@ -3719,6 +3755,7 @@ static void gx_draw_screen_page(GxRenderer *gx, float LW, float LH, float ys)
 	float cl = 44.0f, ct = 7.0f;
 	int i;
 
+	gx_draw_preview(gx, LW, LH, LW / gx_view_width(gx), 2 * ys, gx_view_width(gx));
 	gx_ov_rect(0, 0, LW, LH, 0, 0, 0, 160);
 	for (i = 0; i <= (int)LW; i += 32)
 		gx_ov_rect((float)i, 0, 1, LH, 90, 200, 220, 110);
@@ -3752,31 +3789,23 @@ static void gx_draw_screen_page(GxRenderer *gx, float LW, float LH, float ys)
 	gx_ov_text(gx, "Press B to exit", cx, cy - 80 * ys, 2 * ys);
 }
 
-/* HUD Margins: green lines where the HUD and prompts stop, over the HUD itself when a game is running. */
+/* HUD Margins: green lines where the HUD and prompts stop, over the paused game and its HUD when there is one. */
 static void gx_draw_hud_page(GxRenderer *gx, float LW, float LH, float ys)
 {
-	GMLCamera *cam = gx->base.runner && gx->base.runner->viewsEnabled ?
-			 Runner_getCameraById(gx->base.runner, gx->base.runner->views[0].cameraId) : NULL;
-	float sx = LW / (cam && cam->viewWidth > 0 ? cam->viewWidth : 320.0f), sy = 2 * ys;
+	float viewW = gx_view_width(gx), sx = LW / viewW, sy = 2 * ys;
 	float mx = (float)Overscan_marginH() * sx, my = (float)Overscan_marginV() * sy;
 	float cx = LW * 0.5f, cy = LH * 0.5f;
-	char line[64];
 
-	gx_ov_rect(0, 0, LW, LH, 0, 0, 0, 110);
+	if (!gx_draw_preview(gx, LW, LH, sx, sy, viewW))
+		gx_ov_rect(0, 0, LW, LH, 0, 0, 0, 110);
 	gx_ov_rect(mx, 0, 2, LH, 70, 255, 130, 255);
 	gx_ov_rect(LW - mx - 2, 0, 2, LH, 70, 255, 130, 255);
 	gx_ov_rect(0, my, LW, 2, 70, 255, 130, 255);
 	gx_ov_rect(0, LH - my - 2, LW, 2, 70, 255, 130, 255);
-	if (gx->guiSurf >= 0 && (uint32_t)gx->guiSurf < gx->surfCount && gx->surfs[gx->guiSurf].exists)
-		gxDrawSurfaceColor(&gx->base, gx->guiSurf, 0, 0, 0, 0, 0.0f, 0.0f, sx, sy, 0.0f,
-				   0xFFFFFF, 0xFFFFFF, 0xFFFFFF, 0xFFFFFF, 1.0f);
-	gx_unbind_tex(gx);
 
-	snprintf(line, sizeof line, "Sides %d   Top and bottom %d", Overscan_marginH(), Overscan_marginV());
-	gx_ov_rect(cx - 260 * ys, cy - 36 * ys, 520 * ys, 68 * ys, 0, 0, 0, 190);
-	gx_ov_text(gx, "Use the d-pad to move the HUD", cx, cy - 30 * ys, 2 * ys);
-	gx_ov_text(gx, line, cx, cy - 10 * ys, 2 * ys);
-	gx_ov_text(gx, "Press B to exit", cx, cy + 10 * ys, 2 * ys);
+	gx_ov_rect(cx - 260 * ys, cy - 26 * ys, 520 * ys, 48 * ys, 0, 0, 0, 190);
+	gx_ov_text(gx, "Use the d-pad to move the HUD", cx, cy - 20 * ys, 2 * ys);
+	gx_ov_text(gx, "Press B to exit", cx, cy, 2 * ys);
 }
 
 static void gx_draw_overscan_overlay(GxRenderer *gx)
