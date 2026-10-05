@@ -329,29 +329,34 @@ static const TexturePageItem *bg_item(DataWin *dw, int32_t bg)
 	return t >= 0 ? &dw->tpag.items[t] : NULL;
 }
 
-/* The title's corner lines: the version moves down and the links up, and their black boxes grow back out to the
- * screen's corners instead of floating. */
+/* The title's corner lines: the version moves down and right, the links up and left, and their black boxes grow
+ * back out to the screen's corners instead of floating. */
 static RValue wii_draw_background_ext(VMContext *ctx, RValue *args, int32_t argCount)
 {
 	const TexturePageItem *ver = bg_item(ctx->dataWin, bgVersion), *url = bg_item(ctx->dataWin, bgUrl);
 	int32_t bg = argCount == 8 ? RValue_toInt32(args[0]) : -1;
-	double y, h;
+	double x, y, h, w, side = Overscan_marginH();
 	RValue fill[8], out;
 
 	if (!in_object(ctx, titleBg) || !ver || !url || (bg != bgVersion && bg != bgUrl))
 		return engineDrawBackgroundExt(ctx, args, argCount);
 	memcpy(fill, args, sizeof fill);
 	if (bg == bgVersion) {
+		fill[3] = RValue_makeReal(RValue_toReal(args[3]) + side / ver->boundingWidth);
 		fill[4] = RValue_makeReal(RValue_toReal(args[4]) + (double)WiiSafe_rows() / ver->boundingHeight);
 		return engineDrawBackgroundExt(ctx, fill, 8);
 	}
+	x = RValue_toReal(args[1]) - side;
 	y = RValue_toReal(args[2]) - WiiSafe_rows();
+	w = url->boundingWidth * RValue_toReal(args[3]) + side;
 	h = url->boundingHeight * RValue_toReal(args[4]);
+	fill[1] = RValue_makeReal(x);
 	fill[2] = RValue_makeReal(y);
+	fill[3] = RValue_makeReal(w / url->boundingWidth);
 	out = engineDrawBackgroundExt(ctx, fill, 8);
 	fill[0] = RValue_makeInt32(bgVersion);
 	fill[2] = RValue_makeReal(y + h);
-	fill[3] = RValue_makeReal(url->boundingWidth * RValue_toReal(args[3]) / ver->boundingWidth);
+	fill[3] = RValue_makeReal(w / ver->boundingWidth);
 	fill[4] = RValue_makeReal((double)WiiSafe_rows() / ver->boundingHeight);
 	engineDrawBackgroundExt(ctx, fill, 8);
 	return out;
@@ -360,16 +365,19 @@ static RValue wii_draw_background_ext(VMContext *ctx, RValue *args, int32_t argC
 static RValue wii_draw_text_colour(VMContext *ctx, RValue *args, int32_t argCount)
 {
 	RValue moved[8];
-	double y;
+	double x, y;
 
 	if (argCount != 8 || !in_object(ctx, titleBg))
 		return engineDrawTextColour(ctx, args, argCount);
 	memcpy(moved, args, sizeof moved);
+	x = RValue_toReal(args[0]);
 	y = RValue_toReal(args[1]);
+	moved[0] = RValue_makeReal(y < TITLE_MID ? x + Overscan_marginH() : x - Overscan_marginH());
 	moved[1] = RValue_makeReal(y < TITLE_MID ? y + WiiSafe_rows() : y - WiiSafe_rows());
 	return engineDrawTextColour(ctx, moved, 8);
 }
 
+/* The links' dark band runs to the right edge: lifted with them, and reaching further left as they move in. */
 static RValue wii_draw_rectangle_colour(VMContext *ctx, RValue *args, int32_t argCount)
 {
 	RValue lifted[9];
@@ -377,6 +385,7 @@ static RValue wii_draw_rectangle_colour(VMContext *ctx, RValue *args, int32_t ar
 	if (argCount != 9 || !in_object(ctx, titleBg))
 		return engineDrawRectangleColour(ctx, args, argCount);
 	memcpy(lifted, args, sizeof lifted);
+	lifted[0] = RValue_makeReal(RValue_toReal(args[0]) - Overscan_marginH());
 	lifted[1] = RValue_makeReal(RValue_toReal(args[1]) - WiiSafe_rows());
 	lifted[3] = RValue_makeReal(RValue_toReal(args[3]) - WiiSafe_rows());
 	return engineDrawRectangleColour(ctx, lifted, 9);
