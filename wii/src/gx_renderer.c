@@ -3880,8 +3880,8 @@ bool GxRenderer_surfacePixel(int32_t surfaceID, int x, int y, uint8_t rgba[4])
 
 		if (!t->texels)
 			return false;
-			gx_rgba8_pget((const u8 *)t->texels, t->texW, x % SURF_TILE_W, y % SURF_TILE_H,
-				      &rgba[0], &rgba[1], &rgba[2], &rgba[3]);
+		gx_rgba8_pget((const u8 *)t->texels, t->texW, x % SURF_TILE_W, y % SURF_TILE_H,
+			      &rgba[0], &rgba[1], &rgba[2], &rgba[3]);
 		return true;
 	}
 	if (gx->currentTarget == surfaceID) {
