@@ -2,7 +2,7 @@
 
 **AM2R 1.5.5 on the Wii**, as a Homebrew Channel app. AM2R (Another Metroid 2 Remake) is Milton "DoctorM64" Guasti's GameMaker game; the 1.5.5 Community Update is the AM2R Community Developers' work. AM2R GX runs the game's own bytecode on the console through [Butterscotch](https://github.com/ButterscotchRunner/Butterscotch), an open-source GameMaker: Studio runner, with a native **GX** renderer, a texture repacker and an audio path written for the Wii.
 
-This repository and its releases never contain music, sprites or any Nintendo, DoctorM64 or Community assets; the console builds 1.5.5 from *your supplied copy of AM2R 1.1* on first boot.
+This repository and its releases never contain music, sprites or any Nintendo, DoctorM64 or Community assets (apart from the AM2R logo used as `icon.png`); the console builds 1.5.5 from *your supplied copy of AM2R 1.1* on first boot.
 
 Not affiliated with Nintendo, YoYo Games, Milton Guasti or the AM2R Community Developers.
 
@@ -42,7 +42,7 @@ Hold **HOME** for a second (Wii Remote or Classic Controller), or **X + B + Star
 
 ## Picture
 
-- The console's own screen setting (Wii Settings → Screen → 4:3 or 16:9) picks the video mode. The game's own Options → Display → Widescreen toggle still decides whether the game draws wide; on a 16:9 console with it off you get a centred 4:3 picture with black sides.
+- The console's own screen setting (Wii Settings → Screen → 4:3 or 16:9) picks the video mode. The game's own Options → Display → Widescreen toggle still decides whether the game draws wide; on a 16:9 console with it off you get a centered 4:3 picture with black sides.
 - **240p** (Options → Display, where the PC version has VSync) draws each of the game's 240 lines once, for CRT TVs
   that show 240p sharply.
 - **Resize/Move Screen** (Options → Display): if your TV cuts the edges, the d-pad pulls the picture in from the sides and the top/bottom, and **A** held with the d-pad moves the whole picture. **B** closes it.
@@ -55,7 +55,7 @@ Almost everything runs at a clean 60 fps on a Wii, with the two heaviest rooms o
 
 **Randomizer seeds:** a custom seed gives the same item layout every time, on every Wii. It is *almost certainly* not the same layout the PC version gives for that seed, because the Wii build seeds its random numbers differently from GameMaker.
 
-## Licence and credits
+## License and credits
 
 The runner source here is **GNU Affero GPL v3.0** (see [LICENSE](LICENSE)); combined with Butterscotch (AGPL-3.0) the `.dol` is AGPL. The game and its assets stay whatever copy of AM2R you supply.
 
