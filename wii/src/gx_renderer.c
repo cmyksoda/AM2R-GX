@@ -3785,11 +3785,11 @@ static void gx_draw_screen_page(GxRenderer *gx, float LW, float LH, float ys)
 	gx_ov_rect(cx - tthk * 0.5f, cy + 12 * ys, tthk, tlen * 0.55f * ys, 30, 30, 40, 230);
 	gx_ov_rect(cx - tthk * 0.5f, cy + 12 * ys, tthk, tlen * 0.55f * vf * ys, 255, 170, 90, 255);
 
-	gx_ov_rect(cx - 200 * ys, cy - 100 * ys, 400 * ys, 68 * ys, 0, 0, 0, 190);
-	gx_ov_text(gx, "Hold A to move screen", cx, cy - 100 * ys, 2 * ys);
-	gx_ov_text(gx, WiiInput_pad() == WII_PAD_NUNCHUK ? "Press C to recenter" : "Press X to recenter", cx, cy - 80 * ys,
-		   2 * ys);
-	gx_ov_text(gx, "Press B to exit", cx, cy - 60 * ys, 2 * ys);
+	gx_ov_rect(cx - 200 * ys, cy - 120 * ys, 400 * ys, 68 * ys, 0, 0, 0, 190);
+	gx_ov_text(gx, "Hold A to move screen", cx, cy - 120 * ys, 2 * ys);
+	gx_ov_text(gx, WiiInput_pad() == WII_PAD_NUNCHUK ? "Press C to recenter" : "Press X to recenter", cx,
+		   cy - 100 * ys, 2 * ys);
+	gx_ov_text(gx, "Press B to exit", cx, cy - 80 * ys, 2 * ys);
 }
 
 /* HUD Margins: green lines where the HUD and prompts stop, over the paused game and its HUD when there is one. */
