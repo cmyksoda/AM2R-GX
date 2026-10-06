@@ -19,6 +19,8 @@
 #define SCORE_BOTTOM 200 /* the score screen's closing lines sit on row 220 */
 #define SAFE_BOTTOM (240 - WiiSafe_rows())
 #define PROMPT_EDGE 8 /* prompts this close to a side are corner prompts (AM2R puts them at 2 and 318) */
+#define PORT_LINK "github.com/cmyksoda/AM2R-GX"
+#define LINK_TOP 3 /* the menu font's letters start 3 rows lower than the blog picture's */
 
 enum { SCR_1BUTTON, SCR_2BUTTONS, SCR_COUNT };
 static const char *const scriptNames[SCR_COUNT] = { "draw_txt_1button", "draw_txt_2buttons" };
@@ -330,13 +332,15 @@ static const TexturePageItem *bg_item(DataWin *dw, int32_t bg)
 }
 
 /* The title's corner lines: the version moves down and right, the links up and left, and their black boxes grow
- * back out to the screen's corners instead of floating. */
+ * back out to the screen's corners instead of floating. The blog's line is a picture, so ours replaces it as text in
+ * the reddit line's font. */
 static RValue wii_draw_background_ext(VMContext *ctx, RValue *args, int32_t argCount)
 {
 	const TexturePageItem *ver = bg_item(ctx->dataWin, bgVersion), *url = bg_item(ctx->dataWin, bgUrl);
 	int32_t bg = argCount == 8 ? RValue_toInt32(args[0]) : -1;
-	double x, y, h, w, side = Overscan_marginH();
-	RValue fill[8], out;
+	double x, y, h, right, side = Overscan_marginH();
+	RValue fill[8], line[8], link = RValue_makeString(PORT_LINK), width;
+	int k;
 
 	if (!in_object(ctx, titleBg) || !ver || !url || (bg != bgVersion && bg != bgUrl))
 		return engineDrawBackgroundExt(ctx, args, argCount);
@@ -346,20 +350,25 @@ static RValue wii_draw_background_ext(VMContext *ctx, RValue *args, int32_t argC
 		fill[4] = RValue_makeReal(RValue_toReal(args[4]) + (double)WiiSafe_rows() / ver->boundingHeight);
 		return engineDrawBackgroundExt(ctx, fill, 8);
 	}
-	x = RValue_toReal(args[1]) - side;
+	right = RValue_toReal(args[1]) + url->boundingWidth * RValue_toReal(args[3]);
+	width = engineStringWidth(ctx, &link, 1);
+	x = right - side - RValue_toReal(width) - 1;
+	RValue_free(&width);
 	y = RValue_toReal(args[2]) - WiiSafe_rows();
-	w = url->boundingWidth * RValue_toReal(args[3]) + side;
-	h = url->boundingHeight * RValue_toReal(args[4]);
+	h = url->boundingHeight * RValue_toReal(args[4]) + WiiSafe_rows();
+	fill[0] = RValue_makeInt32(bgVersion);
 	fill[1] = RValue_makeReal(x);
 	fill[2] = RValue_makeReal(y);
-	fill[3] = RValue_makeReal(w / url->boundingWidth);
-	out = engineDrawBackgroundExt(ctx, fill, 8);
-	fill[0] = RValue_makeInt32(bgVersion);
-	fill[2] = RValue_makeReal(y + h);
-	fill[3] = RValue_makeReal(w / ver->boundingWidth);
-	fill[4] = RValue_makeReal((double)WiiSafe_rows() / ver->boundingHeight);
+	fill[3] = RValue_makeReal((right - x) / ver->boundingWidth);
+	fill[4] = RValue_makeReal(h / ver->boundingHeight);
 	engineDrawBackgroundExt(ctx, fill, 8);
-	return out;
+	line[0] = RValue_makeReal(x + 1);
+	line[1] = RValue_makeReal(y - LINK_TOP);
+	line[2] = link;
+	for (k = 3; k < 7; k++)
+		line[k] = RValue_makeInt32(0xFFFFFF);
+	line[7] = args[7];
+	return engineDrawTextColour(ctx, line, 8);
 }
 
 static RValue wii_draw_text_colour(VMContext *ctx, RValue *args, int32_t argCount)
@@ -431,7 +440,7 @@ void WiiSafe_hookScripts(VMContext *ctx)
 	engineDrawBackgroundExt = VM_findBuiltin(ctx, "draw_background_ext");
 	engineDrawTextColour = VM_findBuiltin(ctx, "draw_text_colour");
 	engineDrawRectangleColour = VM_findBuiltin(ctx, "draw_rectangle_colour");
-	if (engineDrawBackgroundExt && engineDrawTextColour && engineDrawRectangleColour) {
+	if (engineDrawBackgroundExt && engineDrawTextColour && engineDrawRectangleColour && engineStringWidth) {
 		titleBg = Wii_objectIndex(ctx->runner, "oDrawTitleBG");
 		bgVersion = background_index(ctx->dataWin, "bgVersion");
 		bgUrl = background_index(ctx->dataWin, "bgURL");
