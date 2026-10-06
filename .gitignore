@@ -1,8 +1,6 @@
 project-notes/
 working/
-*.md
-meta.xml
-icon.png
+docs/
 build/
 hello/
 dist/
