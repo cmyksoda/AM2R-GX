@@ -7,6 +7,7 @@
 #include "log.h"
 #include "instance.h"
 #include "overscan.h"
+#include "safearea.h"
 #include "hooks.h"
 #include "runner.h"
 #include "runner_gamepad.h"
@@ -468,6 +469,30 @@ static void note_pad(u32 wheld, u16 gcheld, const s8 *sticks, const expansion_t 
 			pad_in_use == WII_PAD_GAMECUBE ? "GameCube" : "Nunchuk");
 }
 
+/* In play only the controller picked before it counts: a second pad's touch, or a resting GameCube stick's drift,
+ * would fight it (Jaxi: switch at the title). The title, its options and the first screen pick up whichever is used. */
+static bool pad_locked(Runner *runner)
+{
+	static int32_t title = -2, options, controller;
+	static bool locked;
+	bool was = locked;
+
+	if (title == -2) {
+		title = Wii_roomIndex(runner, "titleroom");
+		options = Wii_roomIndex(runner, "rm_options");
+		controller = Wii_roomIndex(runner, "rm_controller");
+	}
+	if (WiiSafe_ingame(runner))
+		locked = true;
+	else if (runner->currentRoomIndex == title || runner->currentRoomIndex == options ||
+		 runner->currentRoomIndex == controller)
+		locked = false;
+	if (locked != was)
+		logInfo("controller %s: %s\n", locked ? "locked for play" : "free again at the title",
+			pad_in_use == WII_PAD_CLASSIC ? "Classic" : pad_in_use == WII_PAD_GAMECUBE ? "GameCube" : "Nunchuk");
+	return locked;
+}
+
 WiiPad WiiInput_pad(void)
 {
 	return pad_in_use;
@@ -587,7 +612,8 @@ void WiiInput_poll(Runner *runner)
 	slot->guid[0] = '\0';
 
 	wii_pad_defaults(runner);
-	note_pad(wheld, gcheld, sticks, &exp);
+	if (!pad_locked(runner))
+		note_pad(wheld, gcheld, sticks, &exp);
 	if (defaults_done && (pad_in_use == WII_PAD_NUNCHUK) != menus_swapped) {
 		swap_menus(runner->vmContext);
 		menus_swapped = !menus_swapped;
@@ -596,17 +622,17 @@ void WiiInput_poll(Runner *runner)
 	drive_rumble();
 	row = Overscan_active() ? OVERSCAN_OFF : WiiControls_displayRow(runner);
 	neutral = overscan_input(wheld, gcheld, sticks, &exp, row);
-	pause = wheld & WPAD_BUTTON_1;
-	classic = exp.type == WPAD_EXP_CLASSIC;
-	start = classic ? wheld & WPAD_CLASSIC_BUTTON_PLUS : gcheld & PAD_BUTTON_START;
+	/* Only the controller in use is read, its own pause button included. */
+	classic = pad_in_use == WII_PAD_CLASSIC && exp.type == WPAD_EXP_CLASSIC;
+	pause = pad_in_use == WII_PAD_NUNCHUK && (wheld & WPAD_BUTTON_1);
+	start = classic ? wheld & WPAD_CLASSIC_BUTTON_PLUS : pad_in_use == WII_PAD_GAMECUBE && (gcheld & PAD_BUTTON_START);
 	if (neutral)
 		;
 	else if (classic)
 		poll_classic(slot, wheld & ~(u32)WPAD_CLASSIC_BUTTON_PLUS, &exp);
-	else if (gcheld || sticks[0] || sticks[1] || gc_axis(sticks[2]) != 0.0f || PAD_TriggerL(0) > GC_TRIGGER_PRESS ||
-		 PAD_TriggerR(0) > GC_TRIGGER_PRESS)
+	else if (pad_in_use == WII_PAD_GAMECUBE)
 		poll_gcpad(slot, gcheld & ~PAD_BUTTON_START, sticks, two_button_aim(runner));
-	else
+	else if (pad_in_use == WII_PAD_NUNCHUK)
 		poll_nunchuk(slot, wheld, &exp, two_button_aim(runner), pause);
 	if (start && !neutral)
 		set_btn(slot, SLOT_START, true);
