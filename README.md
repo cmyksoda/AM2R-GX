@@ -1,6 +1,8 @@
 # AM2R GX
 
-**AM2R 1.5.5 on the Wii**, as a Homebrew Channel app. AM2R (Another Metroid 2 Remake) is Milton "DoctorM64" Guasti's GameMaker game; the 1.5.5 Community Update is the AM2R Community Developers' work. AM2R GX runs the game's own bytecode on the console through [Butterscotch](https://github.com/ButterscotchRunner/Butterscotch), an open-source GameMaker: Studio runner, with a native **GX** renderer, a texture repacker and an audio path written for the Wii.
+**AM2R 1.5.5 on the Wii**, as a Homebrew Channel app. 
+
+AM2R (Another Metroid 2 Remake) is Milton "DoctorM64" Guasti's GameMaker game; the 1.5.5 Community Update is the AM2R Community Developers' work. AM2R GX runs the game's own bytecode on the console through [Butterscotch](https://github.com/ButterscotchRunner/Butterscotch), an open-source GameMaker: Studio runner, with a native **GX** renderer, a texture repacker and an audio path written for the Wii.
 
 This repository and its releases never contain music, sprites or any Nintendo, DoctorM64 or Community assets (apart from the AM2R logo used as `icon.png`); the console builds 1.5.5 from *your supplied copy of AM2R 1.1* on first boot.
 
