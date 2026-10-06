@@ -44,7 +44,7 @@ Hold **HOME** for a second (Wii Remote or Classic Controller), or **X + B + Star
 
 ## Picture
 
-- The console's own screen setting (Wii Settings → Screen → 4:3 or 16:9) picks the video mode. The game's own Options → Display → Widescreen toggle still decides whether the game draws wide; on a 16:9 console with it off you get a centered 4:3 picture with black sides.
+- The console's own screen setting (Wii Settings → Screen → 4:3 or 16:9) picks the video mode. The game's own Options → Display → Widescreen toggle still decides whether the game draws a 16:9 picture on a widescreen display. With it toggled off, you get pillarboxed 4:3.
 - **240p** (Options → Display, where the PC version has VSync) draws each of the game's 240 lines once, for CRT TVs
   that show 240p sharply.
 - **Resize/Move Screen** (Options → Display): if your TV cuts the edges, the d-pad pulls the picture in from the sides and the top/bottom, and **A** held with the d-pad moves the whole picture. **B** closes it.
@@ -65,3 +65,7 @@ The runner source here is **GNU Affero GPL v3.0** (see [LICENSE](LICENSE)); comb
 - [Butterscotch](https://github.com/ButterscotchRunner/Butterscotch), the GameMaker: Studio runner this port is built on.
 - [devkitPro](https://devkitpro.org/): devkitPPC, libogc, libfat, wiiuse and the portlibs.
 - xdelta3 (Joshua MacDonald, Apache-2.0) as the on-console delta decoder; stb (Sean Barrett) for image decoding.
+
+---
+
+*This project was made with AI assistance. For more information, see [my AI usage statement](https://github.com/cmyksoda/cmyksoda/blob/main/AI_USAGE.md).*
