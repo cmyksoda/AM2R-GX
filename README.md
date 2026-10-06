@@ -30,7 +30,7 @@ By default, missiles work in **Hold** style: hold Arm Weapon to use the selected
 
 | Action | Classic Controller | GameCube Controller | Wii Remote + Nunchuk |
 |---|---|---|---|
-| Move | d-pad or stick | stick or d-pad | Nunchuk stick |
+| Move | stick or d-pad| stick or d-pad | Nunchuk stick |
 | Jump | B | A | A |
 | Fire (hold to charge; bombs in ball) | y | B | B trigger |
 | Morph | A | X | C |
