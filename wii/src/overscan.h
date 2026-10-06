@@ -32,6 +32,7 @@ void Overscan_adjustH(int delta);
 void Overscan_adjustV(int delta);
 void Overscan_adjustY(int delta);
 void Overscan_adjustX(int delta);
+void Overscan_recenter(void);
 int Overscan_marginH(void);
 int Overscan_marginV(void);
 void Overscan_adjustMarginH(int delta);

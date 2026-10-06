@@ -152,6 +152,12 @@ void Overscan_adjustX(int delta)
 	g_x = clampi(g_x + delta, -OVERSCAN_MAX_H, OVERSCAN_MAX_H);
 }
 
+void Overscan_recenter(void)
+{
+	g_x = 0;
+	g_y = 0;
+}
+
 int Overscan_viWidth(void)
 {
 	return g_vi;

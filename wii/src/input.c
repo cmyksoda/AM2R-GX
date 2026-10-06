@@ -248,18 +248,19 @@ static bool repeat_step(bool held, int *frames, int first, int every)
 	return *frames == 1 || (*frames > first && (*frames - first) % every == 0);
 }
 
-/* The Display menu's Resize/Move Screen and HUD Margins rows open these pages with A or B (the menus' OK is the bottom
- * button, B on a Classic Controller). The d-pad (or a stick) sizes the picture or sets the margins, A held moves the
- * picture, and B closes. True while the game must see neutral input: the page is up, or the B that closed it is
- * still down and would also leave the menu underneath. */
+/* The Display menu's Resize/Move Screen and HUD Margins rows open these pages with the menus' OK (the bottom button:
+ * B on a Classic Controller, A elsewhere, where B is Back). The d-pad (or a stick) sizes the picture or sets the
+ * margins, A held moves the picture, X (Nunchuk C) recenters it, and B closes. True while the game must see neutral
+ * input: the page is up, or the B that closed it is still down and would also leave the menu underneath. */
 static bool overscan_input(u32 wheld, u16 gcheld, const s8 *sticks, const expansion_t *exp, OverscanPage row)
 {
 	static bool opening, closing, prev_b, prev_ok;
 	static int rep[4];
 	float sx = gc_axis(sticks[0]), sy = -gc_axis(sticks[1]), wx = 0.0f, wy = 0.0f;
 	/* the Nunchuk's Z and C share their bits with the Classic's Up and Left */
-	u32 classic = exp->type == WPAD_EXP_CLASSIC ? wheld : 0;
-	bool up, down, left, right, a, b, face, screen;
+	u32 classic = exp->type == WPAD_EXP_CLASSIC ? wheld : 0, nunchuk = exp->type == WPAD_EXP_NUNCHUK ? wheld : 0;
+	bool up, down, left, right, a, b, ok, center, face, screen;
+	static bool prev_center;
 	int first, every, step;
 
 	if (exp->type == WPAD_EXP_CLASSIC)
@@ -276,20 +277,23 @@ static bool overscan_input(u32 wheld, u16 gcheld, const s8 *sticks, const expans
 		wx > STICK_DIGITAL || sx > STICK_DIGITAL;
 	a = (classic & WPAD_CLASSIC_BUTTON_A) || (wheld & WPAD_BUTTON_A) || (gcheld & PAD_BUTTON_A);
 	b = (classic & WPAD_CLASSIC_BUTTON_B) || (wheld & WPAD_BUTTON_B) || (gcheld & PAD_BUTTON_B);
+	ok = pad_in_use == WII_PAD_CLASSIC ? b : a;
+	center = (classic & WPAD_CLASSIC_BUTTON_X) || (gcheld & PAD_BUTTON_X) || (nunchuk & WPAD_NUNCHUK_BUTTON_C);
 	face = a || b || (classic & (WPAD_CLASSIC_BUTTON_X | WPAD_CLASSIC_BUTTON_Y)) ||
 	       (wheld & (WPAD_BUTTON_1 | WPAD_BUTTON_2)) || (gcheld & (PAD_BUTTON_X | PAD_BUTTON_Y));
 
 	if (!Overscan_active()) {
 		closing = closing && b;
-		if (!closing && row != OVERSCAN_OFF && (a || b) && !prev_ok) {
+		if (!closing && row != OVERSCAN_OFF && ok && !prev_ok) {
 			Overscan_open(row);
 			opening = true; /* the button that opened the page is still down on its first frames */
 		}
-		prev_ok = a || b;
+		prev_ok = ok;
 		prev_b = b;
+		prev_center = center;
 		return closing || Overscan_active();
 	}
-	prev_ok = a || b;
+	prev_ok = ok;
 	if (opening) {
 		opening = face;
 		prev_b = b;
@@ -303,6 +307,9 @@ static bool overscan_input(u32 wheld, u16 gcheld, const s8 *sticks, const expans
 	}
 	prev_b = b;
 	screen = Overscan_page() == OVERSCAN_SCREEN;
+	if (screen && center && !prev_center)
+		Overscan_recenter();
+	prev_center = center;
 	first = screen ? 10 : 15;
 	every = screen ? 2 : 5;
 	step = repeat_step(right, &rep[0], first, every) - repeat_step(left, &rep[1], first, every);

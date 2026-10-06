@@ -174,7 +174,7 @@ static float view_mid(Runner *runner)
 	return cam ? cam->viewX + cam->viewWidth / 2.0f : 160.0f;
 }
 
-/* A corner prompt's x moved in by the side margin; a centred one stays. */
+/* A corner prompt's x moved in by the side margin; a centered one stays. */
 static float prompt_x(Runner *runner, float x)
 {
 	GMLCamera *cam = view0(runner);

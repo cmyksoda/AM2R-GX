@@ -5,6 +5,7 @@
 #include "am2r.h"
 #include "controls.h"
 #include "hooks.h"
+#include "input.h"
 #include "safearea.h"
 #include "wii_mem.h"
 #include "wii_paths.h"
@@ -3682,7 +3683,7 @@ static void gxDrawSurfaceColor(Renderer *renderer, int32_t surfaceID, int32_t sr
 		  (u8)BGR_R(c4), (u8)BGR_G(c4), (u8)BGR_B(c4), a);
 }
 
-/* A line of the adjust pages' own text in the menus' font (AM2R keeps its fonts' indices in globals), centred on x
+/* A line of the adjust pages' own text in the menus' font (AM2R keeps its fonts' indices in globals), centered on x
  * and outlined to read over any picture. */
 static void gx_ov_text(GxRenderer *gx, const char *text, float x, float y, float scale)
 {
@@ -3776,7 +3777,7 @@ static void gx_draw_screen_page(GxRenderer *gx, float LW, float LH, float ys)
 	gx_ov_rect(LW - cl, LH - ct, cl, ct, 255, 225, 40, 255);
 	gx_ov_rect(LW - ct, LH - cl, ct, cl, 255, 225, 40, 255);
 
-	/* Centre lines: A with the d-pad moves the whole picture; the lines show where its middle sits. */
+	/* Center lines: A with the d-pad moves the whole picture; the lines show where its middle sits. */
 	gx_ov_rect(0, cy + (float)(Overscan_y() * (int)LH / WII_FB_H) - 1, LW, 2, 255, 255, 255, 200);
 	gx_ov_rect(cx + (float)Overscan_x() - 1, 0, 2, LH, 255, 255, 255, 200);
 	gx_ov_rect(cx - tlen * 0.5f, cy - 40 * ys, tlen, tthk * ys, 30, 30, 40, 230);
@@ -3784,9 +3785,11 @@ static void gx_draw_screen_page(GxRenderer *gx, float LW, float LH, float ys)
 	gx_ov_rect(cx - tthk * 0.5f, cy + 12 * ys, tthk, tlen * 0.55f * ys, 30, 30, 40, 230);
 	gx_ov_rect(cx - tthk * 0.5f, cy + 12 * ys, tthk, tlen * 0.55f * vf * ys, 255, 170, 90, 255);
 
-	gx_ov_rect(cx - 200 * ys, cy - 100 * ys, 400 * ys, 48 * ys, 0, 0, 0, 190);
+	gx_ov_rect(cx - 200 * ys, cy - 100 * ys, 400 * ys, 68 * ys, 0, 0, 0, 190);
 	gx_ov_text(gx, "Hold A to move screen", cx, cy - 100 * ys, 2 * ys);
-	gx_ov_text(gx, "Press B to exit", cx, cy - 80 * ys, 2 * ys);
+	gx_ov_text(gx, WiiInput_pad() == WII_PAD_NUNCHUK ? "Press C to recenter" : "Press X to recenter", cx, cy - 80 * ys,
+		   2 * ys);
+	gx_ov_text(gx, "Press B to exit", cx, cy - 60 * ys, 2 * ys);
 }
 
 /* HUD Margins: green lines where the HUD and prompts stop, over the paused game and its HUD when there is one. */
