@@ -12,7 +12,7 @@ The patch/ folder holds the AM2R Community Developers' 1.5.5 patch data from the
 which they distribute under the GNU General Public License v3.0 (patch/LICENSE.txt). The delta is
 re-encoded to fit the console's memory; it yields the same 1.5.5 data.win.
 
-The boot.dol in this folder contains the following software, under these licences:
+The boot.dol in this folder contains the following software, under these licenses:
 
   Butterscotch (the GameMaker runtime this port is built on)
     https://github.com/ButterscotchRunner/Butterscotch
@@ -22,18 +22,18 @@ The boot.dol in this folder contains the following software, under these licence
     Apache License 2.0 (LICENSE-xdelta3.txt)
 
   libogc, libfat and aesnd (devkitPro), Copyright 2004-2025 Michael Wiedenbauer, Dave Murphy
-    and contributors — zlib-style licence
+    and contributors — zlib-style license
   wiiuse (Wii Remote support inside libogc), Copyright 2006-2007 Michael Laforest
     GNU General Public License v3.0 or later
   lwBT (Bluetooth stack inside libogc), Copyright 2001-2003 Adam Dunkels and contributors
-    BSD 3-Clause licence
-  newlib (the C library of devkitPPC) — BSD-style licences of its authors
+    BSD 3-Clause license
+  newlib (the C library of devkitPPC) — BSD-style licenses of its authors
 
   FreeType 2.14.1 — Portions of this software are copyright (C) 2025 The FreeType Project
     (https://freetype.org). All rights reserved. Used under the FreeType License.
   libpng 1.6.55 — libpng license
   zlib 1.3.1, Copyright Jean-loup Gailly and Mark Adler — zlib license
-  bzip2/libbzip2 1.0.8, Copyright Julian Seward — bzip2 licence (BSD-style)
+  bzip2/libbzip2 1.0.8, Copyright Julian Seward — bzip2 license (BSD-style)
   Brotli decoder, Copyright Google Inc. — MIT License
   liblzma (XZ Utils) — public domain / BSD Zero Clause
 

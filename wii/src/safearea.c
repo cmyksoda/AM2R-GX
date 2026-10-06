@@ -207,7 +207,7 @@ static bool row_open(VMContext *ctx)
 	return row.inst == ctx->currentInstance && row.frame == ctx->runner->frameCount;
 }
 
-/* draw_txt_*(x, y, text, align (0 centres on x), ...) */
+/* draw_txt_*(x, y, text, align (0 centers on x), ...) */
 static RValue draw_prompt(VMContext *ctx, int which, RValue *args, int32_t argCount)
 {
 	float y, rel;
@@ -240,7 +240,7 @@ static RValue wii_draw_txt_2buttons(VMContext *ctx, RValue *args, int32_t argCou
 }
 
 /* The inventory's "[arrows] - Select item" row is a background plus a draw_text, not a prompt script: hold the arrows
- * until the text arrives, then centre the pair. */
+ * until the text arrives, then center the pair. */
 static BuiltinFunc engineDrawBackground, engineDrawText, engineStringWidth, engineStringHeight, engineDrawRectangle;
 static BuiltinFunc engineDrawBackgroundExt, engineDrawTextColour, engineDrawRectangleColour;
 static int32_t introText = -2, introFull = -1;

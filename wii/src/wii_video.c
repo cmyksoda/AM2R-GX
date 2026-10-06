@@ -45,7 +45,7 @@ static GXRModeObj *pick_mode(void)
 }
 
 /* 240p shows each of the game's 240 lines once (double-strike). PAL 50 Hz has only a 264-line double-strike mode,
- * so that one is cut to 240 lines and centred. */
+ * so that one is cut to 240 lines and centered. */
 static void make_240(const GXRModeObj *base, GXRModeObj *out)
 {
 	switch (base->viTVMode >> 2) {

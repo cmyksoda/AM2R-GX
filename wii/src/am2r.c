@@ -381,7 +381,7 @@ static RValue wii_draw_map_surf(VMContext *ctx, RValue *args, int32_t argCount)
 	return RValue_makeUndefined();
 }
 
-/* Ours, then AM2R's, in its markup (* heading, / centred, a=b paired, ; next row). The roll scrolls at a speed set by
+/* Ours, then AM2R's, in its markup (* heading, / centered, a=b paired, ; next row). The roll scrolls at a speed set by
  * its row count to last as long as its music, so these rows make it a little faster, not longer. */
 static const char credits[] = "*AM2R GX;;;;;;;;;;;;"
 	"*Wii Port;/cmyksoda;;"

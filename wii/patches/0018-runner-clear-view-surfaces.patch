@@ -1,4 +1,4 @@
-Reason: GameMaker leaves a view surface alone when the room draws no background colour, so whatever the room leaves
+Reason: GameMaker leaves a view surface alone when the room draws no background color, so whatever the room leaves
 undrawn keeps old frames (the filler gap left of rm_a1h03 in 16:9 smeared as the camera moved). AM2R's item screen
 relies on that rule: it shows the frozen game straight from the widescreen view's surface. The port asks for the clear
 everywhere else.
@@ -11,7 +11,7 @@ diff --git a/src/runner.h b/src/runner.h
      RuntimeBackground backgrounds[8];
      uint32_t backgroundColor;      // runtime-mutable (BGR format)
      bool drawBackgroundColor;
-+    bool clearViewSurfaces; // also clear view surfaces when the room draws no background colour
++    bool clearViewSurfaces; // also clear view surfaces when the room draws no background color
      bool shouldExit;
      bool paused;
      bool debugMode;

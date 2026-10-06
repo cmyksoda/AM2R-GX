@@ -47,7 +47,7 @@
 /* RGB565 has no alpha; gui_surface needs draw_clear_alpha(0,0) to stay transparent. */
 #define SURF_TEX_FMT GX_TF_RGBA8
 #define SURF_BPP 4
-/* A 4:3 game frame on a 16:9 console: 480 wide, centred, instead of stretched. */
+/* A 4:3 game frame on a 16:9 console: 480 wide, centered, instead of stretched. */
 static bool gx_pillarbox;
 
 typedef struct {
@@ -138,11 +138,11 @@ typedef struct {
 	int32_t palTpag; /* palette sprite bound with texture_set_stage while shPal is set */
 	int palIndex; /* column of the palette to replace with (the game always passes 1) */
 	u8 gbColor[4][3]; /* shGameBoy ramp, darkest first, as the game's u_color1..4 (0..255) */
-	u16 *gbTexels; /* 4×4 RGB5A3 holding ramp colour 2: TEV needs it as a texture input */
+	u16 *gbTexels; /* 4×4 RGB5A3 holding ramp color 2: TEV needs it as a texture input */
 } GxRenderer;
 
-/* shPaletteSwap: the GLSL searches the palette's first column for the source colour and takes the
- * same row from column palette_index. TEV can't search, so each swapped sprite is recoloured once
+/* shPaletteSwap: the GLSL searches the palette's first column for the source color and takes the
+ * same row from column palette_index. TEV can't search, so each swapped sprite is recolored once
  * on the CPU (exact match on the 16-bit texel, as both are quantised alike) and cached. */
 #define SWAP_MAX 256
 #define SWAP_BYTES_MAX (2u << 20)
@@ -507,7 +507,7 @@ static GxSurf *gx_tiled_target(GxRenderer *gx)
 	return s;
 }
 
-/* emit_quad's CPU raster for an axis-aligned quad of one colour: u then depends on x alone and v on y
+/* emit_quad's CPU raster for an axis-aligned quad of one color: u then depends on x alone and v on y
  * alone, so the same interpolation runs once per column and once per row instead of per pixel. */
 static void raster_flat(GxTile *t, GxPage *pg, int ox, int oy, int x0i, int y0i, int x1i, int y1i,
 			float minx, float miny, float dx, float dy, float u0, float u1, float v0, float v3,
@@ -908,7 +908,7 @@ static void gx_page_row(void *user, int y, const u8 *rgba, int width)
 
 	if (y >= pr->h)
 		return;
-	/* A row crosses each 4x4 tile as four neighbouring texels. */
+	/* A row crosses each 4x4 tile as four neighboring texels. */
 	row = pr->dst + gx_texel_off(pr->tw, 0, y);
 	for (x = 0; x + 4 <= n; x += 4, rgba += 16) {
 		u16 *d = row + x * 4;
@@ -1315,7 +1315,7 @@ static GxTile *gx_tile_at(GxSurf *s, int col, int row)
 	return &s->tiles[row * s->tilesX + col];
 }
 
-/* Every texel of a tiled surface one colour: each 4x4 block is 16 alpha/red pairs, then 16 green/blue pairs. */
+/* Every texel of a tiled surface one color: each 4x4 block is 16 alpha/red pairs, then 16 green/blue pairs. */
 static void gx_tiles_fill(GxSurf *s, u8 r, u8 g, u8 b, u8 a)
 {
 	u32 ar = ((u32)a << 8 | r) * 0x10001u, gb = ((u32)g << 8 | b) * 0x10001u;
@@ -1875,7 +1875,7 @@ static GxSwap *gx_swap_build(GxRenderer *gx, int32_t tpagIndex, GxSwap *sw)
 	GX_InitTexObjFilterMode(&sw->obj, GX_NEAR, GX_NEAR);
 	gx_swapBytes += tex_bytes(tw, th);
 	if (gx_swapCount <= 1)
-		logInfo("GX: palette swap live: palette %d[%d], %d colours\n", (int)gx->palTpag, gx->palIndex, n);
+		logInfo("GX: palette swap live: palette %d[%d], %d colors\n", (int)gx->palTpag, gx->palIndex, n);
 	return sw;
 }
 
@@ -2484,7 +2484,7 @@ static void gxEndFrameEnd(Renderer *renderer)
 	}
 	if (Overscan_active())
 		gx_draw_overscan_overlay(gx);
-	/* GameMaker forgets the shader at frame end; a palette swap the subscreen leaves set would recolour the next
+	/* GameMaker forgets the shader at frame end; a palette swap the subscreen leaves set would recolor the next
 	 * room. */
 	if (renderer->currentShader >= 0) {
 		static int said;
@@ -2844,7 +2844,7 @@ typedef struct {
 	uint32_t pageId;
 } GxGlyph;
 
-/* One drawing of a laid-out string: its offset and alpha, in its own corner colours or one colour for all. */
+/* One drawing of a laid-out string: its offset and alpha, in its own corner colors or one color for all. */
 typedef struct {
 	double dx, dy;
 	bool uniform;
@@ -2950,7 +2950,7 @@ static void gx_draw_text(GxRenderer *gx, const char *text, double x, double y, f
 	sx = xscale * font->scaleX;
 	sy = yscale * font->scaleY;
 	Matrix4f_setTransform2D(&transform, (float)x, (float)y, sx, sy, angleRad);
-	/* Centred odd-width lines start on a half pixel, where GX_NEAR samples sit exactly on texel
+	/* Centered odd-width lines start on a half pixel, where GX_NEAR samples sit exactly on texel
 	 * seams and real hardware garbles thin glyphs. Keep unrotated 1:1 text on the pixel grid. */
 	snap = angleDeg == 0.0f && sx == 1.0f && sy == 1.0f;
 	/* How far a line's glyphs can reach from its cursor, for skipping lines off the projection whole:
@@ -3495,7 +3495,7 @@ static float gxGetSurfaceHeight(Renderer *renderer, int32_t surfaceID)
 
 /* shGameBoy as a TEV program. Compares add (d + (a > b ? c : 0)), so: stages 0-4 build
  * m = max(R,G,B) in reg0.a, stages 5-7 turn m > 42 / 126 / 210 into 0/255 masks, and each mask
- * lerps the colour to the next ramp entry (vertex colour, 4×4 texture, reg1, reg2). One pass. */
+ * lerps the color to the next ramp entry (vertex color, 4×4 texture, reg1, reg2). One pass. */
 static bool gx_gb_begin(GxRenderer *gx)
 {
 	GXColor zero = { 0, 0, 0, 0 }, thr = { 42, 126, 210, 0 };
@@ -3545,7 +3545,7 @@ static bool gx_gb_begin(GxRenderer *gx)
 	GX_SetTevAlphaOp(GX_TEVSTAGE3, GX_TEV_SUB, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVREG1);
 	GX_SetTevAlphaIn(GX_TEVSTAGE4, GX_CA_A1, GX_CA_ZERO, GX_CA_ZERO, GX_CA_A0);
 	GX_SetTevAlphaOp(GX_TEVSTAGE4, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVREG0);
-	/* masks: prev.a = (m > threshold) ? vertex alpha (255) : 0; the next stage's colour lerps by it */
+	/* masks: prev.a = (m > threshold) ? vertex alpha (255) : 0; the next stage's color lerps by it */
 	GX_SetTevKAlphaSel(GX_TEVSTAGE5, GX_TEV_KASEL_K0_R);
 	GX_SetTevAlphaIn(GX_TEVSTAGE5, GX_CA_A0, GX_CA_KONST, GX_CA_RASA, GX_CA_ZERO);
 	GX_SetTevAlphaOp(GX_TEVSTAGE5, GX_TEV_COMP_A8_GT, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
@@ -3568,7 +3568,7 @@ static void gx_gb_end(GxRenderer *gx)
 	GX_SetNumTevStages(1);
 	GX_SetTevSwapMode(GX_TEVSTAGE0, GX_TEV_SWAP0, GX_TEV_SWAP0);
 	gx_vtx_fmt();
-	gx_unbind_tex(gx); /* GX_SetTevOp puts stage 0's colour and alpha inputs back */
+	gx_unbind_tex(gx); /* GX_SetTevOp puts stage 0's color and alpha inputs back */
 }
 
 static bool gx_hud_half;
@@ -3993,7 +3993,7 @@ static bool gxSurfaceGetPixels(MAYBE_UNUSED Renderer *renderer, MAYBE_UNUSED int
 }
 
 /* surface_getpixel_ext: one texel of a surface. 1.5.5 does this nine times at boot on a 4×4
- * surface to learn its morph-trail colours; a live target is copied out first. */
+ * surface to learn its morph-trail colors; a live target is copied out first. */
 bool GxRenderer_surfacePixel(int32_t surfaceID, int x, int y, uint8_t rgba[4])
 {
 	GxRenderer *gx = gx_cur;
@@ -4066,7 +4066,7 @@ static void gxGpuResetShader(Renderer *renderer)
 	renderer->currentShader = -1;
 }
 
-/* Handles are just names we recognise: 1 = palette_index; 11..14 = the GameBoy ramp colours. */
+/* Handles are just names we recognize: 1 = palette_index; 11..14 = the GameBoy ramp colors. */
 enum { UNI_PAL_INDEX = 1, UNI_GB_COLOR1 = 11 };
 
 static int32_t gxShaderGetUniform(Renderer *renderer, int32_t shaderIndex, char *uniform)

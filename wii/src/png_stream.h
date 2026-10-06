@@ -7,7 +7,7 @@
 
 typedef void (*WiiPngRowFn)(void *user, int y, const u8 *rgba, int width);
 
-/* Only the PNG flavour GameMaker writes for texture pages: 8-bit RGBA, non-interlaced.
+/* Only the PNG flavor GameMaker writes for texture pages: 8-bit RGBA, non-interlaced.
  * Anything else reports false so the caller can fall back to stb_image. */
 bool WiiPng_size(const u8 *png, size_t len, int *width, int *height);
 

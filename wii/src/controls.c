@@ -53,7 +53,7 @@ static const Name nunchukNames[10] = {
 #undef T
 #undef W
 
-/* Button glyphs built by the rules of AM2R's own (they rebuild its "LB" pixel for pixel): a grey pill with 3x5 dark
+/* Button glyphs built by the rules of AM2R's own (they rebuild its "LB" pixel for pixel): a gray pill with 3x5 dark
  * letters, each pill pixel under a letter pixel a shade darker. One style for every Wii button. */
 enum { G_A, G_B, G_X, G_Y, G_C, G_L, G_R, G_ZL, G_ZR, G_Z, G_PLUS, G_MINUS, G_CDOWN, G_COUNT };
 static const char *const glyphText[G_COUNT] = { "A", "B", "X", "Y", "C", "L", "R", "ZL", "ZR", "Z", "+", "-", "Cv" };

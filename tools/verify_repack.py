@@ -4,7 +4,7 @@
   tools/verify_repack.py ORIGINAL.win REPACKED.win [--max 1024] [--gutter 1]
 
 Needs no renderer: every graphic is cropped from the original pages and from the repacked pages
-and compared byte for byte (colour under fully transparent pixels included), and everything that
+and compared byte for byte (color under fully transparent pixels included), and everything that
 is not a texture must be untouched. Deliberately shares no code with repack_textures.py.
 Exit status 0 means every check passed.
 """
@@ -65,8 +65,8 @@ class Checks:
         print(('  ok    ' if ok else '  FAIL  ') + what + (f'  [{detail}]' if detail else ''))
 
 
-def png_flavour(blob):
-    """(width, height, bit depth, colour type, interlace) from IHDR, no decoder involved."""
+def png_flavor(blob):
+    """(width, height, bit depth, color type, interlace) from IHDR, no decoder involved."""
     if blob[:8] != b'\x89PNG\r\n\x1a\n' or blob[12:16] != b'IHDR':
         return None
     return struct.unpack('>IIBBxxB', blob[16:29])
@@ -117,11 +117,11 @@ def main():
 
     print('pages')
     old_pages = [np.array(Image.open(io.BytesIO(x)).convert('RGBA')) for x in old.page_blobs()]
-    flavours = [png_flavour(x) for x in new.page_blobs()]
-    check(all(f and f[2:] == (8, 6, 0) for f in flavours), 'every new page is 8-bit RGBA, non-interlaced',
-          f'{len(flavours)} pages')
-    check(all(f and f[0] <= args.max and f[1] <= args.max for f in flavours), f'no page edge over {args.max}',
-          'largest %dx%d' % max((f[:2] for f in flavours if f), key=lambda s: s[0] * s[1]))
+    flavors = [png_flavor(x) for x in new.page_blobs()]
+    check(all(f and f[2:] == (8, 6, 0) for f in flavors), 'every new page is 8-bit RGBA, non-interlaced',
+          f'{len(flavors)} pages')
+    check(all(f and f[0] <= args.max and f[1] <= args.max for f in flavors), f'no page edge over {args.max}',
+          'largest %dx%d' % max((f[:2] for f in flavors if f), key=lambda s: s[0] * s[1]))
     new_pages = [np.array(Image.open(io.BytesIO(x))) for x in new.page_blobs()]
     check(all(0 <= q[10] < len(new_pages) for q in b), 'every entry points at a page that exists')
 

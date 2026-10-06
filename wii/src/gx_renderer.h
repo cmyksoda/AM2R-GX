@@ -21,7 +21,7 @@ void GxRenderer_present(void);
 int32_t GxRenderer_addImage(const uint8_t *rgba, int w, int h);
 bool GxRenderer_surfacePixel(int32_t surfaceID, int x, int y, uint8_t rgba[4]);
 void GxRenderer_setWideFilter(bool on);
-/* The game's Widescreen is off on a 16:9 console: draw 4:3 centred with black sides. */
+/* The game's Widescreen is off on a 16:9 console: draw 4:3 centered with black sides. */
 void GxRenderer_setPillarbox(bool on);
 /* Instrumentation: called with the fill of every drawn page item, and with tpagIndex -1 every 200 frames. */
 struct DataWin;

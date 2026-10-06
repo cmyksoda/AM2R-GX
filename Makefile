@@ -119,7 +119,7 @@ sd-pack:
 	tools/sd-pack.sh "$(CURDIR)/$(dir $(CU155))" "$(CURDIR)/dist/sd"
 
 # The release zip: the DOL built without test hooks (its symbols must say so), meta.xml at the same version, the
-# patch kit and the licences, as dist/am2r-gx-VERSION.zip. The ELF stays beside it to read a crash dump's addresses.
+# patch kit and the licenses, as dist/am2r-gx-VERSION.zip. The ELF stays beside it to read a crash dump's addresses.
 REL := dist/package-$(VERSION)/am2r-gx-$(VERSION)/apps/am2r
 release:
 	@test ! -e dist/am2r-gx-$(VERSION).zip || { echo "dist/am2r-gx-$(VERSION).zip exists: bump AM2R_GX_VERSION"; exit 1; }

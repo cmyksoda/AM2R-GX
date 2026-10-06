@@ -20,7 +20,7 @@ bool WiiPng_size(const u8 *png, size_t len, int *width, int *height)
 		return false;
 	*width = (int)be32(png + 16);
 	*height = (int)be32(png + 20);
-	/* depth 8, colour type 6 (RGBA), deflate, adaptive filtering, no interlace */
+	/* depth 8, color type 6 (RGBA), deflate, adaptive filtering, no interlace */
 	if (png[24] != 8 || png[25] != 6 || png[26] != 0 || png[27] != 0 || png[28] != 0)
 		return false;
 	return *width > 0 && *width <= PNG_MAX_WIDTH && *height > 0;

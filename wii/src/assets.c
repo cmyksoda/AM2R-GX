@@ -104,7 +104,7 @@ static int32_t *load_frames(VMContext *ctx, const char *fname, int frames, bool 
 		logWarn("Wii: %s is not a PNG we can read\n", fname);
 		return NULL;
 	}
-	if (removeback) { /* GameMaker: the bottom-left pixel's colour is the background */
+	if (removeback) { /* GameMaker: the bottom-left pixel's color is the background */
 		const uint8_t *bg = rgba + ((size_t)(h - 1) * w) * 4;
 
 		for (i = 0; i < w * h; i++)
@@ -494,7 +494,7 @@ fail:
 	return RValue_makeReal(0.0);
 }
 
-/* surface_getpixel_ext(surf, x, y): GameMaker's colour packing, alpha on top. */
+/* surface_getpixel_ext(surf, x, y): GameMaker's color packing, alpha on top. */
 static RValue wii_surface_getpixel(MAYBE_UNUSED VMContext *ctx, RValue *args, int32_t argCount)
 {
 	uint8_t px[4];
