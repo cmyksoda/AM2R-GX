@@ -197,6 +197,17 @@ static RValue wii_get_text(VMContext *ctx, RValue *args, int32_t argCount)
 	if (argCount >= 2 && args[0].type == RVALUE_STRING && args[1].type == RVALUE_STRING && args[0].string &&
 	    args[1].string && strcmp(args[0].string, "ExtrasMenu") == 0 && strcmp(args[1].string, "GBFilter_Tip") == 0)
 		return without_pc_key(cached_text(ctx, args, argCount));
+	if (argCount >= 2 && args[0].type == RVALUE_STRING && args[1].type == RVALUE_STRING && args[0].string &&
+	    args[1].string && strcmp(args[0].string, "Title") == 0 && strcmp(args[1].string, "ControllerRecommended") == 0) {
+		RValue text = cached_text(ctx, args, argCount);
+
+		/* The first screen shows a Classic Controller Pro; the other languages keep their own line. */
+		if (text.type == RVALUE_STRING && text.string && strcmp(text.string, "A CONTROLLER IS RECOMMENDED") == 0) {
+			RValue_free(&text);
+			return RValue_makeOwnedString(safeStrdup("A CLASSIC CONTROLLER IS RECOMMENDED"));
+		}
+		return text;
+	}
 	/* The Display menu's VSync row is the 240p switch here (wii_ini_read_real keeps it under its own key). */
 	if (argCount >= 2 && args[0].type == RVALUE_STRING && args[1].type == RVALUE_STRING && args[0].string &&
 	    args[1].string && strcmp(args[0].string, "OptionsDisplay") == 0) {
