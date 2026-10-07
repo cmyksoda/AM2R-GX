@@ -7,7 +7,7 @@ SHA := d05526846e75449295ed2596bd86e9db0108408a
 AM2R_DATA ?= working/extracted/win11
 SD_GAME := dist/apps/am2r/game
 DOLPHIN_USER := project-notes/research/evidence-I/dolphin-user
-# HOOKS=0 leaves the local test hooks out of the build even when wii/test/ is on disk (make release does).
+# HOOKS=0 leaves the local test hooks and the per-script profiler out of the build (make release does).
 HOOKS ?= 1
 VERSION ?= $(shell sed -n 's/^.define AM2R_GX_VERSION "\([^"]*\)".*/\1/p' wii/src/main.c)
 META ?= wii/hbc/meta.xml
@@ -19,7 +19,7 @@ WII_CMAKE_FLAGS := \
 	-DAUDIO_BACKEND=none \
 	-DENABLE_WAD14=ON -DENABLE_WAD16=ON -DENABLE_WAD17=OFF \
 	-DENABLE_NOOP_RENDERER=OFF -DENABLE_LEGACY_GL=OFF -DENABLE_MODERN_GL=OFF \
-	-DENABLE_VM_GML_PROFILER=ON -DENABLE_VM_STUB_LOGS=ON -DENABLE_VM_TRACING=OFF -DENABLE_VM_OPCODE_PROFILER=OFF \
+	-DENABLE_VM_GML_PROFILER=$(if $(filter 0,$(HOOKS)),OFF,ON) -DENABLE_VM_STUB_LOGS=ON -DENABLE_VM_TRACING=OFF -DENABLE_VM_OPCODE_PROFILER=OFF \
 	-DENABLE_ASAN=OFF \
 	-DBUTTERSCOTCH_COMMIT_HASH="$(SHA)" \
 	-DBUTTERSCOTCH_COMMIT_DATE="2026-09-23"

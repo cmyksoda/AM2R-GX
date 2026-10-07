@@ -105,7 +105,9 @@ int main(int argc, char **argv)
 	args.osType = OS_WINDOWS;
 	args.windowWidth = WII_FB_W;
 	args.windowHeight = WII_FB_H;
+#ifdef ENABLE_VM_GML_PROFILER
 	args.profilerFramesBetween = 200; // periodic ms/frame; enough for perf without per-frame SD spam
+#endif
 	args.loadType = DATAWINLOADTYPE_LOAD_PER_CHUNK;
 	args.lazyRooms = true;
 	args.lazyTextures = true;
