@@ -192,22 +192,44 @@ static RValue cached_text(VMContext *ctx, RValue *args, int32_t argCount)
 	return text;
 }
 
+/* The first screen shows a Classic Controller Pro, named as Nintendo did in each language, or as players do where the
+ * Wii was never translated. A line a player's own ini changed stays as it is. */
+static const char *const classicLines[][2] = {
+	{ "A CONTROLLER IS RECOMMENDED", "A CLASSIC CONTROLLER IS RECOMMENDED" },
+	{ "UNE MANETTE EST RECOMMANDÉE", "UNE MANETTE CLASSIQUE EST RECOMMANDÉE" },
+	{ "ES WIRD EMPFOHLEN EIN GAMEPAD ZU BENUTZEN", "ES WIRD EMPFOHLEN EINEN CLASSIC CONTROLLER ZU BENUTZEN" },
+	{ "È CONSIGLIATO L'UTILIZZO DI UN CONTROLLER", "È CONSIGLIATO L'UTILIZZO DI UN CLASSIC CONTROLLER" },
+	{ "SE RECOMIENDA EL USO DE MANDO", "SE RECOMIENDA EL USO DE UN MANDO CLÁSICO" },
+	{ "RECOMENDA-SE O USO DE COMANDO", "RECOMENDA-SE O USO DE UM COMANDO CLÁSSICO" },
+	{ "RECOMENDA-SE O USO DE UM CONTROLE", "RECOMENDA-SE O USO DE UM CONTROLE CLÁSSICO" },
+	{ "РЕКОМЕНДУЕТСЯ ИГРАТЬ С ГЕЙМПАДОМ", "РЕКОМЕНДУЕТСЯ ИГРАТЬ С CLASSIC CONTROLLER" },
+	{ "РЕКОМЕНДОВАНО ВИКОРИСТОВУВАТИ КОНТРОЛЕР", "РЕКОМЕНДОВАНО ВИКОРИСТОВУВАТИ CLASSIC CONTROLLER" },
+	{ "ゲームパッドでのプレイを推奨します", "クラシックコントローラでのプレイを推奨します" },
+	{ "EN HANDKONTROLL REKOMMENDERAS", "EN CLASSIC CONTROLLER REKOMMENDERAS" },
+	{ "OVLADAČ JE DOPORUČEN", "KLASICKÝ OVLADAČ JE DOPORUČEN" },
+	{ "ES RECOMANA L'ÚS D'UN COMANDAMENT", "ES RECOMANA L'ÚS D'UN COMANDAMENT CLÀSSIC" },
+};
+
+static RValue classic_line(RValue text)
+{
+	size_t i;
+
+	for (i = 0; text.type == RVALUE_STRING && text.string && i < sizeof classicLines / sizeof *classicLines; i++)
+		if (strcmp(text.string, classicLines[i][0]) == 0) {
+			RValue_free(&text);
+			return RValue_makeOwnedString(safeStrdup(classicLines[i][1]));
+		}
+	return text;
+}
+
 static RValue wii_get_text(VMContext *ctx, RValue *args, int32_t argCount)
 {
 	if (argCount >= 2 && args[0].type == RVALUE_STRING && args[1].type == RVALUE_STRING && args[0].string &&
 	    args[1].string && strcmp(args[0].string, "ExtrasMenu") == 0 && strcmp(args[1].string, "GBFilter_Tip") == 0)
 		return without_pc_key(cached_text(ctx, args, argCount));
 	if (argCount >= 2 && args[0].type == RVALUE_STRING && args[1].type == RVALUE_STRING && args[0].string &&
-	    args[1].string && strcmp(args[0].string, "Title") == 0 && strcmp(args[1].string, "ControllerRecommended") == 0) {
-		RValue text = cached_text(ctx, args, argCount);
-
-		/* The first screen shows a Classic Controller Pro; the other languages keep their own line. */
-		if (text.type == RVALUE_STRING && text.string && strcmp(text.string, "A CONTROLLER IS RECOMMENDED") == 0) {
-			RValue_free(&text);
-			return RValue_makeOwnedString(safeStrdup("A CLASSIC CONTROLLER IS RECOMMENDED"));
-		}
-		return text;
-	}
+	    args[1].string && strcmp(args[0].string, "Title") == 0 && strcmp(args[1].string, "ControllerRecommended") == 0)
+		return classic_line(cached_text(ctx, args, argCount));
 	/* The Display menu's VSync row is the 240p switch here (wii_ini_read_real keeps it under its own key). */
 	if (argCount >= 2 && args[0].type == RVALUE_STRING && args[1].type == RVALUE_STRING && args[0].string &&
 	    args[1].string && strcmp(args[0].string, "OptionsDisplay") == 0) {
