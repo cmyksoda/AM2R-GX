@@ -1,0 +1,233 @@
+Reason: collision_line tested every instance of its target object, while place_meeting and the other grid queries look
+only in the grid cells they cover. AM2R builds its floor and wall checks (isCollisionBottom/Top/Left/Right) and its
+enemies' sight lines on collision_line against the solids: rm_a6a13 (414 instances) spent 7.3 ms a frame on it on the
+Wii with Samus standing still, and 0.7 ms through the grid. An object or all target now asks the grid for the
+instances under the line; when several are hit, the first in the order the whole bucket used to be walked in still
+wins. An instance id target keeps the old loop.
+Upstream: Speed only, every platform. Retires this patch when merged.
+
+--- a/src/vm_builtins.c
++++ b/src/vm_builtins.c
+@@ -12656,6 +12656,81 @@
+ // GameMaker rounds the coordinates when in collision compatibility mode
+ static inline GMLReal compatRoundCoord(GMLReal v) { return GMLReal_bankersRound(v); }
+ 
++// collision_line's test of one instance: true where the line touches it (its mask too when prec is set).
++static bool collisionLineHitsInstance(VMContext* ctx, Instance* inst, GMLReal lx1, GMLReal ly1, GMLReal lx2, GMLReal ly2, int32_t prec) {
++    if (!Collision_lineOverlapsInstance(ctx->runner, inst, lx1, ly1, lx2, ly2)) return false;
++    InstanceBBox bbox = Collision_computeBBox(ctx->runner, inst);
++
++    // Normalize line left-to-right for clipping
++    GMLReal xl = lx1, yl = ly1, xr = lx2, yr = ly2;
++    if (xl > xr) { GMLReal tmp = xl; xl = xr; xr = tmp; tmp = yl; yl = yr; yr = tmp; }
++
++    GMLReal dx = xr - xl;
++    GMLReal dy = yr - yl;
++
++    // Clip line to bbox horizontally
++    if (GMLReal_fabs(dx) > 0.0001) {
++        if (bbox.left > xl) {
++            GMLReal t = (bbox.left - xl) / dx;
++            xl = bbox.left;
++            yl = yl + t * dy;
++        }
++        if (xr > bbox.right) {
++            GMLReal t = (bbox.right - xl) / (xr - xl);
++            yr = yl + t * (yr - yl);
++            xr = bbox.right;
++        }
++    }
++
++    // Y-bounds check after horizontal clipping
++    GMLReal clippedTop    = GMLReal_fmin(yl, yr);
++    GMLReal clippedBottom = GMLReal_fmax(yl, yr);
++    if (bbox.top > clippedBottom || clippedTop >= bbox.bottom) return false;
++
++    // Bbox-only mode: collision confirmed
++    if (prec == 0) return true;
++
++    // Precise mode: walk line pixel-by-pixel within bbox
++    Sprite* spr = Collision_getSprite(ctx->dataWin, inst);
++    if (spr == nullptr || spr->sepMasks != 1 || spr->masks == nullptr || spr->maskCount == 0) {
++        // No precise mask available, treat as bbox hit
++        return true;
++    }
++
++    // Recompute dx/dy for the clipped segment
++    GMLReal cdx = xr - xl;
++    GMLReal cdy = yr - yl;
++    bool found = false;
++
++    if (GMLReal_fabs(cdy) >= GMLReal_fabs(cdx)) {
++        // Vertical-major: normalize top-to-bottom
++        GMLReal xt = xl, yt = yl, xb = xr, yb = yr;
++        if (yt > yb) { GMLReal tmp = xt; xt = xb; xb = tmp; tmp = yt; yt = yb; yb = tmp; }
++        GMLReal vdx = xb - xt;
++        GMLReal vdy = yb - yt;
++
++        int32_t startY = (int32_t) GMLReal_fmax(bbox.top, yt);
++        int32_t endY   = (int32_t) GMLReal_fmin(bbox.bottom, yb);
++        for (int32_t py = startY; endY >= py && !found; py++) {
++            GMLReal px = (GMLReal_fabs(vdy) > 0.0001) ? xt + ((GMLReal) py - yt) * vdx / vdy : xt;
++            if (Collision_pointInInstance(spr, inst, px + 0.5, (GMLReal) py + 0.5)) {
++                found = true;
++            }
++        }
++    } else {
++        // Horizontal-major
++        int32_t startX = (int32_t) GMLReal_fmax(bbox.left, xl);
++        int32_t endX   = (int32_t) GMLReal_fmin(bbox.right, xr);
++        for (int32_t px = startX; endX >= px && !found; px++) {
++            GMLReal py = (GMLReal_fabs(cdx) > 0.0001) ? yl + ((GMLReal) px - xl) * cdy / cdx : yl;
++            if (Collision_pointInInstance(spr, inst, (GMLReal) px + 0.5, py + 0.5)) {
++                found = true;
++            }
++        }
++    }
++    return found;
++}
++
+ // collision_line(x1, y1, x2, y2, obj, prec, notme)
+ static RValue builtin_collision_line(VMContext* ctx, RValue* args, int32_t argCount) {
+     REQUIRE_ARGC_AT_LEAST("collision_line", 7, RValue_makeReal((GMLReal) INSTANCE_NOONE));
+@@ -12675,91 +12750,64 @@
+     }
+ 
+     Instance* self = ctx->currentInstance;
+-
+     int32_t resultId = INSTANCE_NOONE;
+-    int32_t snapBase = Runner_pushInstancesForTarget(runner, targetObjIndex);
+-    int32_t snapEnd  = (int32_t) arrlen(runner->instanceSnapshots);
+-    for (int32_t snapIdx = snapBase; snapEnd > snapIdx; snapIdx++) {
+-        Instance* inst = runner->instanceSnapshots[snapIdx];
+-        if (!inst->active) continue;
+-        if (notme && inst == self) continue;
+-
+-        if (!Collision_lineOverlapsInstance(ctx->runner, inst, lx1, ly1, lx2, ly2)) continue;
+-        InstanceBBox bbox = Collision_computeBBox(ctx->runner, inst);
+ 
+-        // Normalize line left-to-right for clipping
+-        GMLReal xl = lx1, yl = ly1, xr = lx2, yr = ly2;
+-        if (xl > xr) { GMLReal tmp = xl; xl = xr; xr = tmp; tmp = yl; yl = yr; yr = tmp; }
+-
+-        GMLReal dx = xr - xl;
+-        GMLReal dy = yr - yl;
+-
+-        // Clip line to bbox horizontally
+-        if (GMLReal_fabs(dx) > 0.0001) {
+-            if (bbox.left > xl) {
+-                GMLReal t = (bbox.left - xl) / dx;
+-                xl = bbox.left;
+-                yl = yl + t * dy;
+-            }
+-            if (xr > bbox.right) {
+-                GMLReal t = (bbox.right - xl) / (xr - xl);
+-                yr = yl + t * (yr - yl);
+-                xr = bbox.right;
++    // An object or all: only instances in the grid cells under the line can touch it. When several do, the first in
++    // the order the whole bucket used to be walked in still wins.
++    if (targetObjIndex == INSTANCE_ALL || (targetObjIndex >= 0 && (uint32_t) targetObjIndex < runner->dataWin->objt.count)) {
++        static Instance** hits = nullptr;
++        arrsetlen(hits, 0);
++        SpatialGrid* grid = runner->spatialGrid;
++        SpatialGrid_syncGrid(runner, grid);
++        GMLReal gridRight = (GMLReal) grid->gridWidth * SPATIAL_GRID_CELL_SIZE - 1;
++        GMLReal gridBottom = (GMLReal) grid->gridHeight * SPATIAL_GRID_CELL_SIZE - 1;
++        GMLReal qx1 = GMLReal_fmin(GMLReal_fmax(GMLReal_fmin(lx1, lx2), 0), gridRight);
++        GMLReal qx2 = GMLReal_fmin(GMLReal_fmax(GMLReal_fmax(lx1, lx2), 0), gridRight);
++        GMLReal qy1 = GMLReal_fmin(GMLReal_fmax(GMLReal_fmin(ly1, ly2), 0), gridBottom);
++        GMLReal qy2 = GMLReal_fmin(GMLReal_fmax(GMLReal_fmax(ly1, ly2), 0), gridBottom);
++        SpatialGridQuery query = SpatialGrid_prepareQuery(runner, qx1, qy1, qx2, qy2, targetObjIndex);
++
++        for (int32_t gx = query.range.minGridX; query.range.maxGridX >= gx; gx++) {
++            for (int32_t gy = query.range.minGridY; query.range.maxGridY >= gy; gy++) {
++                Instance** cell = grid->grid[SpatialGrid_cellIndex(grid, gx, gy)];
++                int32_t cellLen = (int32_t) arrlen(cell);
++                repeat(cellLen, ci) {
++                    Instance* inst = cell[ci];
++                    if (inst->lastCollisionQueryId == query.queryId) continue;
++                    inst->lastCollisionQueryId = query.queryId;
++                    if (!inst->active) continue;
++                    if (notme && inst == self) continue;
++                    if (!query.matchAll && !VM_isObjectOrDescendant(runner->dataWin, inst->objectIndex, targetObjIndex)) continue;
++                    if (collisionLineHitsInstance(ctx, inst, lx1, ly1, lx2, ly2, prec)) arrput(hits, inst);
++                }
+             }
+         }
+ 
+-        // Y-bounds check after horizontal clipping
+-        GMLReal clippedTop    = GMLReal_fmin(yl, yr);
+-        GMLReal clippedBottom = GMLReal_fmax(yl, yr);
+-        if (bbox.top > clippedBottom || clippedTop >= bbox.bottom) continue;
+-
+-        // Bbox-only mode: collision confirmed
+-        if (prec == 0) {
+-            resultId = inst->instanceId;
+-            break;
+-        }
+-
+-        // Precise mode: walk line pixel-by-pixel within bbox
+-        Sprite* spr = Collision_getSprite(ctx->dataWin, inst);
+-        if (spr == nullptr || spr->sepMasks != 1 || spr->masks == nullptr || spr->maskCount == 0) {
+-            // No precise mask available, treat as bbox hit
+-            resultId = inst->instanceId;
+-            break;
+-        }
+-
+-        // Recompute dx/dy for the clipped segment
+-        GMLReal cdx = xr - xl;
+-        GMLReal cdy = yr - yl;
+-        bool found = false;
+-
+-        if (GMLReal_fabs(cdy) >= GMLReal_fabs(cdx)) {
+-            // Vertical-major: normalize top-to-bottom
+-            GMLReal xt = xl, yt = yl, xb = xr, yb = yr;
+-            if (yt > yb) { GMLReal tmp = xt; xt = xb; xb = tmp; tmp = yt; yt = yb; yb = tmp; }
+-            GMLReal vdx = xb - xt;
+-            GMLReal vdy = yb - yt;
+-
+-            int32_t startY = (int32_t) GMLReal_fmax(bbox.top, yt);
+-            int32_t endY   = (int32_t) GMLReal_fmin(bbox.bottom, yb);
+-            for (int32_t py = startY; endY >= py && !found; py++) {
+-                GMLReal px = (GMLReal_fabs(vdy) > 0.0001) ? xt + ((GMLReal) py - yt) * vdx / vdy : xt;
+-                if (Collision_pointInInstance(spr, inst, px + 0.5, (GMLReal) py + 0.5)) {
+-                    found = true;
+-                }
+-            }
+-        } else {
+-            // Horizontal-major
+-            int32_t startX = (int32_t) GMLReal_fmax(bbox.left, xl);
+-            int32_t endX   = (int32_t) GMLReal_fmin(bbox.right, xr);
+-            for (int32_t px = startX; endX >= px && !found; px++) {
+-                GMLReal py = (GMLReal_fabs(cdx) > 0.0001) ? yl + ((GMLReal) px - xl) * cdy / cdx : yl;
+-                if (Collision_pointInInstance(spr, inst, (GMLReal) px + 0.5, py + 0.5)) {
+-                    found = true;
++        int32_t hitCount = (int32_t) arrlen(hits);
++        if (hitCount == 1) {
++            resultId = hits[0]->instanceId;
++        } else if (hitCount > 1) {
++            Instance** order = query.matchAll ? runner->instances : runner->instancesByObject[targetObjIndex];
++            int32_t orderCount = (int32_t) arrlen(order);
++            for (int32_t i = 0; orderCount > i && resultId == INSTANCE_NOONE; i++) {
++                repeat(hitCount, h) {
++                    if (hits[h] == order[i]) {
++                        resultId = order[i]->instanceId;
++                        break;
++                    }
+                 }
+             }
+         }
++        return RValue_makeReal((GMLReal) resultId);
++    }
+ 
+-        if (!found) continue;
++    int32_t snapBase = Runner_pushInstancesForTarget(runner, targetObjIndex);
++    int32_t snapEnd  = (int32_t) arrlen(runner->instanceSnapshots);
++    for (int32_t snapIdx = snapBase; snapEnd > snapIdx; snapIdx++) {
++        Instance* inst = runner->instanceSnapshots[snapIdx];
++        if (!inst->active) continue;
++        if (notme && inst == self) continue;
++        if (!collisionLineHitsInstance(ctx, inst, lx1, ly1, lx2, ly2, prec)) continue;
+         resultId = inst->instanceId;
+         break;
+     }
