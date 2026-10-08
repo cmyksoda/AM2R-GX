@@ -41,7 +41,7 @@ wii: $(BUTTER)/CMakeLists.txt
 	rsync -a --delete wii/src/ $(BUTTER)/src/wii/
 	# The local test hooks (wii/test/, never in the repository) join the build when they are on disk.
 	if [ "$(HOOKS)" != 0 ] && [ -d wii/test/src ]; then rsync -a wii/test/src/ $(BUTTER)/src/wii/; fi
-	cd $(BUTTER) && git checkout -- CMakeLists.txt src/gettime.c src/ini.c src/loop.c src/random.c src/random.h src/runner.c src/runner.h src/spatial_grid.c src/vm.c src/vm.h src/vm_builtins.c src/vm_builtins.h
+	cd $(BUTTER) && git checkout -- CMakeLists.txt src/gettime.c src/ini.c src/instance.h src/loop.c src/random.c src/random.h src/runner.c src/runner.h src/spatial_grid.c src/vm.c src/vm.h src/vm_builtins.c src/vm_builtins.h
 	cd $(BUTTER) && git apply ../../wii/patches/0001-cmake-add-PLATFORM-wii.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0002-gettime-wii.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0003-loop-no-sigaction-on-wii.patch
@@ -65,6 +65,7 @@ wii: $(BUTTER)/CMakeLists.txt
 	cd $(BUTTER) && git apply ../../wii/patches/0022-random-set-seed-resets-index.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0023-vm-string-char-at-no-copies.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0024-vm-export-array-set.patch
+	cd $(BUTTER) && git apply ../../wii/patches/0025-runner-destroy-scans-id-holders.patch
 	if [ "$(HOOKS)" != 0 ] && [ -f wii/test/patches/0099-debug-collision-trace.patch ]; then cd $(BUTTER) && git apply ../../wii/test/patches/0099-debug-collision-trace.patch; fi
 	cmake -B $(WII_BUILD) -S $(BUTTER) $(WII_CMAKE_FLAGS)
 	cmake --build $(WII_BUILD) -j$(shell nproc)

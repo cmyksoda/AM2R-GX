@@ -1,0 +1,91 @@
+Reason: every destroy rewrote stale references by walking every self variable of every instance in the room. AM2R
+destroys something every few frames (bubbles, beam sparks, debris, trails); in a tester's profile an animation end
+that only destroys its own instance took 0.3–0.8 ms on the Wii in rooms of 250–400 instances. An instance now carries
+a flag, set when one of its self variables is given a number at or above the first instance id; the walk visits only
+those, and drops the flag from any instance that no longer holds such a number. The same slots are rewritten as
+before.
+Upstream: Speed only, every platform. Retires this patch when merged.
+
+--- a/src/instance.h
++++ b/src/instance.h
+@@ -6,6 +6,7 @@
+ #include "rvalue.h"
+ #include "gml_array.h"
+ #include "int_rvalue_hashmap.h"
++#include "vm.h"
+ 
+ #define GML_ALARM_COUNT 12
+ 
+@@ -37,6 +38,8 @@
+     float xprevious, yprevious;
+     float xstart, ystart;
+     bool persistent, solid, active, destroyed, visible, createEventFired, outsideRoom, spatialGridDirty, mouseOver;
++    // Set when a self variable is given a number that could be an instance id, so a destroy only scans these instances.
++    bool mayHoldIds;
+     // Used to track which alarms are set without looping through the entire alarm array
+     uint16_t activeAlarmMask;
+     int32_t maskIndex; // collision mask sprite override (-1 = use spriteIndex)
+@@ -102,6 +105,18 @@
+     return IntRValueHashMap_get(&inst->selfVars, varID);
+ }
+ 
++// True for a number the destroy scan could match against an instance id.
++static inline bool RValue_isIdLike(RValue val) {
++    switch (val.type) {
++        case RVALUE_INT32: return val.int32 >= INSTANCE_ID_BASE;
++#ifndef NO_RVALUE_INT64
++        case RVALUE_INT64: return val.int64 >= INSTANCE_ID_BASE;
++#endif
++        case RVALUE_REAL: return val.real >= (GMLReal) INSTANCE_ID_BASE;
++        default: return false;
++    }
++}
++
+ // Set a self variable by varID. Frees the old value if present (decRefs owned arrays).
+ // Always takes an independent reference with RValue_makeIndependent.
+ // The caller retains ownership of their original `val` and remains responsible for freeing it (via RValue_free) when done.
+@@ -112,6 +127,8 @@
+     RValue independentVal = RValue_makeIndependent(val);
+     RValue_free(pointerToSlot);
+     *pointerToSlot = independentVal;
++    if (RValue_isIdLike(independentVal))
++        inst->mayHoldIds = true;
+ }
+ 
+ // Recompute speed/direction from hspeed/vspeed (called when hspeed or vspeed is set)
+--- a/src/runner.c
++++ b/src/runner.c
+@@ -2591,16 +2591,17 @@
+     // as an integer id (e.g. linked-list pointers, owner ids, chain heads, etc.). Rewrite any
+     // stale id equal to the dying instance back to -4.
+ 
+-    // This is probably not very optimal as it loops through every single instance and every single
+-    // selfVar slot, but it doesn't happen too often so maybe it should be okay?
+-    // Another option would be to keep a reverse lookup table of instance ids to instances that reference them,
+-    // but that would be more memory and complexity overhead.
++    // Only instances that were ever given an id-like number can hold the id; a lower id falls back to scanning all.
++    // A scanned instance whose slots no longer hold any id-like number drops its flag.
+ 
+     int32_t destroyedInstanceId = destroyedInst->instanceId;
++    bool filtered = destroyedInstanceId >= INSTANCE_ID_BASE;
+     int32_t count = (int32_t) arrlen(runner->instances);
+     for (int32_t i = 0; i < count; i++) {
+         Instance* inst = runner->instances[i];
+         if (inst == nullptr || !inst->active || inst->destroyed || inst->objectIndex < 0) continue;
++        if (filtered && !inst->mayHoldIds) continue;
++        bool stillHoldsIds = false;
+         repeat(inst->selfVars.capacity, slotIndex) {
+             IntRValueEntry* entry = &inst->selfVars.entries[slotIndex];
+             if (entry->key == INT_RVALUE_HASHMAP_EMPTY_KEY) continue;
+@@ -2614,8 +2615,11 @@
+                 (vtype == RVALUE_REAL && entry->value.real == (GMLReal) destroyedInstanceId)
+             ) {
+                 entry->value = RValue_makeInt32(INSTANCE_NOONE);
++            } else if (RValue_isIdLike(entry->value)) {
++                stillHoldsIds = true;
+             }
+         }
++        inst->mayHoldIds = stillHoldsIds;
+     }
+ }
+ 
