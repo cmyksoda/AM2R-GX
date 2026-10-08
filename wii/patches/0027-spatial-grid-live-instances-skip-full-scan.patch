@@ -1,0 +1,41 @@
+Reason: removing an instance from the collision grid ended with a scan of every cell, a guard against stale entries.
+Every moved instance is removed and re-added at each grid sync, so a busy room paid dozens of whole-grid scans a frame
+(45-54 in rm_a5h04), and patch 0026's collision_line syncs the grid more often. Across ~400,000 of these scans (room
+changes, destroys, moves) none found an entry outside the instance's own cells. The scan now runs only for a
+destroyed instance, which is freed afterwards and so is the only one that could be left dangling.
+Upstream: Speed only, every platform. Retires this patch when merged.
+
+--- a/src/spatial_grid.c
++++ b/src/spatial_grid.c
+@@ -62,17 +62,20 @@
+     // Some room transitions and destructions can leave stale grid entries even when
+     // collisionCells was cleared or never populated for the current grid. Fall back to
+     // a full-grid scan so the instance pointer is not left dangling in the spatial hash.
+-    repeat(totalCells, cellIndex) {
+-        Instance** cell = grid->grid[cellIndex];
+-        int32_t cellLen = (int32_t) arrlen(cell);
+-        for (int32_t j = 0; j < cellLen;) {
+-            if (cell[j] == instance) {
+-                if (j < cellLen - 1) memmove(&cell[j], &cell[j + 1], (size_t) (cellLen - 1 - j) * sizeof(Instance*));
+-                arrsetlen(cell, cellLen - 1);
+-                removedAny = true;
+-                cellLen--;
+-            } else {
+-                j++;
++    // Only a destroyed instance can dangle; a live one re-syncing after every move skips the scan.
++    if (instance->destroyed) {
++        repeat(totalCells, cellIndex) {
++            Instance** cell = grid->grid[cellIndex];
++            int32_t cellLen = (int32_t) arrlen(cell);
++            for (int32_t j = 0; j < cellLen;) {
++                if (cell[j] == instance) {
++                    if (j < cellLen - 1) memmove(&cell[j], &cell[j + 1], (size_t) (cellLen - 1 - j) * sizeof(Instance*));
++                    arrsetlen(cell, cellLen - 1);
++                    removedAny = true;
++                    cellLen--;
++                } else {
++                    j++;
++                }
+             }
+         }
+     }

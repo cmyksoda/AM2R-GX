@@ -67,6 +67,7 @@ wii: $(BUTTER)/CMakeLists.txt
 	cd $(BUTTER) && git apply ../../wii/patches/0024-vm-export-array-set.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0025-runner-destroy-scans-id-holders.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0026-vm-collision-line-uses-the-grid.patch
+	cd $(BUTTER) && git apply ../../wii/patches/0027-spatial-grid-live-instances-skip-full-scan.patch
 	if [ "$(HOOKS)" != 0 ] && [ -f wii/test/patches/0099-debug-collision-trace.patch ]; then cd $(BUTTER) && git apply ../../wii/test/patches/0099-debug-collision-trace.patch; fi
 	cmake -B $(WII_BUILD) -S $(BUTTER) $(WII_CMAKE_FLAGS)
 	cmake --build $(WII_BUILD) -j$(shell nproc)
