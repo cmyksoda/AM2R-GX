@@ -4280,6 +4280,7 @@ static void gxPrimitiveEnd(Renderer *renderer)
 		GX_TexCoord2f32(vt->u, vt->v);
 	}
 	GX_End();
+	gx->targetDirty = true;
 	gx->primCount = 0;
 }
 
