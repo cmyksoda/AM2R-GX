@@ -83,12 +83,17 @@ static int32_t bin_write(FileSystem *fs, void *handle, const void *src, int32_t 
 	int32_t end;
 
 	(void)fs;
-	if (!b || n <= 0 || b->mode == GML_FILE_BIN_READ)
+	if (!b || n <= 0 || b->mode == GML_FILE_BIN_READ || n > INT32_MAX - b->pos)
 		return 0;
 	end = b->pos + n;
 	if (end > b->cap) {
-		while (b->cap < end)
+		while (b->cap < end) {
+			if (b->cap > INT32_MAX / 2) {
+				b->cap = end;
+				break;
+			}
 			b->cap *= 2;
+		}
 		b->data = (uint8_t *)safeRealloc(b->data, (size_t)b->cap);
 	}
 	/* A write past the end leaves zeros behind it, as on the card. */
