@@ -3352,6 +3352,7 @@ static bool gx_tile_pattern(GxRenderer *gx, int32_t tpagIndex, float xscale, flo
 			}
 			t->objReady = false;
 		}
+	gx->targetDirty = true;
 	return true;
 }
 
