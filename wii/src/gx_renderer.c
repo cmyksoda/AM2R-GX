@@ -1368,6 +1368,9 @@ static void gx_unshare(GxRenderer *gx, GxSurf *s, bool keep)
 	s->sharer = o->sharer = 0;
 	s->objReady = o->objReady = false;
 	if (keep) {
+		/* The CPU can read a buffer whose CopyTex is still in flight. */
+		GX_DrawDone();
+		DCInvalidateRange(shared, surf_bytes(s->texW, s->texH));
 		memcpy(s->texels, shared, surf_bytes(s->texW, s->texH));
 		DCFlushRange(s->texels, surf_bytes(s->texW, s->texH));
 	}
@@ -1386,6 +1389,8 @@ static void gx_share(GxRenderer *gx, int32_t srcId, int32_t destId)
 		return;
 	gx_unshare(gx, dest, false);
 	if (src->sharer) {
+		GX_DrawDone();
+		DCInvalidateRange(src->texels, nbytes);
 		memcpy(dest->texels, src->texels, nbytes);
 		DCFlushRange(dest->texels, nbytes);
 		dest->objReady = false;
