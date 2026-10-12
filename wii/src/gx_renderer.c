@@ -2703,9 +2703,14 @@ static void gxDrawTile(Renderer *renderer, RoomTile *tile, float offsetX, float 
 		gx_stat.skipped++;
 		return;
 	}
+	/* Most room tiles are offscreen; reject their columns before resolving the HUD lift. */
+	if ((x0 <= gx_clipL && x1 <= gx_clipL) || (x0 >= gx_clipR && x1 >= gx_clipR)) {
+		gx_stat.sprites++;
+		gx_stat.culled++;
+		return;
+	}
 	gx_clip_rows(&clipT, &clipB);
-	if (fmaxf(x0, x1) <= gx_clipL || fminf(x0, x1) >= gx_clipR ||
-	    fmaxf(y0, y1) <= clipT || fminf(y0, y1) >= clipB) {
+	if ((y0 <= clipT && y1 <= clipT) || (y0 >= clipB && y1 >= clipB)) {
 		gx_stat.sprites++;
 		gx_stat.culled++;
 		return;
