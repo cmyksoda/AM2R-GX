@@ -1380,6 +1380,8 @@ static void gx_share(GxRenderer *gx, int32_t srcId, int32_t destId)
 	GxSurf *src = &gx->surfs[srcId], *dest = &gx->surfs[destId];
 	u32 nbytes = surf_bytes(src->texW, src->texH);
 
+	if (srcId == destId)
+		return;
 	if (src->sharer == destId)
 		return;
 	gx_unshare(gx, dest, false);
