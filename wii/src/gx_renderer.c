@@ -1577,7 +1577,8 @@ static bool gx_bind_surface(GxRenderer *gx, int32_t id, bool restore)
 		gx_flush_target(gx);
 	gx->currentTarget = id;
 	gx->targetBound = true;
-	gx->targetDirty = false;
+	if (!live)
+		gx->targetDirty = false;
 	gx_cur = gx;
 	if (!live)
 		gx_pe_kick();
