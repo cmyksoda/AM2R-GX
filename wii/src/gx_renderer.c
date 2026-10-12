@@ -677,6 +677,7 @@ static void emit_quad(float x0, float y0, float x1, float y1, float x2, float y2
 		tr1 = s->tilesY - 1;
 	if (c1 < c0 || tr1 < tr0)
 		return;
+	gx_cur->targetDirty = true;
 	flat = u0 == u3 && u1 == u2 && v0 == v1 && v3 == v2 && r0 == r1 && r0 == r2 && r0 == r3 &&
 	       g0 == g1 && g0 == g2 && g0 == g3 && b0 == b1 && b0 == b2 && b0 == b3 && a0 == a1 && a0 == a2 && a0 == a3;
 	/* Tiled surfaces are rasterized on the CPU: GX CopyTex of a tiled EFB never wrote texels. */
@@ -1416,7 +1417,8 @@ static void gx_flush_target(GxRenderer *gx)
 	if ((uint32_t)gx->currentTarget >= gx->surfCount)
 		return;
 	s = &gx->surfs[gx->currentTarget];
-	if (!s->exists)
+	/* A restored target already has a current texture; only new drawing needs a copy. */
+	if (!s->exists || !gx->targetDirty)
 		return;
 	if (s->tiles) {
 		int i, n = s->tilesX * s->tilesY;
@@ -3157,6 +3159,7 @@ static void gxClearScreen(Renderer *renderer, uint32_t color, float alpha)
 	/* A tiled surface is drawn on the CPU, where a clear quad would blend its two million pixels one by one. */
 	if (gx_tiled_target(gx)) {
 		gx_tiles_fill(gx_tiled_target(gx), r, g, b, a);
+		gx->targetDirty = true;
 		return;
 	}
 	GX_SetColorUpdate(GX_TRUE);
