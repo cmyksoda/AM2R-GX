@@ -1,0 +1,36 @@
+Reason: floor is called by GML's floor(), by banker's rounding (four times per bounding box in collision compatibility
+mode) and by other builtins; newlib's floor is a long software routine on the Wii's CPU, and floor plus the rounding
+came to 2.5-3% of the CPU time in the mechanical and water rooms (Dolphin perf). Inside the int32 range a truncation
+and one comparison give the same value; NaN, infinities, out-of-range values and both zeros still go to libm.
+Double-real builds only. Bit-for-bit equal to libm floor and to the old banker's rounding over 21.4 million values
+(halves, values next to integers, both zeros, subnormals, the int32 edges, infinities, NaN), with the build's
+-ffast-math flags and undefined-behavior traps.
+Upstream: Speed only, double-real builds. Retires this patch when merged.
+
+--- a/src/real_type.h
++++ b/src/real_type.h
+@@ -47,6 +47,15 @@
+ 
+ typedef double GMLReal;
+ 
++// libm's floor is a long software routine on the Wii's CPU; inside the int32 range a truncation gives the same value.
++// Zeros and subnormals go to libm by their bits: -ffast-math and the FPU's non-IEEE mode both blur them in compares.
++static inline double GMLReal_floorFast(double v) {
++    union { double d; uint64_t u; } bits = { v };
++    if ((bits.u & 0x7FF0000000000000ull) == 0 || !(v > -2147483648.0 && 2147483647.0 > v)) return floor(v);
++    double t = (double) (int32_t) v;
++    return t > v ? t - 1.0 : t;
++}
++
+ #define GMLReal_sin sin
+ #define GMLReal_cos cos
+ #define GMLReal_tan tan
+@@ -57,7 +66,7 @@
+ #define GMLReal_sqrt sqrt
+ #define GMLReal_fabs fabs
+ #define GMLReal_fmod fmod
+-#define GMLReal_floor floor
++#define GMLReal_floor GMLReal_floorFast
+ #define GMLReal_ceil ceil
+ #define GMLReal_round round
+ #define GMLReal_pow pow

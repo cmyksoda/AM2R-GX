@@ -43,7 +43,7 @@ wii: $(BUTTER)/CMakeLists.txt
 	rsync -a --delete wii/src/ $(BUTTER)/src/wii/
 	# The local test hooks (wii/test/, never in the repository) join the build when they are on disk.
 	if [ "$(HOOKS)" != 0 ] && [ -d wii/test/src ]; then rsync -a wii/test/src/ $(BUTTER)/src/wii/; fi
-	cd $(BUTTER) && git checkout -- CMakeLists.txt src/collision.h src/gettime.c src/ini.c src/instance.c src/instance.h src/loop.c src/matrix_math.h src/random.c src/random.h src/runner.c src/runner.h src/spatial_grid.c src/vm.c src/vm.h src/vm_builtins.c src/vm_builtins.h
+	cd $(BUTTER) && git checkout -- CMakeLists.txt src/collision.h src/gettime.c src/ini.c src/instance.c src/instance.h src/loop.c src/matrix_math.h src/random.c src/random.h src/real_type.h src/runner.c src/runner.h src/spatial_grid.c src/vm.c src/vm.h src/vm_builtins.c src/vm_builtins.h
 	cd $(BUTTER) && git apply ../../wii/patches/0001-cmake-add-PLATFORM-wii.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0002-gettime-wii.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0003-loop-no-sigaction-on-wii.patch
@@ -85,6 +85,7 @@ wii: $(BUTTER)/CMakeLists.txt
 	cd $(BUTTER) && git apply ../../wii/patches/0041-mouse-snapshot-relocation.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0042-event-null-snapshots.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0043-draw-list-keeps-sorted-tiles.patch
+	cd $(BUTTER) && git apply ../../wii/patches/0044-floor-without-libm.patch
 	if [ "$(HOOKS)" != 0 ] && [ -f wii/test/patches/0099-debug-collision-trace.patch ]; then cd $(BUTTER) && git apply ../../wii/test/patches/0099-debug-collision-trace.patch; fi
 	cmake -B $(WII_BUILD) -S $(BUTTER) $(WII_CMAKE_FLAGS)
 	cmake --build $(WII_BUILD) -j$(JOBS)
