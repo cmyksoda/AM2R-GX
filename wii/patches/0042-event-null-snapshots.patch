@@ -1,0 +1,24 @@
+Reason: room teardown clears instance array slots before running Cleanup callbacks.
+Nested health/lives events must skip those empty snapshot slots.
+Upstream: correctness fix, every platform. Retire this patch when merged.
+
+--- a/src/runner.c
++++ b/src/runner.c
+@@ -530,7 +530,7 @@
+         {
+         for (int32_t i = (int32_t) snapshotBase; snapshotCount > i; i++) {
+             Instance* inst = runner->eventDispatchInstances[i];
+-            if (!inst->active) continue;
++            if (inst == nullptr || !inst->active) continue;
+             int32_t ownerObjectIndex = -1;
+             int32_t codeId = ResolvedEventTable_lookup(table, inst->objectIndex, slot, &ownerObjectIndex);
+             if (0 > codeId) continue;
+@@ -549,7 +549,7 @@
+ 
+     repeat(count, i) {
+         Instance* inst = runner->eventDispatchInstances[snapshotBase + (size_t) i];
+-        if (!inst->active) continue;
++        if (inst == nullptr || !inst->active) continue;
+         // Skip non-responders without entering Runner_executeEvent. ResolvedEventTable_lookup is a tiny CSR scan; non-responders bail in a few compares and avoid the VM state save/restore overhead inside Runner_executeEventFromObject.
+         int32_t ownerObjectIndex = -1;
+         int32_t codeId = ResolvedEventTable_lookup(&runner->eventTable, inst->objectIndex, slot, &ownerObjectIndex);
