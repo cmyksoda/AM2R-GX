@@ -1,0 +1,112 @@
+Reason: every instance created or destroyed rebuilt the draw list and sorted all of it, tiles included. A GMS1 room
+keeps its tiles in the list (rm_a5h04: about 2,300 entries with a few hundred instances), and AM2R creates and
+destroys bubbles, sparks and debris most frames, so the water room spent about 7.5% of its CPU time in that sort
+(Dolphin perf). The tile run from the previous rebuild is now reused when it still holds every tile once and is still
+sorted at the current tile depths; only instances and particle systems are sorted, and the two sorted runs are merged.
+The order is a strict total order (depth, type, then a unique index per type), so the merge gives the same list as one
+full sort.
+Upstream: Speed only, every platform. Retires this patch when merged.
+
+--- a/src/runner.c
++++ b/src/runner.c
+@@ -813,11 +813,64 @@
+     }
+ }
+ 
++// GMS1 rooms hold many more tiles than instances. A tile run from the last rebuild that is still sorted at the room's
++// current depths, and has every tile once, is reused as is; only the rest is sorted, then the two runs are merged.
++static Drawable* drawableTileRun = nullptr;
++
++static void mergeTilesIntoDrawables(Runner* runner, Room* room) {
++    static Drawable* rest = nullptr;
++    Drawable* oldTiles;
++    int32_t tileCount = (int32_t) room->tileCount;
++    bool reuse = (int32_t) arrlen(drawableTileRun) == tileCount;
++
++    oldTiles = drawableTileRun;
++    for (int32_t i = 0; reuse && tileCount > i; i++) {
++        if (0 > oldTiles[i].tileIndex || oldTiles[i].tileIndex >= tileCount) reuse = false;
++        else oldTiles[i].depth = room->tiles[oldTiles[i].tileIndex].tileDepth;
++    }
++    if (reuse) reuse = isDrawableArraySorted(oldTiles, tileCount);
++    if (!reuse) {
++        arrsetlen(drawableTileRun, 0);
++        repeat(tileCount, i) {
++            Drawable d;
++            ZERO_STRUCT(d);
++            d.type = DRAWABLE_TILE;
++            d.depth = room->tiles[i].tileDepth;
++            d.tileIndex = (int32_t) i;
++            arrput(drawableTileRun, d);
++        }
++        oldTiles = drawableTileRun;
++        if (tileCount > 1) qsort(oldTiles, (size_t) tileCount, sizeof(Drawable), compareDrawables);
++    }
++
++    int32_t restCount = (int32_t) arrlen(runner->cachedDrawables);
++    arrsetlen(rest, 0);
++    if (restCount > 0) {
++        arrsetlen(rest, (size_t) restCount);
++        memcpy(rest, runner->cachedDrawables, (size_t) restCount * sizeof(Drawable));
++        if (restCount > 1) qsort(rest, (size_t) restCount, sizeof(Drawable), compareDrawables);
++    }
++
++    arrsetlen(runner->cachedDrawables, (size_t) (restCount + tileCount));
++    int32_t a = 0, b = 0, out = 0;
++    while (restCount > a || tileCount > b) {
++        bool takeTile = restCount <= a || (tileCount > b && compareDrawables(&oldTiles[b], &rest[a]) < 0);
++        runner->cachedDrawables[out++] = takeTile ? oldTiles[b++] : rest[a++];
++    }
++}
++
+ // Rebuilds runner->cachedDrawables when invalidated. Two-tier strategy:
+ //   structureDirty - the SET of entries changed (instance/layer create or destroy, room change). Drop the cache and re-add every instance/tile/runtime-layer, then qsort.
+ //   sortDirty only - the entries are the same but .depth values may have shifted. Refresh depths from the live sources and only qsort if the order actually broke.
+ static void rebuildDrawableCacheIfDirty(Runner* runner) {
+     if (runner->drawableListStructureDirty) {
++        bool gms1 = !DataWin_isVersionAtLeast(runner->dataWin, 2, 0, 0, 0);
++        arrsetlen(drawableTileRun, 0);
++        if (gms1) {
++            repeat(arrlen(runner->cachedDrawables), i) {
++                if (runner->cachedDrawables[i].type == DRAWABLE_TILE) arrput(drawableTileRun, runner->cachedDrawables[i]);
++            }
++        }
+         arrsetlen(runner->cachedDrawables, 0);
+         Room* room = runner->currentRoom;
+         if (room == nullptr) {
+@@ -837,17 +890,7 @@
+             arrput(runner->cachedDrawables, d);
+         }
+ 
+-        if (!DataWin_isVersionAtLeast(runner->dataWin, 2, 0, 0, 0)) {
+-            repeat(room->tileCount, i) {
+-                RoomTile* tile = &room->tiles[i];
+-                Drawable d;
+-                ZERO_STRUCT(d);
+-                d.type = DRAWABLE_TILE;
+-                d.depth = tile->tileDepth;
+-                d.tileIndex = (int32_t) i;
+-                arrput(runner->cachedDrawables, d);
+-            }
+-        } else {
++        if (!gms1) {
+             size_t runtimeLayersCount = arrlenu(runner->runtimeLayers);
+             repeat(runtimeLayersCount, i) {
+                 RuntimeLayer* runtimeLayer = &runner->runtimeLayers[i];
+@@ -875,9 +918,13 @@
+         }
+         }
+ 
+-        int32_t count = (int32_t) arrlen(runner->cachedDrawables);
+-        if (count > 1) {
+-            qsort(runner->cachedDrawables, count, sizeof(Drawable), compareDrawables);
++        if (gms1) {
++            mergeTilesIntoDrawables(runner, room);
++        } else {
++            int32_t count = (int32_t) arrlen(runner->cachedDrawables);
++            if (count > 1) {
++                qsort(runner->cachedDrawables, count, sizeof(Drawable), compareDrawables);
++            }
+         }
+         runner->drawableListStructureDirty = false;
+         runner->drawableListSortDirty = false;
