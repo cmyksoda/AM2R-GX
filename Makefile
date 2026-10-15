@@ -79,6 +79,7 @@ wii: $(BUTTER)/CMakeLists.txt
 	cd $(BUTTER) && git apply ../../wii/patches/0037-collision-unit-scale.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0038-cardinal-motion.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0039-reentrant-event-snapshots.patch
+	cd $(BUTTER) && git apply ../../wii/patches/0040-collision-query-wrap.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0041-mouse-snapshot-relocation.patch
 	if [ "$(HOOKS)" != 0 ] && [ -f wii/test/patches/0099-debug-collision-trace.patch ]; then cd $(BUTTER) && git apply ../../wii/test/patches/0099-debug-collision-trace.patch; fi
 	cmake -B $(WII_BUILD) -S $(BUTTER) $(WII_CMAKE_FLAGS)
