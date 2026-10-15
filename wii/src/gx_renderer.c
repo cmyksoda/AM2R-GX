@@ -166,7 +166,7 @@ static bool gx_wide_filter = true; /* [Screen] WiiWideFilter; 0 = the plain 2,1,
 static struct {
 	u32 quads, tiles, sprites, copies, binds, targets, skipped, culled, n;
 	double area; /* target pixels covered by the quads: fill, the thing a GPU-bound room pays for */
-	u64 emitUs, copyUs, drawUs, otherUs, frameStart, lastEnd;
+	u64 emitTicks, copyUs, drawUs, otherUs, frameStart, lastEnd;
 } gx_stat;
 
 void GxRenderer_setWideFilter(bool on)
@@ -765,10 +765,14 @@ static double gx_visible_area(float x0, float y0, float x1, float y1, float x2, 
 	gx_axis_bounds(y0, y1, y2, y3, &t, &b);
 
 	if (gx_cur) {
-		l = fmaxf(l, (float)gx_cur->viewX);
-		t = fmaxf(t, (float)gx_cur->viewY);
-		r = fminf(r, (float)(gx_cur->viewX + gx_cur->viewW));
-		b = fminf(b, (float)(gx_cur->viewY + gx_cur->viewH));
+		if (!(l >= (float)gx_cur->viewX))
+			l = (float)gx_cur->viewX;
+		if (!(t >= (float)gx_cur->viewY))
+			t = (float)gx_cur->viewY;
+		if (!(r <= (float)(gx_cur->viewX + gx_cur->viewW)))
+			r = (float)(gx_cur->viewX + gx_cur->viewW);
+		if (!(b <= (float)(gx_cur->viewY + gx_cur->viewH)))
+			b = (float)(gx_cur->viewY + gx_cur->viewH);
 	}
 	return (r > l && b > t) ? (double)(r - l) * (b - t) : 0.0;
 }
@@ -807,7 +811,7 @@ static void emit_quad_raw(float x0, float y0, float x1, float y1, float x2, floa
 	}
 	gx_stat.quads++;
 	gx_stat.area += gx_visible_area(x0, y0, x1, y1, x2, y2, x3, y3);
-	gx_stat.emitUs += ticks_to_microsecs(gettime() - t);
+	gx_stat.emitTicks += gettime() - t;
 }
 
 static GxFillProbe gx_fill_probe; /* NULL unless a test asks: fill per page item, to name a GPU-bound room's filler */
@@ -2531,7 +2535,7 @@ static void gxEndFrameEnd(Renderer *renderer)
 	if (++gx_stat.n == 200) {
 		logInfo("GXSTAT draw %.2f ms/frame: emit %.2f ms in %u quads (%u tiles, %u sprites, %u skipped, %u culled), "
 			"%u copies %.2f ms, %u binds, %u targets; between draws %.2f ms; fill %.2f Mpx\n",
-			gx_stat.drawUs / 200000.0, gx_stat.emitUs / 200000.0, gx_stat.quads / 200, gx_stat.tiles / 200,
+			gx_stat.drawUs / 200000.0, ticks_to_microsecs(gx_stat.emitTicks) / 200000.0, gx_stat.quads / 200, gx_stat.tiles / 200,
 			gx_stat.sprites / 200, gx_stat.skipped / 200, gx_stat.culled / 200,
 			gx_stat.copies / 200, gx_stat.copyUs / 200000.0, gx_stat.binds / 200, gx_stat.targets / 200,
 			gx_stat.otherUs / 200000.0, gx_stat.area / 200e6);
@@ -2540,7 +2544,7 @@ static void gxEndFrameEnd(Renderer *renderer)
 			gx_fill_probe(renderer->dataWin, -1, 0.0);
 		gx_stat.quads = gx_stat.tiles = gx_stat.sprites = gx_stat.copies = gx_stat.binds = gx_stat.targets = 0;
 		gx_stat.skipped = gx_stat.culled = 0;
-		gx_stat.emitUs = gx_stat.copyUs = gx_stat.drawUs = gx_stat.otherUs = 0;
+		gx_stat.emitTicks = gx_stat.copyUs = gx_stat.drawUs = gx_stat.otherUs = 0;
 		gx_stat.n = 0;
 	}
 }
