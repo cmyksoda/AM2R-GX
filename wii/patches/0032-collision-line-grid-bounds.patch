@@ -1,0 +1,43 @@
+Reason: avoid redundant collision arithmetic while preserving the original query order and results.
+Upstream: speed only, every platform. Retire this patch when merged.
+
+--- a/src/vm_builtins.c
++++ b/src/vm_builtins.c
+@@ -12731,6 +12731,23 @@
+     return found;
+ }
+ 
++// Clamp the ordered line endpoints to the grid without calling fmin/fmax repeatedly.
++// Keep the library behavior for exceptional endpoints, including signaling NaNs.
++static inline void collisionLineGridBounds(GMLReal a, GMLReal b, GMLReal limit, GMLReal* low, GMLReal* high) {
++    if (isnan(a) || isnan(b)) {
++        *low = GMLReal_fmin(GMLReal_fmax(GMLReal_fmin(a, b), 0), limit);
++        *high = GMLReal_fmin(GMLReal_fmax(GMLReal_fmax(a, b), 0), limit);
++        return;
++    }
++    if (a > b) { GMLReal tmp = a; a = b; b = tmp; }
++    if (!(a >= 0)) a = 0;
++    if (!(b >= 0)) b = 0;
++    if (a > limit) a = limit;
++    if (b > limit) b = limit;
++    *low = a;
++    *high = b;
++}
++
+ // collision_line(x1, y1, x2, y2, obj, prec, notme)
+ static RValue builtin_collision_line(VMContext* ctx, RValue* args, int32_t argCount) {
+     REQUIRE_ARGC_AT_LEAST("collision_line", 7, RValue_makeReal((GMLReal) INSTANCE_NOONE));
+@@ -12761,10 +12778,9 @@
+         SpatialGrid_syncGrid(runner, grid);
+         GMLReal gridRight = (GMLReal) grid->gridWidth * SPATIAL_GRID_CELL_SIZE - 1;
+         GMLReal gridBottom = (GMLReal) grid->gridHeight * SPATIAL_GRID_CELL_SIZE - 1;
+-        GMLReal qx1 = GMLReal_fmin(GMLReal_fmax(GMLReal_fmin(lx1, lx2), 0), gridRight);
+-        GMLReal qx2 = GMLReal_fmin(GMLReal_fmax(GMLReal_fmax(lx1, lx2), 0), gridRight);
+-        GMLReal qy1 = GMLReal_fmin(GMLReal_fmax(GMLReal_fmin(ly1, ly2), 0), gridBottom);
+-        GMLReal qy2 = GMLReal_fmin(GMLReal_fmax(GMLReal_fmax(ly1, ly2), 0), gridBottom);
++        GMLReal qx1, qx2, qy1, qy2;
++        collisionLineGridBounds(lx1, lx2, gridRight, &qx1, &qx2);
++        collisionLineGridBounds(ly1, ly2, gridBottom, &qy1, &qy2);
+         SpatialGridQuery query = SpatialGrid_prepareQuery(runner, qx1, qy1, qx2, qy2, targetObjIndex);
+ 
+         for (int32_t gx = query.range.minGridX; query.range.maxGridX >= gx; gx++) {

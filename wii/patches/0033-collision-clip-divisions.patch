@@ -1,0 +1,23 @@
+Reason: avoid redundant collision arithmetic while preserving the original query order and results.
+Upstream: speed only, every platform. Retire this patch when merged.
+
+--- a/src/collision.h
++++ b/src/collision.h
+@@ -342,10 +342,14 @@
+             if (q[i] < 0) return false;
+             continue;
+         }
+-        GMLReal t = q[i] / p[i];
++        // Enter starts at 0 and exit at 1; only divide when this edge can tighten them.
+         if (p[i] < 0) {
+-            if (t > tEnter) tEnter = t;
+-        } else {
++            if (q[i] < 0) {
++                GMLReal t = q[i] / p[i];
++                if (t > tEnter) tEnter = t;
++            }
++        } else if (q[i] < p[i]) {
++            GMLReal t = q[i] / p[i];
+             if (t < tExit) tExit = t;
+         }
+         if (tEnter > tExit) return false;

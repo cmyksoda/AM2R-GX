@@ -70,6 +70,8 @@ wii: $(BUTTER)/CMakeLists.txt
 	cd $(BUTTER) && git apply ../../wii/patches/0027-spatial-grid-live-instances-skip-full-scan.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0028-matrix-zero-angle-transform.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0029-collision-line-reuse-bounds.patch
+	cd $(BUTTER) && git apply ../../wii/patches/0032-collision-line-grid-bounds.patch
+	cd $(BUTTER) && git apply ../../wii/patches/0033-collision-clip-divisions.patch
 	if [ "$(HOOKS)" != 0 ] && [ -f wii/test/patches/0099-debug-collision-trace.patch ]; then cd $(BUTTER) && git apply ../../wii/test/patches/0099-debug-collision-trace.patch; fi
 	cmake -B $(WII_BUILD) -S $(BUTTER) $(WII_CMAKE_FLAGS)
 	cmake --build $(WII_BUILD) -j$(shell nproc)
