@@ -754,12 +754,28 @@ static void emit_quad(float x0, float y0, float x1, float y1, float x2, float y2
 
 static int gx_quads;
 
+static void gx_axis_bounds(float a, float b, float c, float d, float *low, float *high)
+{
+	if (isnan(a) || isnan(b) || isnan(c) || isnan(d)) {
+		*low = fminf(fminf(a, b), fminf(c, d));
+		*high = fmaxf(fmaxf(a, b), fmaxf(c, d));
+		return;
+	}
+	float abLow = a < b ? a : b, abHigh = a > b ? a : b;
+	float cdLow = c < d ? c : d, cdHigh = c > d ? c : d;
+
+	*low = abLow < cdLow ? abLow : cdLow;
+	*high = abHigh > cdHigh ? abHigh : cdHigh;
+}
+
 /* The part of a quad's box inside the current view: what the rasterizer fills after the scissor.
  * Backgrounds are tiled across the whole room, so the geometric area would count mostly off-screen quads. */
 static double gx_visible_area(float x0, float y0, float x1, float y1, float x2, float y2, float x3, float y3)
 {
-	float l = fminf(fminf(x0, x1), fminf(x2, x3)), r = fmaxf(fmaxf(x0, x1), fmaxf(x2, x3));
-	float t = fminf(fminf(y0, y1), fminf(y2, y3)), b = fmaxf(fmaxf(y0, y1), fmaxf(y2, y3));
+	float l, r, t, b;
+
+	gx_axis_bounds(x0, x1, x2, x3, &l, &r);
+	gx_axis_bounds(y0, y1, y2, y3, &t, &b);
 
 	if (gx_cur) {
 		l = fmaxf(l, (float)gx_cur->viewX);
