@@ -18,7 +18,8 @@ bool WiiPng_decodeRows(const u8 *png, size_t len, WiiPngRowFn emit, void *user);
 /* Everything one decode needs, zlib's state and window included, so a second thread decodes without malloc. */
 typedef struct {
 	u8 rows[2][1 + 2048 * 4];
-	u8 zmem[48 * 1024];
+	/* zlib casts arena allocations to word-aligned state and lookup tables. */
+	u8 zmem[48 * 1024] __attribute__((aligned(32)));
 	u32 zused;
 } WiiPngWork;
 
