@@ -1,0 +1,20 @@
+Reason: unit and mirrored-unit sprite scales do not need division for precise collision points.
+Upstream: speed only, every platform. Retire this patch when merged.
+
+--- a/src/collision.h
++++ b/src/collision.h
+@@ -411,8 +411,12 @@
+     }
+ 
+     // Inverse scale + add origin
+-    GMLReal localX = dx / inst->imageXscale + (GMLReal) spr->originX;
+-    GMLReal localY = dy / inst->imageYscale + (GMLReal) spr->originY;
++    if (inst->imageXscale != 1.0f)
++        dx = inst->imageXscale == -1.0f ? -dx : dx / inst->imageXscale;
++    if (inst->imageYscale != 1.0f)
++        dy = inst->imageYscale == -1.0f ? -dy : dy / inst->imageYscale;
++    GMLReal localX = dx + (GMLReal) spr->originX;
++    GMLReal localY = dy + (GMLReal) spr->originY;
+ 
+     int32_t ix = (int32_t) localX;
+     int32_t iy = (int32_t) localY;
