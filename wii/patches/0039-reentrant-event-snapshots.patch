@@ -1,0 +1,56 @@
+Reason: nested health/lives events must not overwrite the outer event snapshot.
+Keep snapshots as stacked ranges and reload the shared allocation after callbacks.
+Upstream: correctness fix, every platform. Retire this patch when merged.
+
+--- a/src/runner.c
++++ b/src/runner.c
+@@ -507,7 +507,7 @@
+ 
+     // We always snapshot the iteration list before dispatching so instances spawned during this phase do NOT fire the current event.
+     Instance** scratch = runner->eventDispatchInstances;
+-    arrsetlen(scratch, 0);
++    size_t snapshotBase = arrlenu(scratch);
+ 
+     if (eventUsesPerObjectDispatch(eventType)) {
+         ResolvedEventTable* table = &runner->eventTable;
+@@ -528,8 +528,8 @@
+ 
+         int32_t snapshotCount = (int32_t) arrlen(scratch);
+         {
+-        repeat(snapshotCount, i) {
+-            Instance* inst = scratch[i];
++        for (int32_t i = (int32_t) snapshotBase; snapshotCount > i; i++) {
++            Instance* inst = runner->eventDispatchInstances[i];
+             if (!inst->active) continue;
+             int32_t ownerObjectIndex = -1;
+             int32_t codeId = ResolvedEventTable_lookup(table, inst->objectIndex, slot, &ownerObjectIndex);
+@@ -537,17 +537,18 @@
+             Runner_executeResolvedEvent(runner, inst, eventType, eventSubtype, codeId, ownerObjectIndex);
+         }
+         }
++        arrsetlen(runner->eventDispatchInstances, snapshotBase);
+         return;
+     }
+ 
+     int32_t count = (int32_t) arrlen(runner->instances);
+     if (count == 0) return;
+-    arrsetlen(scratch, count);
+-    memcpy(scratch, runner->instances, (size_t) count * sizeof(Instance*));
++    arrsetlen(scratch, snapshotBase + (size_t) count);
++    memcpy(&scratch[snapshotBase], runner->instances, (size_t) count * sizeof(Instance*));
+     runner->eventDispatchInstances = scratch;
+ 
+     repeat(count, i) {
+-        Instance* inst = scratch[i];
++        Instance* inst = runner->eventDispatchInstances[snapshotBase + (size_t) i];
+         if (!inst->active) continue;
+         // Skip non-responders without entering Runner_executeEvent. ResolvedEventTable_lookup is a tiny CSR scan; non-responders bail in a few compares and avoid the VM state save/restore overhead inside Runner_executeEventFromObject.
+         int32_t ownerObjectIndex = -1;
+@@ -555,6 +556,7 @@
+         if (0 > codeId) continue;
+         Runner_executeResolvedEvent(runner, inst, eventType, eventSubtype, codeId, ownerObjectIndex);
+     }
++    arrsetlen(runner->eventDispatchInstances, snapshotBase);
+ }
+ 
+ void Runner_setLives(Runner* runner, GMLReal value) {
