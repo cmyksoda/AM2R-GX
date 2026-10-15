@@ -1,0 +1,86 @@
+Reason: every frame AM2R deactivates every solid in Samus's begin step and re-activates those near the view, and every
+enemy's begin step calls instance_activate_region around itself; each call walks the room and recomputes the box of
+every inactive instance, which has not changed (Collision_computeBBox was 2-5% of the CPU time in the profiled rooms,
+Dolphin perf, plus its banker's roundings). An instance now remembers its last valid box together with every input the
+computation reads: the resolved sprite index, the bits of x, y, both scales and the angle, that sprite's bbox mode,
+margins, size and origin, and the collision compatibility mode. The box is reused only when all of them match, so it
+is the box the computation would give; sprite_replace, a reused sprite slot or sprite_set_offset simply change the
+key. Instances without a sprite are not remembered.
+Upstream: Speed only, every platform. Retires this patch when merged.
+
+--- a/src/instance.h
++++ b/src/instance.h
+@@ -83,6 +83,13 @@
+     float timelineSpeed; // default 1.0
+     bool timelineLoop;
+     bool timelineRunning;
++
++    // Collision_computeBBox's last valid result and every input it came from (float bits, sprite and its geometry).
++    bool bboxMemoValid, bboxMemoCompat;
++    int32_t bboxMemoSprite;
++    uint32_t bboxMemoInputs[5];
++    int32_t bboxMemoGeometry[9];
++    GMLReal bboxMemoEdges[4];
+ };
+ 
+ Instance* Instance_create(uint32_t instanceId, int32_t objectIndex, GMLReal x, GMLReal y);
+--- a/src/collision.h
++++ b/src/collision.h
+@@ -32,7 +32,7 @@
+ }
+ 
+ // Computes the axis-aligned bounding box for an instance using its collision sprite
+-static inline InstanceBBox Collision_computeBBox(Runner* runner, Instance* inst) {
++static inline InstanceBBox Collision_computeBBoxUncached(Runner* runner, Instance* inst) {
+     InstanceBBox ret;
+     Sprite* spr = Collision_getSprite(runner->dataWin, inst);
+     if (spr == nullptr) {
+@@ -106,6 +106,48 @@
+     return ret;
+ }
+ 
++// Instances that have not moved are asked for their box over and over (every enemy's activate_region each step), so
++// the last box is reused while every input is bit for bit the same: the instance's, its sprite's geometry and the mode.
++static inline InstanceBBox Collision_computeBBox(Runner* runner, Instance* inst) {
++    Sprite* spr = Collision_getSprite(runner->dataWin, inst);
++    if (spr == nullptr) return Collision_computeBBoxUncached(runner, inst);
++
++    union { float f; uint32_t u; } in[5] = {
++        { inst->x }, { inst->y }, { inst->imageXscale }, { inst->imageYscale }, { inst->imageAngle }
++    };
++    int32_t geometry[9] = {
++        (int32_t) spr->bboxMode, spr->marginLeft, spr->marginRight, spr->marginTop, spr->marginBottom,
++        (int32_t) spr->width, (int32_t) spr->height, spr->originX, spr->originY
++    };
++    int32_t sprIdx = (inst->maskIndex >= 0) ? inst->maskIndex : inst->spriteIndex;
++    bool same = inst->bboxMemoValid && inst->bboxMemoSprite == sprIdx && inst->bboxMemoCompat == runner->collisionCompatibilityMode;
++    for (int32_t i = 0; same && 5 > i; i++) same = inst->bboxMemoInputs[i] == in[i].u;
++    for (int32_t i = 0; same && 9 > i; i++) same = inst->bboxMemoGeometry[i] == geometry[i];
++    if (same) {
++        InstanceBBox ret;
++        ret.left = inst->bboxMemoEdges[0];
++        ret.right = inst->bboxMemoEdges[1];
++        ret.top = inst->bboxMemoEdges[2];
++        ret.bottom = inst->bboxMemoEdges[3];
++        ret.valid = true;
++        return ret;
++    }
++
++    InstanceBBox ret = Collision_computeBBoxUncached(runner, inst);
++    inst->bboxMemoValid = ret.valid;
++    if (ret.valid) {
++        inst->bboxMemoCompat = runner->collisionCompatibilityMode;
++        inst->bboxMemoSprite = sprIdx;
++        repeat(5, i) inst->bboxMemoInputs[i] = in[i].u;
++        repeat(9, i) inst->bboxMemoGeometry[i] = geometry[i];
++        inst->bboxMemoEdges[0] = ret.left;
++        inst->bboxMemoEdges[1] = ret.right;
++        inst->bboxMemoEdges[2] = ret.top;
++        inst->bboxMemoEdges[3] = ret.bottom;
++    }
++    return ret;
++}
++
+ static inline bool Collision_hasFrameMasks(Sprite* sprite) {
+     return sprite != nullptr && sprite->sepMasks == 1 && sprite->masks != nullptr && sprite->maskCount > 0;
+ }
