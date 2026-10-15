@@ -1,0 +1,38 @@
+Reason: cardinal directions have exact clamped sine and cosine values.
+Use the shortcut with double reals; preserve original general-angle, non-finite and float-real expressions.
+Upstream: speed only for double-real builds. Retire this patch when merged.
+
+--- a/src/instance.c
++++ b/src/instance.c
+@@ -195,8 +195,29 @@
+ 
+ // Compute hspeed/vspeed from speed and direction (HTML5: Compute_Speed2)
+ void Instance_computeComponentsFromSpeed(Instance* inst) {
+-    inst->hspeed = (float) (inst->speed * clampFloat(GMLReal_cos(inst->direction * (M_PI / 180.0))));
+-    inst->vspeed = (float) (-inst->speed * clampFloat(GMLReal_sin(inst->direction * (M_PI / 180.0))));
++#ifndef USE_FLOAT_REALS
++    GMLReal cs = 0.0, sn = 0.0;
++    bool cardinal = isfinite(inst->speed);
++    if (inst->direction == 0.0f) {
++        cs = 1.0;
++    } else if (inst->direction == 90.0f) {
++        sn = 1.0;
++    } else if (inst->direction == 180.0f) {
++        cs = -1.0;
++    } else if (inst->direction == 270.0f) {
++        sn = -1.0;
++    } else {
++        cardinal = false;
++    }
++    if (cardinal) {
++        inst->hspeed = (float) (inst->speed * cs);
++        inst->vspeed = (float) (-inst->speed * sn);
++    } else
++#endif
++    {
++        inst->hspeed = (float) (inst->speed * clampFloat(GMLReal_cos(inst->direction * (M_PI / 180.0))));
++        inst->vspeed = (float) (-inst->speed * clampFloat(GMLReal_sin(inst->direction * (M_PI / 180.0))));
++    }
+ 
+     // Round if very close to integer
+     if (GMLReal_fabs(inst->hspeed - GMLReal_round(inst->hspeed)) < 0.0001) {
