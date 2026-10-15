@@ -521,6 +521,45 @@ static GML_ROUNDING RValue wii_water_draw(VMContext *ctx)
 	return RValue_makeUndefined();
 }
 
+enum { TF_LIST_SIZE, TF_LIST_VALUE, TF_SET_ALPHA, TF_COUNT };
+static const char *const tileFnNames[TF_COUNT] = { "ds_list_size", "ds_list_find_value", "tile_set_alpha" };
+static int32_t tileAlphaCode = -1, tileListVar, falphaVar, tileFns[TF_COUNT];
+
+static RValue tile_call(VMContext *ctx, int fn, RValue *args, int32_t argCount)
+{
+	return ((BuiltinFunc)ctx->funcCallCache[tileFns[fn]].builtin)(ctx, args, argCount);
+}
+
+/* oTilesRandomAlpha's user event 0 gives every tile in its list the step's alpha: ~20 bytecode ops a tile, over a
+ * thousand tiles in some Area 5 rooms. The same three builtins run here in the same order. */
+static GML_ROUNDING RValue wii_tiles_alpha(VMContext *ctx)
+{
+	Instance *self = ctx->currentInstance;
+	RValue list, alpha, size, args[2], r;
+	GMLReal i;
+
+	list = self ? Instance_getSelfVar(self, tileListVar) : RValue_makeUndefined();
+	alpha = self ? Instance_getSelfVar(self, falphaVar) : RValue_makeUndefined();
+	if (list.type != RVALUE_REAL || alpha.type != RVALUE_REAL)
+		return VM_interpretCode(ctx, tileAlphaCode);
+	for (i = 0;; i = i + 1) {
+		size = tile_call(ctx, TF_LIST_SIZE, &list, 1);
+		if (gml_compare(i, RValue_toReal(size)) >= 0) {
+			RValue_free(&size);
+			break;
+		}
+		RValue_free(&size);
+		args[0] = list;
+		args[1] = RValue_makeReal(i);
+		args[0] = tile_call(ctx, TF_LIST_VALUE, args, 2);
+		args[1] = alpha;
+		r = tile_call(ctx, TF_SET_ALPHA, args, 2);
+		RValue_free(&r);
+		RValue_free(&args[0]);
+	}
+	return RValue_makeUndefined();
+}
+
 /* Ours, then AM2R's, in its markup (* heading, / centered, a=b paired, ; next row). The roll scrolls at a speed set by
  * its row count to last as long as its music, so these rows make it a little faster, not longer. */
 static const char credits[] = "*AM2R GX;;;;;;;;;;;;"
@@ -559,7 +598,8 @@ void Wii_hookAm2rScripts(VMContext *ctx)
 	ptrdiff_t s = shgeti(ctx->codeIndexByName, "reset_map"), t = shgeti(ctx->codeIndexByName, "draw_cool_text");
 	ptrdiff_t m = shgeti(ctx->codeIndexByName, "draw_map_surf"), b = shgeti(ctx->codeIndexByName, "draw_mapblock");
 	ptrdiff_t w = shgeti(ctx->codeIndexByName, "gml_Object_oWaterFXV2_Draw_0");
-	bool resetMap, mapSurf, water;
+	ptrdiff_t a = shgeti(ctx->codeIndexByName, "gml_Object_oTilesRandomAlpha_Other_10");
+	bool resetMap, mapSurf, water, tiles;
 	int k;
 
 	resetMapCode = s >= 0 ? ctx->codeIndexByName[s].value : -1;
@@ -591,6 +631,10 @@ void Wii_hookAm2rScripts(VMContext *ctx)
 	}
 	for (k = 0; k < WF_COUNT; k++)
 		waterFns[k] = -1;
+	for (k = 0; k < TF_COUNT; k++)
+		tileFns[k] = -1;
+	tileListVar = Wii_varId(ctx->runner, "tile_list", INSTANCE_SELF);
+	falphaVar = Wii_varId(ctx->runner, "falpha", INSTANCE_SELF);
 	repeat(ctx->funcCallCacheCount, fi) {
 		const char *name = ctx->dataWin->func.functions[fi].name;
 		void *standIn = NULL;
@@ -598,6 +642,9 @@ void Wii_hookAm2rScripts(VMContext *ctx)
 		for (k = 0; name && k < WF_COUNT; k++)
 			if (strcmp(name, waterFnNames[k]) == 0)
 				waterFns[k] = (int32_t)fi;
+		for (k = 0; name && k < TF_COUNT; k++)
+			if (strcmp(name, tileFnNames[k]) == 0)
+				tileFns[k] = (int32_t)fi;
 
 		if (name && resetMap && strcmp(name, "reset_map") == 0)
 			standIn = (void *)wii_reset_map;
@@ -615,5 +662,12 @@ void Wii_hookAm2rScripts(VMContext *ctx)
 	if (water) {
 		waterDrawCode = ctx->codeIndexByName[w].value;
 		VM_setNativeCode(ctx, waterDrawCode, wii_water_draw);
+	}
+	tiles = a >= 0 && tileListVar >= 0 && falphaVar >= 0;
+	for (k = 0; k < TF_COUNT; k++)
+		tiles = tiles && tileFns[k] >= 0 && ctx->funcCallCache[tileFns[k]].builtin;
+	if (tiles) {
+		tileAlphaCode = ctx->codeIndexByName[a].value;
+		VM_setNativeCode(ctx, tileAlphaCode, wii_tiles_alpha);
 	}
 }
