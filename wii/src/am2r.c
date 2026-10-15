@@ -818,6 +818,99 @@ static GML_ROUNDING RValue wii_owater_draw(VMContext *ctx)
 	return RValue_makeUndefined();
 }
 
+enum { LF_SET_BLEND, LF_BG_HEIGHT, LF_BACKGROUND_EXT, LF_COUNT };
+static const char *const lavaFnNames[LF_COUNT] = { "draw_set_blend_mode", "background_get_height",
+						   "draw_background_ext" };
+static int32_t lavaDrawCode = -1, lavaYoffsetVar, lavaBgVar, controlWideVar, lavaFns[LF_COUNT];
+
+static RValue lava_call(VMContext *ctx, int fn, RValue *args, int32_t argCount)
+{
+	return ((BuiltinFunc)ctx->funcCallCache[lavaFns[fn]].builtin)(ctx, args, argCount);
+}
+
+static bool builtin_num(VMContext *ctx, int16_t id, const char *name, int32_t index, GmlNum *out)
+{
+	RValue v = VMBuiltins_getVariable(ctx, ctx->currentInstance, id, name, index);
+	bool ok = get_num(v, out);
+
+	RValue_free(&v);
+	return ok;
+}
+
+/* oLavaSurface's Draw adds the glow over the whole room, then the surface strip in 32-pixel columns: same builtins,
+ * order, argument types and arithmetic as the bytecode. */
+static GML_ROUNDING RValue wii_lava_draw(VMContext *ctx)
+{
+	Instance *self = ctx->currentInstance, *g = ctx->globalScopeInstance;
+	Instance *control = VM_findInstanceByTarget(ctx, WATER_CONTROL_OBJECT);
+	GmlNum level, yoff, wide, ws, viewX, viewY, viewH, roomW, roomH, x, y, i, limit;
+	RValue args[8], r, height;
+	GMLReal half;
+
+	if (!self || !g || !control || !get_num(Instance_getSelfVar(g, waterlevelVar), &level) ||
+	    !get_num(Instance_getSelfVar(self, lavaYoffsetVar), &yoff) ||
+	    !get_num(Instance_getSelfVar(control, controlWideVar), &wide) ||
+	    !get_num(Instance_getSelfVar(control, widescreenSpaceVar), &ws) ||
+	    !builtin_num(ctx, BUILTIN_VAR_VIEW_XVIEW, "view_xview", 0, &viewX) ||
+	    !builtin_num(ctx, BUILTIN_VAR_VIEW_YVIEW, "view_yview", 0, &viewY) ||
+	    !builtin_num(ctx, BUILTIN_VAR_VIEW_HVIEW, "view_hview", 0, &viewH) ||
+	    !builtin_num(ctx, BUILTIN_VAR_ROOM_WIDTH, "room_width", -1, &roomW) ||
+	    !builtin_num(ctx, BUILTIN_VAR_ROOM_HEIGHT, "room_height", -1, &roomH) ||
+	    !builtin_num(ctx, BUILTIN_VAR_X, "x", -1, &x) || !builtin_num(ctx, BUILTIN_VAR_Y, "y", -1, &y))
+		return VM_interpretCode(ctx, lavaDrawCode);
+
+	if (gml_compare(num_val(num_add(viewY, viewH)), num_val(num_sub(num_add(level, yoff), num_int(9)))) < 0)
+		return RValue_makeUndefined();
+	args[0] = RValue_makeInt32(1);
+	r = lava_call(ctx, LF_SET_BLEND, args, 1);
+	RValue_free(&r);
+	half = num_val(ws) / 2.0;
+	args[0] = Instance_getSelfVar(self, lavaBgVar);
+	height = lava_call(ctx, LF_BG_HEIGHT, args, 1);
+	{
+		GmlNum h;
+		RValue a[8];
+
+		if (!get_num(height, &h))
+			h = num_real(RValue_toReal(height));
+		a[0] = RValue_makeInt32(133);
+		a[1] = RValue_makeReal(num_val(x) - half);
+		a[2] = num_rvalue(num_add(num_add(num_sub(y, num_int(9)), h), yoff));
+		a[3] = RValue_makeReal(num_val(roomW) / num_val(num_sub(num_int(10), num_mul(num_int(2), wide))));
+		a[4] = RValue_makeReal(num_val(roomH) / 10.0);
+		a[5] = RValue_makeInt32(0);
+		a[6] = RValue_makeInt32(-1);
+		a[7] = RValue_makeReal(0.6);
+		r = lava_call(ctx, LF_BACKGROUND_EXT, a, 8);
+		RValue_free(&r);
+	}
+	RValue_free(&height);
+
+	limit = num_add(roomW, ws);
+	for (i = num_real(0); gml_compare(num_val(i), num_val(limit)) < 0; i = num_add(i, num_int(32))) {
+		GmlNum col = num_add(x, i);
+
+		if (gml_compare(num_val(col), num_val(num_sub(viewX, num_int(33)))) >= 0 &&
+		    gml_compare(num_val(col), num_val(num_add(num_add(viewX, num_int(360)), ws))) < 0 &&
+		    gml_compare(num_val(num_add(num_add(level, yoff), num_int(15))), num_val(viewY)) > 0) {
+			args[0] = Instance_getSelfVar(self, lavaBgVar);
+			args[1] = RValue_makeReal(num_val(col) - half);
+			args[2] = num_rvalue(num_add(num_sub(y, num_int(9)), yoff));
+			args[3] = RValue_makeInt32(1);
+			args[4] = RValue_makeInt32(1);
+			args[5] = RValue_makeInt32(0);
+			args[6] = RValue_makeInt32(-1);
+			args[7] = RValue_makeReal(0.8);
+			r = lava_call(ctx, LF_BACKGROUND_EXT, args, 8);
+			RValue_free(&r);
+		}
+	}
+	args[0] = RValue_makeInt32(0);
+	r = lava_call(ctx, LF_SET_BLEND, args, 1);
+	RValue_free(&r);
+	return RValue_makeUndefined();
+}
+
 /* Ours, then AM2R's, in its markup (* heading, / centered, a=b paired, ; next row). The roll scrolls at a speed set by
  * its row count to last as long as its music, so these rows make it a little faster, not longer. */
 static const char credits[] = "*AM2R GX;;;;;;;;;;;;"
@@ -859,7 +952,8 @@ void Wii_hookAm2rScripts(VMContext *ctx)
 	ptrdiff_t a = shgeti(ctx->codeIndexByName, "gml_Object_oTilesRandomAlpha_Other_10");
 	ptrdiff_t lb = shgeti(ctx->codeIndexByName, "gml_Object_oLBubble_Step_0");
 	ptrdiff_t ow = shgeti(ctx->codeIndexByName, "gml_Object_oWater_Draw_0");
-	bool resetMap, mapSurf, water, tiles, bubbles, owater;
+	ptrdiff_t ls = shgeti(ctx->codeIndexByName, "gml_Object_oLavaSurface_Draw_0");
+	bool resetMap, mapSurf, water, tiles, bubbles, owater, lava;
 	int k;
 
 	resetMapCode = s >= 0 ? ctx->codeIndexByName[s].value : -1;
@@ -897,6 +991,11 @@ void Wii_hookAm2rScripts(VMContext *ctx)
 		bubbleFns[k] = -1;
 	for (k = 0; k < OF_COUNT; k++)
 		owaterFns[k] = -1;
+	for (k = 0; k < LF_COUNT; k++)
+		lavaFns[k] = -1;
+	lavaYoffsetVar = Wii_varId(ctx->runner, "yoffset", INSTANCE_SELF);
+	lavaBgVar = Wii_varId(ctx->runner, "bg", INSTANCE_SELF);
+	controlWideVar = Wii_varId(ctx->runner, "widescreen", INSTANCE_SELF);
 	owaterIVar = Wii_varId(ctx->runner, "i", INSTANCE_SELF);
 	owaterYoffsetVar = Wii_varId(ctx->runner, "yoffset", INSTANCE_SELF);
 	owaterXoffsetVar = Wii_varId(ctx->runner, "xoffset", INSTANCE_SELF);
@@ -925,6 +1024,9 @@ void Wii_hookAm2rScripts(VMContext *ctx)
 		for (k = 0; name && k < OF_COUNT; k++)
 			if (strcmp(name, owaterFnNames[k]) == 0)
 				owaterFns[k] = (int32_t)fi;
+		for (k = 0; name && k < LF_COUNT; k++)
+			if (strcmp(name, lavaFnNames[k]) == 0)
+				lavaFns[k] = (int32_t)fi;
 
 		if (name && resetMap && strcmp(name, "reset_map") == 0)
 			standIn = (void *)wii_reset_map;
@@ -965,5 +1067,13 @@ void Wii_hookAm2rScripts(VMContext *ctx)
 	if (owater) {
 		owaterDrawCode = ctx->codeIndexByName[ow].value;
 		VM_setNativeCode(ctx, owaterDrawCode, wii_owater_draw);
+	}
+	lava = ls >= 0 && waterlevelVar >= 0 && widescreenSpaceVar >= 0 && lavaYoffsetVar >= 0 && lavaBgVar >= 0 &&
+	       controlWideVar >= 0 && Wii_objectIndex(ctx->runner, "oControl") == WATER_CONTROL_OBJECT;
+	for (k = 0; k < LF_COUNT; k++)
+		lava = lava && lavaFns[k] >= 0 && ctx->funcCallCache[lavaFns[k]].builtin;
+	if (lava) {
+		lavaDrawCode = ctx->codeIndexByName[ls].value;
+		VM_setNativeCode(ctx, lavaDrawCode, wii_lava_draw);
 	}
 }
