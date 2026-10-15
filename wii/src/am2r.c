@@ -435,6 +435,28 @@ static bool real_var(Instance *inst, int32_t var, GMLReal *out)
 	return v.type == RVALUE_REAL;
 }
 
+/* A number the bytecode's arithmetic treats exactly as this double: any real, or an int small enough that int math
+ * can't wrap where it would not (make_liquid stores room code's integer literals as ints). */
+static bool num_var(Instance *inst, int32_t var, GMLReal *out)
+{
+	RValue v = Instance_getSelfVar(inst, var);
+
+	if (v.type == RVALUE_INT32 && v.int32 > -(1 << 24) && v.int32 < (1 << 24)) {
+		*out = (GMLReal)v.int32;
+		return true;
+	}
+	*out = v.real;
+	return v.type == RVALUE_REAL;
+}
+
+static bool flag_var(Instance *inst, int32_t var, bool *out)
+{
+	RValue v = Instance_getSelfVar(inst, var);
+
+	*out = RValue_toBool(v);
+	return v.type == RVALUE_REAL || v.type == RVALUE_INT32 || v.type == RVALUE_BOOL;
+}
+
 static bool real_builtin(VMContext *ctx, int16_t id, const char *name, int32_t index, GMLReal *out)
 {
 	RValue v = VMBuiltins_getVariable(ctx, ctx->currentInstance, id, name, index);
@@ -560,6 +582,242 @@ static GML_ROUNDING RValue wii_tiles_alpha(VMContext *ctx)
 	return RValue_makeUndefined();
 }
 
+enum { BF_DESTROY, BF_LERP, BF_COUNT };
+static const char *const bubbleFnNames[BF_COUNT] = { "instance_destroy", "lerp" };
+static int32_t bubbleStepCode = -1, fadeoutVar, erisVar, waterlevelVar, wateroffsetVar, bubbleFns[BF_COUNT];
+
+static RValue bubble_call(VMContext *ctx, int fn, RValue *args, int32_t argCount)
+{
+	return ((BuiltinFunc)ctx->funcCallCache[bubbleFns[fn]].builtin)(ctx, args, argCount);
+}
+
+static GMLReal builtin_real(VMContext *ctx, int16_t id, const char *name, int32_t index)
+{
+	RValue v = VMBuiltins_getVariable(ctx, ctx->currentInstance, id, name, index);
+	GMLReal r = RValue_toReal(v);
+
+	RValue_free(&v);
+	return r;
+}
+
+static void set_builtin(VMContext *ctx, int16_t id, const char *name, GMLReal value)
+{
+	VMBuiltins_setVariable(ctx, ctx->currentInstance, id, name, RValue_makeReal(value), -1);
+}
+
+static void bubble_destroy(VMContext *ctx)
+{
+	RValue r = bubble_call(ctx, BF_DESTROY, NULL, 0);
+
+	RValue_free(&r);
+}
+
+/* oLBubble's step runs for every bubble in a water room, ~180 at once in rm_a5h04. The same builtin variables are
+ * read and written in the same order as the bytecode; a non-real input interprets it. */
+static GML_ROUNDING RValue wii_bubble_step(VMContext *ctx)
+{
+	Instance *self = ctx->currentInstance, *g = ctx->globalScopeInstance;
+	Instance *control = VM_findInstanceByTarget(ctx, WATER_CONTROL_OBJECT);
+	GMLReal level, offset, ws, v, x, y, vx, vy;
+	RValue args[3], r;
+	bool fadeout, eris, outside;
+
+	if (!self || !g || !control || !flag_var(self, fadeoutVar, &fadeout) || !flag_var(self, erisVar, &eris) ||
+	    !num_var(g, waterlevelVar, &level) || !num_var(g, wateroffsetVar, &offset) ||
+	    !num_var(control, widescreenSpaceVar, &ws))
+		return VM_interpretCode(ctx, bubbleStepCode);
+
+	if (fadeout) {
+		set_builtin(ctx, BUILTIN_VAR_IMAGE_ALPHA, "image_alpha",
+			    builtin_real(ctx, BUILTIN_VAR_IMAGE_ALPHA, "image_alpha", -1) - 0.1);
+		if (gml_compare(builtin_real(ctx, BUILTIN_VAR_IMAGE_ALPHA, "image_alpha", -1), 0) <= 0)
+			bubble_destroy(ctx);
+	} else if (gml_compare(builtin_real(ctx, BUILTIN_VAR_Y, "y", -1), level + offset + 10) < 0) {
+		Instance_setSelfVar(self, fadeoutVar, RValue_makeReal(1));
+	}
+
+	if (!eris) {
+		v = builtin_real(ctx, BUILTIN_VAR_HSPEED, "hspeed", -1);
+		if (gml_compare(v, 0) != 0)
+			set_builtin(ctx, BUILTIN_VAR_HSPEED, "hspeed", v * 0.9);
+		v = builtin_real(ctx, BUILTIN_VAR_VSPEED, "vspeed", -1);
+		if (gml_compare(v, -1) > 0)
+			set_builtin(ctx, BUILTIN_VAR_VSPEED, "vspeed", v - 0.02);
+		if (gml_compare(builtin_real(ctx, BUILTIN_VAR_VSPEED, "vspeed", -1), 2) > 0)
+			set_builtin(ctx, BUILTIN_VAR_VSPEED, "vspeed", 2);
+	} else {
+		args[0] = VMBuiltins_getVariable(ctx, self, BUILTIN_VAR_SPEED, "speed", -1);
+		args[1] = RValue_makeInt32(0);
+		args[2] = RValue_makeReal(0.05);
+		r = bubble_call(ctx, BF_LERP, args, 3);
+		RValue_free(&args[0]);
+		VMBuiltins_setVariable(ctx, self, BUILTIN_VAR_SPEED, "speed", r, -1);
+		RValue_free(&r);
+	}
+
+	x = builtin_real(ctx, BUILTIN_VAR_X, "x", -1);
+	vx = builtin_real(ctx, BUILTIN_VAR_VIEW_XVIEW, "view_xview", 0);
+	outside = gml_compare(x, vx - ws / 2) < 0 ||
+		  gml_compare(x, vx + builtin_real(ctx, BUILTIN_VAR_VIEW_WVIEW, "view_wview", 0) + ws / 2) > 0;
+	if (!outside) {
+		y = builtin_real(ctx, BUILTIN_VAR_Y, "y", -1);
+		vy = builtin_real(ctx, BUILTIN_VAR_VIEW_YVIEW, "view_yview", 0);
+		outside = gml_compare(y, vy) < 0 ||
+			  gml_compare(y, vy + builtin_real(ctx, BUILTIN_VAR_VIEW_HVIEW, "view_hview", 0)) > 0;
+	}
+	if (outside) {
+		set_builtin(ctx, BUILTIN_VAR_VISIBLE, "visible", 0);
+		if (gml_compare(builtin_real(ctx, BUILTIN_VAR_FPS_REAL, "fps_real", -1), 60) < 0)
+			bubble_destroy(ctx);
+	}
+	return RValue_makeUndefined();
+}
+
+/* A GML number as the VM's arithmetic carries it: int op int stays an int (wrapping), anything with a real is real. */
+typedef struct {
+	bool isInt;
+	int32_t i;
+	GMLReal r;
+} GmlNum;
+
+static GmlNum num_int(int32_t v)
+{
+	return (GmlNum){ true, v, 0 };
+}
+
+static GmlNum num_real(GMLReal v)
+{
+	return (GmlNum){ false, 0, v };
+}
+
+static GMLReal num_val(GmlNum n)
+{
+	return n.isInt ? (GMLReal)n.i : n.r;
+}
+
+static GML_ROUNDING GmlNum num_add(GmlNum a, GmlNum b)
+{
+	return a.isInt && b.isInt ? num_int((int32_t)((uint32_t)a.i + (uint32_t)b.i)) : num_real(num_val(a) + num_val(b));
+}
+
+static GML_ROUNDING GmlNum num_sub(GmlNum a, GmlNum b)
+{
+	return a.isInt && b.isInt ? num_int((int32_t)((uint32_t)a.i - (uint32_t)b.i)) : num_real(num_val(a) - num_val(b));
+}
+
+static GML_ROUNDING GmlNum num_mul(GmlNum a, GmlNum b)
+{
+	return a.isInt && b.isInt ? num_int((int32_t)((uint32_t)a.i * (uint32_t)b.i)) : num_real(num_val(a) * num_val(b));
+}
+
+static RValue num_rvalue(GmlNum n)
+{
+	return n.isInt ? RValue_makeInt32(n.i) : RValue_makeReal(n.r);
+}
+
+static bool get_num(RValue v, GmlNum *out)
+{
+	if (v.type == RVALUE_INT32)
+		*out = num_int(v.int32);
+	else if (v.type == RVALUE_REAL)
+		*out = num_real(v.real);
+	else
+		return false;
+	return true;
+}
+
+enum { OF_COLOUR_RGB, OF_SET_COLOR, OF_SET_BLEND, OF_RECTANGLE, OF_BACKGROUND_EXT, OF_COUNT };
+static const char *const owaterFnNames[OF_COUNT] = { "make_colour_rgb", "draw_set_color", "draw_set_blend_mode",
+						     "draw_rectangle", "draw_background_ext" };
+static int32_t owaterDrawCode = -1, owaterIVar, owaterYoffsetVar, owaterXoffsetVar, owaterBgVar, owaterAlphaVar,
+	       owaterWideVar, owaterFns[OF_COUNT];
+
+static void owater_call(VMContext *ctx, int fn, RValue *args, int32_t argCount)
+{
+	RValue r = ((BuiltinFunc)ctx->funcCallCache[owaterFns[fn]].builtin)(ctx, args, argCount);
+
+	RValue_free(&r);
+}
+
+/* oWater's Draw tints everything under the surface and lays the surface strip in 32-pixel columns across the view: a
+ * few dozen columns of ~50 bytecode ops each. Same builtins, order, argument types and arithmetic as the bytecode. */
+static GML_ROUNDING RValue wii_owater_draw(VMContext *ctx)
+{
+	Instance *self = ctx->currentInstance, *g = ctx->globalScopeInstance;
+	GmlNum level, yoff, xoff, wide, ws, top, viewX, viewY, viewH, roomW, x, i, count;
+	RValue args[8], r;
+	GMLReal half;
+	int32_t n;
+
+	if (!self || !g || !get_num(Instance_getSelfVar(g, waterlevelVar), &level) ||
+	    !get_num(Instance_getSelfVar(self, owaterYoffsetVar), &yoff) ||
+	    !get_num(Instance_getSelfVar(self, owaterXoffsetVar), &xoff) ||
+	    !get_num(Instance_getSelfVar(self, owaterWideVar), &wide) ||
+	    !get_num(Instance_getSelfVar(self, widescreenSpaceVar), &ws))
+		return VM_interpretCode(ctx, owaterDrawCode);
+	r = VMBuiltins_getVariable(ctx, self, BUILTIN_VAR_VIEW_XVIEW, "view_xview", 0);
+	if (!get_num(r, &viewX))
+		return VM_interpretCode(ctx, owaterDrawCode);
+	r = VMBuiltins_getVariable(ctx, self, BUILTIN_VAR_VIEW_YVIEW, "view_yview", 0);
+	if (!get_num(r, &viewY))
+		return VM_interpretCode(ctx, owaterDrawCode);
+	r = VMBuiltins_getVariable(ctx, self, BUILTIN_VAR_VIEW_HVIEW, "view_hview", 0);
+	if (!get_num(r, &viewH))
+		return VM_interpretCode(ctx, owaterDrawCode);
+	r = VMBuiltins_getVariable(ctx, self, BUILTIN_VAR_ROOM_WIDTH, "room_width", -1);
+	if (!get_num(r, &roomW))
+		return VM_interpretCode(ctx, owaterDrawCode);
+	r = VMBuiltins_getVariable(ctx, self, BUILTIN_VAR_X, "x", -1);
+	if (!get_num(r, &x))
+		return VM_interpretCode(ctx, owaterDrawCode);
+
+	top = num_add(level, yoff);
+	if (gml_compare(num_val(num_add(viewY, viewH)), num_val(top)) < 0)
+		return RValue_makeUndefined();
+	i = num_real(0);
+	Instance_setSelfVar(self, owaterIVar, num_rvalue(i));
+	args[0] = RValue_makeInt32(10);
+	args[1] = RValue_makeInt32(10);
+	args[2] = RValue_makeInt32(80);
+	r = ((BuiltinFunc)ctx->funcCallCache[owaterFns[OF_COLOUR_RGB]].builtin)(ctx, args, 3);
+	owater_call(ctx, OF_SET_COLOR, &r, 1);
+	RValue_free(&r);
+	args[0] = RValue_makeInt32(1);
+	owater_call(ctx, OF_SET_BLEND, args, 1);
+	half = num_val(ws) / 2.0;
+	args[0] = RValue_makeReal(num_val(viewX) - half);
+	args[1] = num_rvalue(top);
+	args[2] = RValue_makeReal(num_val(num_add(viewX, num_int(320))) + half);
+	args[3] = num_rvalue(num_add(viewY, num_int(250)));
+	args[4] = RValue_makeInt32(0);
+	owater_call(ctx, OF_RECTANGLE, args, 5);
+
+	count = num_add(num_add(num_real(num_val(roomW) / 32.0), num_int(1)), num_mul(num_int(4), wide));
+	n = RValue_toInt32(num_rvalue(count));
+	for (; n > 0; n--) {
+		GmlNum col = num_mul(i, num_int(32));
+
+		if (gml_compare(num_val(col), num_val(num_sub(viewX, num_int(33))) - half) >= 0 &&
+		    gml_compare(num_val(col), num_val(num_add(num_add(viewX, num_int(360)), ws))) < 0 &&
+		    gml_compare(num_val(num_add(top, num_int(224))), num_val(viewY)) > 0) {
+			args[0] = Instance_getSelfVar(self, owaterBgVar);
+			args[1] = RValue_makeReal(num_val(num_add(num_add(x, col), xoff)) - half);
+			args[2] = num_rvalue(top);
+			args[3] = RValue_makeInt32(1);
+			args[4] = RValue_makeInt32(1);
+			args[5] = RValue_makeInt32(0);
+			args[6] = RValue_makeInt32(-1);
+			args[7] = Instance_getSelfVar(self, owaterAlphaVar);
+			owater_call(ctx, OF_BACKGROUND_EXT, args, 8);
+		}
+		i = num_add(i, num_int(1));
+	}
+	Instance_setSelfVar(self, owaterIVar, num_rvalue(i));
+	args[0] = RValue_makeInt32(0);
+	owater_call(ctx, OF_SET_BLEND, args, 1);
+	return RValue_makeUndefined();
+}
+
 /* Ours, then AM2R's, in its markup (* heading, / centered, a=b paired, ; next row). The roll scrolls at a speed set by
  * its row count to last as long as its music, so these rows make it a little faster, not longer. */
 static const char credits[] = "*AM2R GX;;;;;;;;;;;;"
@@ -599,7 +857,9 @@ void Wii_hookAm2rScripts(VMContext *ctx)
 	ptrdiff_t m = shgeti(ctx->codeIndexByName, "draw_map_surf"), b = shgeti(ctx->codeIndexByName, "draw_mapblock");
 	ptrdiff_t w = shgeti(ctx->codeIndexByName, "gml_Object_oWaterFXV2_Draw_0");
 	ptrdiff_t a = shgeti(ctx->codeIndexByName, "gml_Object_oTilesRandomAlpha_Other_10");
-	bool resetMap, mapSurf, water, tiles;
+	ptrdiff_t lb = shgeti(ctx->codeIndexByName, "gml_Object_oLBubble_Step_0");
+	ptrdiff_t ow = shgeti(ctx->codeIndexByName, "gml_Object_oWater_Draw_0");
+	bool resetMap, mapSurf, water, tiles, bubbles, owater;
 	int k;
 
 	resetMapCode = s >= 0 ? ctx->codeIndexByName[s].value : -1;
@@ -633,6 +893,20 @@ void Wii_hookAm2rScripts(VMContext *ctx)
 		waterFns[k] = -1;
 	for (k = 0; k < TF_COUNT; k++)
 		tileFns[k] = -1;
+	for (k = 0; k < BF_COUNT; k++)
+		bubbleFns[k] = -1;
+	for (k = 0; k < OF_COUNT; k++)
+		owaterFns[k] = -1;
+	owaterIVar = Wii_varId(ctx->runner, "i", INSTANCE_SELF);
+	owaterYoffsetVar = Wii_varId(ctx->runner, "yoffset", INSTANCE_SELF);
+	owaterXoffsetVar = Wii_varId(ctx->runner, "xoffset", INSTANCE_SELF);
+	owaterBgVar = Wii_varId(ctx->runner, "bg", INSTANCE_SELF);
+	owaterAlphaVar = Wii_varId(ctx->runner, "spr_alpha", INSTANCE_SELF);
+	owaterWideVar = Wii_varId(ctx->runner, "widescreen", INSTANCE_SELF);
+	fadeoutVar = Wii_varId(ctx->runner, "fadeout", INSTANCE_SELF);
+	erisVar = Wii_varId(ctx->runner, "eris", INSTANCE_SELF);
+	waterlevelVar = Wii_varId(ctx->runner, "waterlevel", INSTANCE_GLOBAL);
+	wateroffsetVar = Wii_varId(ctx->runner, "wateroffset", INSTANCE_GLOBAL);
 	tileListVar = Wii_varId(ctx->runner, "tile_list", INSTANCE_SELF);
 	falphaVar = Wii_varId(ctx->runner, "falpha", INSTANCE_SELF);
 	repeat(ctx->funcCallCacheCount, fi) {
@@ -645,6 +919,12 @@ void Wii_hookAm2rScripts(VMContext *ctx)
 		for (k = 0; name && k < TF_COUNT; k++)
 			if (strcmp(name, tileFnNames[k]) == 0)
 				tileFns[k] = (int32_t)fi;
+		for (k = 0; name && k < BF_COUNT; k++)
+			if (strcmp(name, bubbleFnNames[k]) == 0)
+				bubbleFns[k] = (int32_t)fi;
+		for (k = 0; name && k < OF_COUNT; k++)
+			if (strcmp(name, owaterFnNames[k]) == 0)
+				owaterFns[k] = (int32_t)fi;
 
 		if (name && resetMap && strcmp(name, "reset_map") == 0)
 			standIn = (void *)wii_reset_map;
@@ -669,5 +949,21 @@ void Wii_hookAm2rScripts(VMContext *ctx)
 	if (tiles) {
 		tileAlphaCode = ctx->codeIndexByName[a].value;
 		VM_setNativeCode(ctx, tileAlphaCode, wii_tiles_alpha);
+	}
+	bubbles = lb >= 0 && fadeoutVar >= 0 && erisVar >= 0 && waterlevelVar >= 0 && wateroffsetVar >= 0 &&
+		  widescreenSpaceVar >= 0 && Wii_objectIndex(ctx->runner, "oControl") == WATER_CONTROL_OBJECT;
+	for (k = 0; k < BF_COUNT; k++)
+		bubbles = bubbles && bubbleFns[k] >= 0 && ctx->funcCallCache[bubbleFns[k]].builtin;
+	if (bubbles) {
+		bubbleStepCode = ctx->codeIndexByName[lb].value;
+		VM_setNativeCode(ctx, bubbleStepCode, wii_bubble_step);
+	}
+	owater = ow >= 0 && waterlevelVar >= 0 && widescreenSpaceVar >= 0 && owaterIVar >= 0 && owaterYoffsetVar >= 0 &&
+		 owaterXoffsetVar >= 0 && owaterBgVar >= 0 && owaterAlphaVar >= 0 && owaterWideVar >= 0;
+	for (k = 0; k < OF_COUNT; k++)
+		owater = owater && owaterFns[k] >= 0 && ctx->funcCallCache[owaterFns[k]].builtin;
+	if (owater) {
+		owaterDrawCode = ctx->codeIndexByName[ow].value;
+		VM_setNativeCode(ctx, owaterDrawCode, wii_owater_draw);
 	}
 }
