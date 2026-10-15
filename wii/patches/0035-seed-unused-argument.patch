@@ -1,0 +1,16 @@
+Reason: random_set_seed accepts one argument and never uses the second argument.
+Do not read an absent optional value merely to discard it.
+Upstream: correctness fix, every platform. Retire this patch when merged.
+
+--- a/src/vm_builtins.c
++++ b/src/vm_builtins.c
+@@ -3283,9 +3283,7 @@
+ static RValue builtin_random_set_seed(MAYBE_UNUSED VMContext* ctx, RValue* args, int32_t argCount) {
+     REQUIRE_ARGC_AT_LEAST("random_set_seed", 1, RValue_makeReal(0.0));
+     GMLReal seed = RValue_toReal(args[0]);
+-    bool fixRangeBug = RValue_toBool(args[1]); 
+     Random_setSeed(&ctx->runner->random, (uint32_t) seed);
+-    (void) fixRangeBug; // do we even need to do anything with this?
+     return RValue_makeUndefined();
+ }
+ 
