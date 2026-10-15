@@ -9,6 +9,8 @@ SD_GAME := dist/apps/am2r/game
 DOLPHIN_USER := project-notes/research/evidence-I/dolphin-user
 # HOOKS=0 leaves the local test hooks and the per-script profiler out of the build (make release does).
 HOOKS ?= 1
+# Build jobs: the PC is often shared with other emulator runs.
+JOBS ?= $(shell nproc)
 VERSION ?= $(shell sed -n 's/^.define AM2R_GX_VERSION "\([^"]*\)".*/\1/p' wii/src/main.c)
 META ?= wii/hbc/meta.xml
 WII_SD := $(DOLPHIN_USER)/Load/WiiSDSync
@@ -84,7 +86,7 @@ wii: $(BUTTER)/CMakeLists.txt
 	cd $(BUTTER) && git apply ../../wii/patches/0042-event-null-snapshots.patch
 	if [ "$(HOOKS)" != 0 ] && [ -f wii/test/patches/0099-debug-collision-trace.patch ]; then cd $(BUTTER) && git apply ../../wii/test/patches/0099-debug-collision-trace.patch; fi
 	cmake -B $(WII_BUILD) -S $(BUTTER) $(WII_CMAKE_FLAGS)
-	cmake --build $(WII_BUILD) -j$(shell nproc)
+	cmake --build $(WII_BUILD) -j$(JOBS)
 	mkdir -p dist/apps/am2r
 	cp -f $(WII_BUILD)/boot.dol dist/apps/am2r/boot.dol
 	# The Homebrew Channel art and metadata are not in the repository; they join the release when on disk.
@@ -114,7 +116,7 @@ patchkit:
 # Same tree, second build dir, unused/shadow warnings on for src/wii/ only (upstream's are noise).
 wii-warn: wii
 	cmake -B $(WII_BUILD)-warn -S $(BUTTER) -DWII_STRICT=ON $(WII_CMAKE_FLAGS)
-	cmake --build $(WII_BUILD)-warn -j$(shell nproc) > $(WII_BUILD)-warn/build.log 2>&1 || { tail -20 $(WII_BUILD)-warn/build.log; exit 1; }
+	cmake --build $(WII_BUILD)-warn -j$(JOBS) > $(WII_BUILD)-warn/build.log 2>&1 || { tail -20 $(WII_BUILD)-warn/build.log; exit 1; }
 	grep -E "src/wii/.*warning" $(WII_BUILD)-warn/build.log || echo "no warnings in src/wii/"
 	@ls -l dist/apps/am2r/boot.dol
 
@@ -172,7 +174,7 @@ host-smoke: $(BUTTER)/CMakeLists.txt
 		-DPLATFORM=cli -DBACKEND=noop -DAUDIO_BACKEND=none \
 		-DCMAKE_BUILD_TYPE=Release -DENABLE_ASAN=OFF \
 		-DENABLE_WAD14=ON -DENABLE_WAD16=OFF -DENABLE_WAD17=OFF
-	cmake --build $(HOST_BUILD) -j$(shell nproc)
+	cmake --build $(HOST_BUILD) -j$(JOBS)
 
 clean:
 	rm -rf dist $(WII_BUILD) $(HOST_BUILD)
