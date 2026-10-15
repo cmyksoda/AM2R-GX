@@ -359,6 +359,10 @@ static RValue wii_reset_map(VMContext *ctx, RValue *args, int32_t argCount)
 static int32_t mapSurfCode = -1, mapBlockCode = -1, mystrVar, partVars[7];
 static BuiltinFunc stringFn, charAtFn;
 
+static BuiltinFunc drawSpriteFn;
+static bool mapBlockNative;
+static RValue wii_draw_mapblock(VMContext *ctx, RValue *args, int32_t argCount);
+
 /* draw_map_surf(i, j) runs for each of the pause map's 1,682 cells and spends ~30 us a cell turning the cell's string
  * into seven of the caller's variables; here they are set the same way, before the same draw_mapblock. */
 static RValue wii_draw_map_surf(VMContext *ctx, RValue *args, int32_t argCount)
@@ -388,7 +392,7 @@ static RValue wii_draw_map_surf(VMContext *ctx, RValue *args, int32_t argCount)
 			call[2 + k] = parts[k];
 		call[8] = GMLArray_getOnArrayRef(IntRValueHashMap_getOrInsertUndefined(&g->selfVars, dmapVar), cell);
 		call[9] = parts[6];
-		r = VM_callCodeIndex(ctx, mapBlockCode, call, 10);
+		r = mapBlockNative ? wii_draw_mapblock(ctx, call, 10) : VM_callCodeIndex(ctx, mapBlockCode, call, 10);
 		RValue_free(&r);
 		RValue_free(&call[0]);
 		RValue_free(&call[1]);
@@ -726,6 +730,89 @@ static bool get_num(RValue v, GmlNum *out)
 	return true;
 }
 
+static const char mapMarkChars[] = "123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefgh";
+static const struct {
+	int8_t arg;
+	char c;
+	int16_t sprite;
+	int8_t dx, dy;
+} mapWalls[] = {
+	{ 2, '1', 493, 0, 0 }, { 4, '1', 493, 0, 7 }, { 5, '1', 494, 0, 0 }, { 3, '1', 494, 7, 0 },
+	{ 2, '2', 495, 0, 0 }, { 4, '2', 495, 0, 7 }, { 5, '2', 496, 0, 0 }, { 3, '2', 496, 7, 0 },
+};
+static const struct {
+	char c;
+	int8_t explored; /* 0: any */
+	int8_t sub;
+} mapItems[] = {
+	{ '1', 0, 0 }, { '2', 0, 1 }, { '3', 1, 2 }, { '3', 2, 5 }, { '4', 1, 2 }, { '4', 2, 3 }, { '5', 0, 4 },
+	{ 'U', 0, 8 }, { 'D', 0, 9 }, { 'L', 0, 10 }, { 'R', 0, 11 }, { 'H', 0, 12 }, { 'V', 0, 13 }, { 'C', 0, 14 },
+};
+
+static bool map_char_is(RValue v, char c)
+{
+	return v.string && v.string[0] == c && v.string[1] == '\0';
+}
+
+/* Which one-character case of chars a string argument matches, or -1. */
+static int map_char_case(RValue v, const char *chars)
+{
+	const char *hit;
+
+	if (!v.string || v.string[0] == '\0' || v.string[1] != '\0')
+		return -1;
+	hit = strchr(chars, v.string[0]);
+	return hit ? (int)(hit - chars) : -1;
+}
+
+static void map_sprite(VMContext *ctx, int32_t sprite, int32_t sub, GmlNum x, GmlNum y)
+{
+	RValue args[4] = { RValue_makeInt32(sprite), RValue_makeInt32(sub), num_rvalue(x), num_rvalue(y) };
+	RValue r = drawSpriteFn(ctx, args, 4);
+
+	RValue_free(&r);
+}
+
+/* draw_mapblock draws one map cell from its one-character codes with ~70 string compares in bytecode, for each HUD
+ * cell every frame and the pause map's 1,682. Same draws in the same order; any other argument type runs the script. */
+static GML_ROUNDING RValue wii_draw_mapblock(VMContext *ctx, RValue *args, int32_t argCount)
+{
+	GmlNum x, y, explored, dx, dy;
+	size_t k;
+	int c;
+
+	if (argCount != 10 || !get_num(args[0], &x) || !get_num(args[1], &y) || !get_num(args[8], &explored))
+		return VM_callCodeIndex(ctx, mapBlockCode, args, argCount);
+	for (k = 2; k < 10; k++)
+		if (k != 8 && args[k].type != RVALUE_STRING)
+			return VM_callCodeIndex(ctx, mapBlockCode, args, argCount);
+	if (gml_compare(num_val(explored), 0) <= 0)
+		return RValue_makeUndefined();
+
+	c = map_char_case(args[6], "1234");
+	if (c >= 0)
+		map_sprite(ctx, 492, c, x, y);
+	c = map_char_case(args[9], mapMarkChars);
+	if (c >= 0)
+		map_sprite(ctx, 498, c, x, y);
+	for (k = 0; k < sizeof mapWalls / sizeof mapWalls[0]; k++) {
+		if (!map_char_is(args[mapWalls[k].arg], mapWalls[k].c))
+			continue;
+		dx = mapWalls[k].dx ? num_add(x, num_int(mapWalls[k].dx)) : x;
+		dy = mapWalls[k].dy ? num_add(y, num_int(mapWalls[k].dy)) : y;
+		map_sprite(ctx, mapWalls[k].sprite, 0, dx, dy);
+	}
+	for (k = 0; k < sizeof mapItems / sizeof mapItems[0]; k++)
+		if (map_char_is(args[7], mapItems[k].c) &&
+		    (!mapItems[k].explored || gml_compare(num_val(explored), mapItems[k].explored) == 0))
+			map_sprite(ctx, 491, mapItems[k].sub, x, y);
+	if (gml_compare(num_val(explored), 10) == 0)
+		map_sprite(ctx, 491, 6, x, y);
+	if (gml_compare(num_val(explored), 11) == 0)
+		map_sprite(ctx, 491, 7, x, y);
+	return RValue_makeUndefined();
+}
+
 enum { OF_COLOUR_RGB, OF_SET_COLOR, OF_SET_BLEND, OF_RECTANGLE, OF_BACKGROUND_EXT, OF_COUNT };
 static const char *const owaterFnNames[OF_COUNT] = { "make_colour_rgb", "draw_set_color", "draw_set_blend_mode",
 						     "draw_rectangle", "draw_background_ext" };
@@ -969,6 +1056,9 @@ void Wii_hookAm2rScripts(VMContext *ctx)
 	mystrVar = Wii_varId(ctx->runner, "mystr", INSTANCE_SELF);
 	stringFn = VM_findBuiltin(ctx, "string");
 	charAtFn = VM_findBuiltin(ctx, "string_char_at");
+	drawSpriteFn = VM_findBuiltin(ctx, "draw_sprite");
+	/* the sprite numbers below are 1.5.5's, baked into this length of bytecode */
+	mapBlockNative = mapBlockCode >= 0 && drawSpriteFn && ctx->dataWin->code.entries[mapBlockCode].length == 5016;
 	mapSurf = mapSurfCode >= 0 && mapBlockCode >= 0 && mapVar >= 0 && dmapVar >= 0 && mystrVar >= 0 &&
 		  stringFn && charAtFn;
 	for (k = 0; k < 7; k++) {
@@ -1034,6 +1124,8 @@ void Wii_hookAm2rScripts(VMContext *ctx)
 			standIn = (void *)wii_draw_cool_text;
 		else if (name && mapSurf && strcmp(name, "draw_map_surf") == 0)
 			standIn = (void *)wii_draw_map_surf;
+		else if (name && mapBlockNative && strcmp(name, "draw_mapblock") == 0)
+			standIn = (void *)wii_draw_mapblock;
 		if (standIn) {
 			ctx->funcCallCache[fi].builtin = standIn;
 			ctx->funcCallCache[fi].scriptCodeIndex = -1;
