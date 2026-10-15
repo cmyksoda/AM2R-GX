@@ -1,0 +1,35 @@
+Reason: the VM works out how many operand bytes follow each instruction from its 4-bit type. GCC turned the switch
+into a tree of compares and branches that depend on the instruction just fetched, inlined into the fetch path on every
+instruction (1.6% of the CPU time in the water room, Dolphin perf, line level). A 16-entry table gives the same sizes
+with one load: 8 for double and int64, 4 for float, int32, bool, variable and string, 0 for int16 and every unused
+code, as the switch did.
+Upstream: Speed only, every platform. Retires this patch when merged.
+
+--- a/src/vm.c
++++ b/src/vm.c
+@@ -144,18 +144,14 @@
+     return ((int32_t) (instr << 9)) >> 7;
+ }
+ 
++// Operand bytes after an instruction word, by its 4-bit type: a table load on every instruction, not a branch tree.
++static const uint8_t extraDataSizes[16] = {
++    [GML_TYPE_DOUBLE] = 8, [GML_TYPE_INT64] = 8, [GML_TYPE_FLOAT] = 4, [GML_TYPE_INT32] = 4,
++    [GML_TYPE_BOOL] = 4, [GML_TYPE_VARIABLE] = 4, [GML_TYPE_STRING] = 4, [GML_TYPE_INT16] = 0,
++};
++
+ static uint32_t extraDataSize(uint8_t type1) {
+-    switch (type1) {
+-        case GML_TYPE_DOUBLE: return 8;
+-        case GML_TYPE_INT64:  return 8;
+-        case GML_TYPE_FLOAT:  return 4;
+-        case GML_TYPE_INT32:  return 4;
+-        case GML_TYPE_BOOL:   return 4;
+-        case GML_TYPE_VARIABLE: return 4;
+-        case GML_TYPE_STRING: return 4;
+-        case GML_TYPE_INT16:  return 0;
+-        default:              return 0;
+-    }
++    return extraDataSizes[type1 & 0xF];
+ }
+ 
+ // ===[ Reference Chain Resolution ]===
