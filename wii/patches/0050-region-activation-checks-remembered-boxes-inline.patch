@@ -1,0 +1,90 @@
+Reason: every enemy calls instance_activate_region each step, and each call reads the box of every inactive instance:
+in the water room ~8.5 calls a frame over ~285 inactive solids, 0.7 ms of a 8.4 ms step (Dolphin, emulated time).
+Nearly all are memo hits (patch 0045), but GCC kept Collision_computeBBox out of line with the miss path's state
+spilled to the stack, ~150 instructions per hit. The hit test is now its own always-inline function, used directly by
+instance_activate_region and instance_deactivate_region; a miss falls back to Collision_computeBBox, which runs the
+same test and stores the box as before. The comparisons and the stored values are unchanged.
+Upstream: Speed only, every platform. Retires this patch when merged.
+
+--- a/src/collision.h
++++ b/src/collision.h
+@@ -107,11 +107,34 @@
+ }
+ 
+ // Instances that have not moved are asked for their box over and over (every enemy's activate_region each step), so
+-// the last box is reused while every input is bit for bit the same: the instance's, its sprite's geometry and the mode.
++// the last box is reused while every input is bit for bit the same. The test inlines into those bulk callers.
++static inline __attribute__((always_inline)) bool Collision_memoBBox(Runner* runner, Instance* inst, Sprite* spr, InstanceBBox* out) {
++    union { float f; uint32_t u; } in[5] = {
++        { inst->x }, { inst->y }, { inst->imageXscale }, { inst->imageYscale }, { inst->imageAngle }
++    };
++    int32_t geometry[9] = {
++        (int32_t) spr->bboxMode, spr->marginLeft, spr->marginRight, spr->marginTop, spr->marginBottom,
++        (int32_t) spr->width, (int32_t) spr->height, spr->originX, spr->originY
++    };
++    int32_t sprIdx = (inst->maskIndex >= 0) ? inst->maskIndex : inst->spriteIndex;
++    if (!inst->bboxMemoValid || inst->bboxMemoSprite != sprIdx || inst->bboxMemoCompat != runner->collisionCompatibilityMode) return false;
++    repeat(5, i) if (inst->bboxMemoInputs[i] != in[i].u) return false;
++    repeat(9, i) if (inst->bboxMemoGeometry[i] != geometry[i]) return false;
++    out->left = inst->bboxMemoEdges[0];
++    out->right = inst->bboxMemoEdges[1];
++    out->top = inst->bboxMemoEdges[2];
++    out->bottom = inst->bboxMemoEdges[3];
++    out->valid = true;
++    return true;
++}
++
+ static inline InstanceBBox Collision_computeBBox(Runner* runner, Instance* inst) {
+     Sprite* spr = Collision_getSprite(runner->dataWin, inst);
+     if (spr == nullptr) return Collision_computeBBoxUncached(runner, inst);
+ 
++    InstanceBBox ret;
++    if (Collision_memoBBox(runner, inst, spr, &ret)) return ret;
++
+     union { float f; uint32_t u; } in[5] = {
+         { inst->x }, { inst->y }, { inst->imageXscale }, { inst->imageYscale }, { inst->imageAngle }
+     };
+@@ -120,20 +143,7 @@
+         (int32_t) spr->width, (int32_t) spr->height, spr->originX, spr->originY
+     };
+     int32_t sprIdx = (inst->maskIndex >= 0) ? inst->maskIndex : inst->spriteIndex;
+-    bool same = inst->bboxMemoValid && inst->bboxMemoSprite == sprIdx && inst->bboxMemoCompat == runner->collisionCompatibilityMode;
+-    for (int32_t i = 0; same && 5 > i; i++) same = inst->bboxMemoInputs[i] == in[i].u;
+-    for (int32_t i = 0; same && 9 > i; i++) same = inst->bboxMemoGeometry[i] == geometry[i];
+-    if (same) {
+-        InstanceBBox ret;
+-        ret.left = inst->bboxMemoEdges[0];
+-        ret.right = inst->bboxMemoEdges[1];
+-        ret.top = inst->bboxMemoEdges[2];
+-        ret.bottom = inst->bboxMemoEdges[3];
+-        ret.valid = true;
+-        return ret;
+-    }
+-
+-    InstanceBBox ret = Collision_computeBBoxUncached(runner, inst);
++    ret = Collision_computeBBoxUncached(runner, inst);
+     inst->bboxMemoValid = ret.valid;
+     if (ret.valid) {
+         inst->bboxMemoCompat = runner->collisionCompatibilityMode;
+--- a/src/vm_builtins.c
++++ b/src/vm_builtins.c
+@@ -9178,7 +9178,8 @@
+         bool outside = false;
+         Sprite* spr = Collision_getSprite(dataWin, inst);
+         if (spr != nullptr) {
+-            InstanceBBox bbox = Collision_computeBBox(runner, inst);
++            InstanceBBox bbox;
++            if (!Collision_memoBBox(runner, inst, spr, &bbox)) bbox = Collision_computeBBox(runner, inst);
+             if (bbox.right < left || bbox.left > right || bbox.bottom < top || bbox.top > bottom) {
+                 outside = true;
+             }
+@@ -9217,7 +9218,8 @@
+         bool outside = false;
+         Sprite* spr = Collision_getSprite(dataWin, inst);
+         if (spr != nullptr) {
+-            InstanceBBox bbox = Collision_computeBBox(runner, inst);
++            InstanceBBox bbox;
++            if (!Collision_memoBBox(runner, inst, spr, &bbox)) bbox = Collision_computeBBox(runner, inst);
+             if (bbox.right < left || bbox.left > right || bbox.bottom < top || bbox.top > bottom) outside = true;
+         } else {
+             if (inst->x > right || left > inst->x || inst->y > bottom || top > inst->y) outside = true;
