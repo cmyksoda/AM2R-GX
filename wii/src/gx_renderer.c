@@ -1924,6 +1924,18 @@ static void gx_clip_rows(float *top, float *bottom)
 	*bottom = gx_clipB - lift;
 }
 
+static bool gx_axis_outside(float a, float b, float c, float d, float low, float high)
+{
+	if ((a <= low && b <= low && c <= low && d <= low) ||
+	    (a >= high && b >= high && c >= high && d >= high))
+		return true;
+	/* fminf/fmaxf ignore a single NaN; preserve that behavior for malformed coordinates. */
+	if (isnan(a) || isnan(b) || isnan(c) || isnan(d))
+		return fmaxf(fmaxf(a, b), fmaxf(c, d)) <= low ||
+		       fminf(fminf(a, b), fminf(c, d)) >= high;
+	return false;
+}
+
 static void gx_draw_tpag(GxRenderer *gx, int32_t tpagIndex, float x0, float y0, float x1, float y1,
 			 float x2, float y2, float x3, float y3, float srcX, float srcY, float srcW, float srcH,
 			 u8 r0, u8 g0, u8 b0, u8 a0, u8 r1, u8 g1, u8 b1, u8 a1,
@@ -1941,9 +1953,12 @@ static void gx_draw_tpag(GxRenderer *gx, int32_t tpagIndex, float x0, float y0, 
 		return;
 	}
 	/* Fully outside the projection: the scissor would drop it, but only after the bind and the emit. */
+	if (gx_axis_outside(x0, x1, x2, x3, gx_clipL, gx_clipR)) {
+		gx_stat.culled++;
+		return;
+	}
 	gx_clip_rows(&clipT, &clipB);
-	if (fmaxf(fmaxf(x0, x1), fmaxf(x2, x3)) <= gx_clipL || fminf(fminf(x0, x1), fminf(x2, x3)) >= gx_clipR ||
-	    fmaxf(fmaxf(y0, y1), fmaxf(y2, y3)) <= clipT || fminf(fminf(y0, y1), fminf(y2, y3)) >= clipB) {
+	if (gx_axis_outside(y0, y1, y2, y3, clipT, clipB)) {
 		gx_stat.culled++;
 		return;
 	}
