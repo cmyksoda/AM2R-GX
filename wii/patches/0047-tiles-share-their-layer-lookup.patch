@@ -1,0 +1,38 @@
+Reason: the main draw loop looked every tile's depth up in the tile layer map (tile_layer_hide/shift state), about
+2,250 hash lookups a frame in rm_a5h04. The list is sorted by depth, so neighboring tiles share a depth: the lookup is
+kept from one tile to the next and forgotten at any other entry, the only place GML can run and change the map.
+Upstream: Speed only, every platform. Retires this patch when merged.
+
+--- a/src/runner.c
++++ b/src/runner.c
+@@ -968,6 +968,10 @@
+     // Draw interleaved tiles and instances
+     int32_t i = 0;
+     DrawKey lastProcessedDrawKey;
++    // Tiles come sorted by depth, so neighbors share a layer lookup; any other entry may run GML that changes the map.
++    bool tileLayerKnown = false;
++    int32_t tileLayerDepth = 0;
++    ptrdiff_t tileLayerIdx = -1;
+ 
+     while (true) {
+         if (runner->drawableListSortDirty || runner->drawableListStructureDirty) {
+@@ -1014,12 +1018,18 @@
+ 
+         Drawable* d = &runner->cachedDrawables[i++];
+         lastProcessedDrawKey = drawableKey(d);
++        if (d->type != DRAWABLE_TILE) tileLayerKnown = false;
+ 
+         if (d->type == DRAWABLE_TILE) {
+             if (runner->renderer != nullptr) {
+                 RoomTile* tile = &room->tiles[d->tileIndex];
+                 // Skip tiles whose layer was hidden via tile_layer_hide(). Filtered here (not in the cache) so toggling layer visibility doesn't invalidate.
+-                ptrdiff_t layerIdx = hmgeti(runner->tileLayerMap, tile->tileDepth);
++                if (!tileLayerKnown || tileLayerDepth != tile->tileDepth) {
++                    tileLayerIdx = hmgeti(runner->tileLayerMap, tile->tileDepth);
++                    tileLayerDepth = tile->tileDepth;
++                    tileLayerKnown = true;
++                }
++                ptrdiff_t layerIdx = tileLayerIdx;
+                 if (layerIdx >= 0 && !runner->tileLayerMap[layerIdx].value.visible) continue;
+                 float offsetX = 0.0f, offsetY = 0.0f;
+                 if (layerIdx >= 0) {
