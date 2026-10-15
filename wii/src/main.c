@@ -124,7 +124,7 @@ int main(int argc, char **argv)
 	}
 	Wii_hooksBeforeLoop();
 
-	rc = loop(args, argv[0] ? argv[0] : "boot.dol");
+	rc = loop(args, argc > 0 && argv && argv[0] ? argv[0] : "boot.dol");
 	WiiInput_stopRumble();
 	if (GxRenderer_fatal())
 		wait_home(GxRenderer_fatal(), true);
