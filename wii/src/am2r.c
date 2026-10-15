@@ -17,14 +17,32 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define OBJECT_NAMES_SEEN 32
+
 int32_t Wii_objectIndex(Runner *runner, const char *name)
 {
+	/* Per-frame hooks look objects up by name; a hit is confirmed by name, so a reused buffer can't mislead it. */
+	static struct {
+		const char *name;
+		uint32_t index;
+	} seen[OBJECT_NAMES_SEEN];
+	static uint32_t next;
 	DataWin *dw = runner ? runner->dataWin : NULL;
 	uint32_t i;
 
-	for (i = 0; dw && i < dw->objt.count; i++)
-		if (strcmp(dw->objt.objects[i].name, name) == 0)
+	if (!dw)
+		return -1;
+	for (i = 0; i < OBJECT_NAMES_SEEN; i++)
+		if (seen[i].name == name && seen[i].index < dw->objt.count &&
+		    strcmp(dw->objt.objects[seen[i].index].name, name) == 0)
+			return (int32_t)seen[i].index;
+	for (i = 0; i < dw->objt.count; i++)
+		if (strcmp(dw->objt.objects[i].name, name) == 0) {
+			seen[next % OBJECT_NAMES_SEEN].name = name;
+			seen[next % OBJECT_NAMES_SEEN].index = i;
+			next++;
 			return (int32_t)i;
+		}
 	return -1;
 }
 
