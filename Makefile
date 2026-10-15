@@ -89,6 +89,7 @@ wii: $(BUTTER)/CMakeLists.txt
 	cd $(BUTTER) && git apply ../../wii/patches/0045-bounding-boxes-are-remembered.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0046-draw-events-walk-only-instances.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0047-tiles-share-their-layer-lookup.patch
+	cd $(BUTTER) && git apply ../../wii/patches/0048-call-frames-recycle-their-blocks.patch
 	if [ "$(HOOKS)" != 0 ] && [ -f wii/test/patches/0099-debug-collision-trace.patch ]; then cd $(BUTTER) && git apply ../../wii/test/patches/0099-debug-collision-trace.patch; fi
 	cmake -B $(WII_BUILD) -S $(BUTTER) $(WII_CMAKE_FLAGS)
 	cmake --build $(WII_BUILD) -j$(JOBS)

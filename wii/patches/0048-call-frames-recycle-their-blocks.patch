@@ -1,0 +1,138 @@
+Reason: every event allocated its locals with calloc and freed them on return, and every script call did the same for
+its arguments; AM2R makes thousands of these calls a frame, and malloc, free and the heap lock (_malloc_r, _free_r,
+KMutexUnlock, __syscall_malloc_lock) came to 2-3% of the CPU time in the profiled rooms (Dolphin perf). Blocks of up
+to 32 values now go back to a per-size free list (at most 16 kept per size, about 140 KB at worst) and are reused;
+each block records its own size, and a reused block is cleared, so the frame sees the same zeroed memory calloc gave.
+Larger blocks still use malloc and free.
+Upstream: Speed only, every platform. Retires this patch when merged.
+
+--- a/src/vm.c
++++ b/src/vm.c
+@@ -462,6 +462,47 @@
+ //
+ // BC13/BC14, BC17+: a single GML local can surface as several VARI chunk entries that share a varID (BC17+) or has no pre-assigned slot at all (BC13/BC14).
+ // We key by varID/varIdx via the per-code currentCodeLocalsSlotMap so reads/writes via any reference agree on the same localVars slot.
++// Every event and script call allocates its locals (and a script call its arguments), thousands of times a frame. Small
++// blocks are recycled through per-size free lists instead of malloc/free; a reused block is cleared, as calloc's is.
++#define FRAME_BLOCK_MAX 32
++#define FRAME_BLOCK_KEEP 16
++
++typedef struct FrameBlock {
++    struct FrameBlock* next;
++    uint32_t count;
++} FrameBlock;
++
++static FrameBlock* frameBlockLists[FRAME_BLOCK_MAX + 1];
++static uint32_t frameBlockKept[FRAME_BLOCK_MAX + 1];
++
++static RValue* frameAlloc(uint32_t count) {
++    RValue* block;
++    if (FRAME_BLOCK_MAX >= count && frameBlockLists[count] != nullptr) {
++        FrameBlock* reused = frameBlockLists[count];
++        frameBlockLists[count] = reused->next;
++        frameBlockKept[count]--;
++        block = (RValue*) reused;
++    } else {
++        block = (RValue*) safeMalloc((count + 1) * sizeof(RValue));
++    }
++    ((FrameBlock*) block)->count = count;
++    memset(block + 1, 0, count * sizeof(RValue));
++    return block + 1;
++}
++
++static void frameFree(RValue* values) {
++    if (values == nullptr) return;
++    FrameBlock* block = (FrameBlock*) (values - 1);
++    uint32_t count = block->count;
++    if (FRAME_BLOCK_MAX >= count && FRAME_BLOCK_KEEP > frameBlockKept[count]) {
++        block->next = frameBlockLists[count];
++        frameBlockLists[count] = block;
++        frameBlockKept[count]++;
++    } else {
++        free(block);
++    }
++}
++
+ static uint32_t resolveLocalSlot(VMContext* ctx, int32_t varID) {
+     if (IS_WAD15_OR_HIGHER(ctx) && IS_WAD16_OR_BELOW(ctx)) {
+         return (uint32_t) varID;
+@@ -473,9 +514,9 @@
+     // Grow this frame's localVars window to cover `slot` whether the entry is pre-existing or freshly allocated.
+     // Pre-existing entries can still be past ctx->localVarCount if a nested call to the same code extended the slot map while the outer frame was suspended (the outer frame's localVarCount is captured at call entry and doesn't follow later growth).
+     if (slot >= ctx->localVarCount) {
+-        RValue* resizedLocalVars = (RValue *)safeCalloc(slot + 1, sizeof(RValue));
++        RValue* resizedLocalVars = frameAlloc(slot + 1);
+         memcpy(resizedLocalVars, ctx->localVars, sizeof(RValue) * ctx->localVarCount);
+-        free(ctx->localVars);
++        frameFree(ctx->localVars);
+         ctx->localVars = resizedLocalVars;
+         ctx->localVarCount = slot + 1;
+     }
+@@ -647,11 +688,11 @@
+     if (writeIndex < 0) return false;
+     if (writeIndex < ctx->scriptArgCount) return true;
+ 
+-    RValue* newScriptArgs = (RValue *)safeCalloc(writeIndex + 1, sizeof(RValue));
++    RValue* newScriptArgs = frameAlloc((uint32_t) writeIndex + 1);
+ 
+     if (ctx->scriptArgCount > 0) {
+         memcpy(newScriptArgs, ctx->scriptArgs, ctx->scriptArgCount * sizeof(RValue));
+-        free(ctx->scriptArgs);
++        frameFree(ctx->scriptArgs);
+     }
+ 
+     ctx->scriptArgs = newScriptArgs;
+@@ -3787,7 +3828,7 @@
+     setCurrentCodeLocalsSlotMap(ctx);
+ 
+     uint32_t localsCount = computeLocalsCount(ctx, code);
+-    RValue* localVars = (RValue *)safeCalloc(localsCount, sizeof(RValue));
++    RValue* localVars = frameAlloc(localsCount);
+     ctx->localVars = localVars;
+     ctx->localVarCount = localsCount;
+ 
+@@ -3812,7 +3853,7 @@
+     repeat(ctx->localVarCount, i) {
+         RValue_free(&ctx->localVars[i]);
+     }
+-    free(ctx->localVars);
++    frameFree(ctx->localVars);
+     ctx->localVars = nullptr;
+     ctx->localVarCount = 0;
+ 
+@@ -3859,7 +3900,7 @@
+     setCurrentCodeLocalsSlotMap(ctx);
+ 
+     uint32_t localsCount = computeLocalsCount(ctx, code);
+-    RValue* localVars = (RValue *)safeCalloc(localsCount, sizeof(RValue));
++    RValue* localVars = frameAlloc(localsCount);
+     ctx->localVars = localVars;
+     ctx->localVarCount = localsCount;
+ 
+@@ -3868,7 +3909,7 @@
+     // the caller's original args remain valid and owner-tracked by the caller.
+     RValue* scriptArgs = nullptr;
+     if (argCount > 0 && args != nullptr) {
+-        scriptArgs = (RValue *)safeCalloc(argCount, sizeof(RValue));
++        scriptArgs = frameAlloc((uint32_t) argCount);
+         repeat(argCount, argIdx) {
+             RValue argCopy = RValue_makeIndependent(args[argIdx]);
+             scriptArgs[argIdx] = argCopy;
+@@ -3905,7 +3946,7 @@
+         RValue_free(&ctx->localVars[i]);
+     }
+ 
+-    free(ctx->localVars);
++    frameFree(ctx->localVars);
+ 
+     // Free callee script args
+     {
+@@ -3914,7 +3955,7 @@
+     }
+     }
+ 
+-    free(ctx->scriptArgs);
++    frameFree(ctx->scriptArgs);
+ 
+     ctx->localVars = saved->savedLocals;
+     ctx->localVarCount = saved->savedLocalsCount;
