@@ -1,0 +1,143 @@
+Reason: tile_exists, tile_delete, tile_set_alpha, tile_get_background and tile_set_scale each found their tile by
+walking the room's whole tile array. AM2R's oTilesRandomAlpha calls tile_set_alpha for every tile in its list every
+step, so in rooms like rm_a5a08 that was quadratic: ~4.7 ms a frame (emulated, GML profiler). Tile ids now map to
+their first index in the array, built on first use and rebuilt when the room, its array or its length changes or
+tile_add / tile_delete / tile_layer_delete(_at) edit it. A hit is confirmed by the id at that index; a miss falls back
+to the old walk (and marks the index out of date if the walk finds it); a room whose tiles repeat an id keeps the
+walk. Every lookup returns the index the walk returned.
+Upstream: Speed only, every platform. Retires this patch when merged.
+
+--- a/src/vm_builtins.c
++++ b/src/vm_builtins.c
+@@ -14370,6 +14370,45 @@
+     return RValue_makeUndefined();
+ }
+ 
++// tile_set_alpha and its kin looked a tile up by walking the room's whole array; oTilesRandomAlpha sets every tile in
++// its list each step (~4.7 ms in rm_a5a08). Ids map to their first index, rebuilt when the room, its array or its
++// length changes or a tile builtin edits it; a hit is confirmed by its id, and a room with repeated ids keeps the walk.
++static struct { uint32_t key; int32_t value; }* tileIndexById = nullptr;
++static Room* tileIndexRoom;
++static RoomTile* tileIndexTiles;
++static uint32_t tileIndexCount;
++static bool tileIndexStale = true, tileIndexRepeats;
++
++static void buildTileIndex(Room* room) {
++    hmfree(tileIndexById);
++    tileIndexRepeats = false;
++    for (int32_t i = (int32_t) room->tileCount - 1; i >= 0; i--) {
++        if (hmgeti(tileIndexById, room->tiles[i].instanceID) >= 0) tileIndexRepeats = true;
++        hmput(tileIndexById, room->tiles[i].instanceID, i);
++    }
++    tileIndexRoom = room;
++    tileIndexTiles = room->tiles;
++    tileIndexCount = room->tileCount;
++    tileIndexStale = false;
++}
++
++static int32_t findTileIndex(Room* room, uint32_t id) {
++    if (tileIndexStale || tileIndexRoom != room || tileIndexTiles != room->tiles || tileIndexCount != room->tileCount)
++        buildTileIndex(room);
++    if (!tileIndexRepeats) {
++        ptrdiff_t k = hmgeti(tileIndexById, id);
++        if (k >= 0 && (uint32_t) tileIndexById[k].value < room->tileCount &&
++            room->tiles[tileIndexById[k].value].instanceID == id) return tileIndexById[k].value;
++    }
++    // A miss is settled by the walk the index replaced; a tile the index missed means it is out of date.
++    repeat(room->tileCount, i) {
++        if (room->tiles[i].instanceID != id) continue;
++        if (!tileIndexRepeats) tileIndexStale = true;
++        return (int32_t) i;
++    }
++    return -1;
++}
++
+ // tile_add(background, left, top, width, height, x, y, depth) - creates a new tile in the current room and returns its id.
+ static RValue builtin_tile_add(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_t argCount) {
+     Runner* runner = ctx->runner;
+@@ -14401,6 +14440,7 @@
+     tile->color = 0xFFFFFFFFu;
+     tile->alpha = 1.0f;
+     room->tileCount = newCount;
++    tileIndexStale = true;
+ 
+     runner->drawableListStructureDirty = true;
+     return RValue_makeReal((GMLReal) newId);
+@@ -14412,10 +14452,7 @@
+     Room* room = runner->currentRoom;
+     if (room == nullptr) return RValue_makeBool(false);
+     uint32_t id = (uint32_t) RValue_toInt32(args[0]);
+-    repeat(room->tileCount, i) {
+-        if (room->tiles[i].instanceID == id) return RValue_makeBool(true);
+-    }
+-    return RValue_makeBool(false);
++    return RValue_makeBool(findTileIndex(room, id) >= 0);
+ }
+ 
+ // tile_layer_find(depth, x, y) - returns the id of the topmost tile at depth covering (x, y), or -1.
+@@ -14469,6 +14506,7 @@
+         write++;
+     }
+     room->tileCount = write;
++    tileIndexStale = true;
+     if (removedAny) runner->drawableListStructureDirty = true;
+     return RValue_makeUndefined();
+ }
+@@ -14497,6 +14535,7 @@
+         write++;
+     }
+     room->tileCount = write;
++    tileIndexStale = true;
+     if (removedAny) runner->drawableListStructureDirty = true;
+     return RValue_makeUndefined();
+ }
+@@ -14507,11 +14546,12 @@
+     Room* room = runner->currentRoom;
+     if (room == nullptr) return RValue_makeUndefined();
+     uint32_t id = (uint32_t) RValue_toInt32(args[0]);
+-    repeat(room->tileCount, i) {
+-        if (room->tiles[i].instanceID != id) continue;
+-        uint32_t tailLen = room->tileCount - i - 1;
++    int32_t i = findTileIndex(room, id);
++    if (i >= 0) {
++        uint32_t tailLen = room->tileCount - (uint32_t) i - 1;
+         if (tailLen > 0) memmove(&room->tiles[i], &room->tiles[i + 1], tailLen * sizeof(RoomTile));
+         room->tileCount--;
++        tileIndexStale = true;
+         runner->drawableListStructureDirty = true;
+         return RValue_makeUndefined();
+     }
+@@ -14526,8 +14566,8 @@
+     if (room == nullptr) return RValue_makeUndefined();
+     uint32_t id = (uint32_t) RValue_toInt32(args[0]);
+     float alpha = (float) RValue_toReal(args[1]);
+-    repeat(room->tileCount, i) {
+-        if (room->tiles[i].instanceID != id) continue;
++    int32_t i = findTileIndex(room, id);
++    if (i >= 0) {
+         room->tiles[i].alpha = alpha;
+         return RValue_makeUndefined();
+     }
+@@ -14541,9 +14581,8 @@
+     Room* room = runner->currentRoom;
+     if (room == nullptr) return RValue_makeReal(-1.0);
+     uint32_t id = (uint32_t) RValue_toInt32(args[0]);
+-    repeat(room->tileCount, i) {
+-        if (room->tiles[i].instanceID == id) return RValue_makeReal((GMLReal) room->tiles[i].backgroundDefinition);
+-    }
++    int32_t i = findTileIndex(room, id);
++    if (i >= 0) return RValue_makeReal((GMLReal) room->tiles[i].backgroundDefinition);
+     logWarn("VM: tile_get_background: tile does not exist (%u)\n", id);
+     return RValue_makeReal(-1.0);
+ }
+@@ -14554,8 +14593,8 @@
+     Room* room = runner->currentRoom;
+     if (room == nullptr) return RValue_makeUndefined();
+     uint32_t id = (uint32_t) RValue_toInt32(args[0]);
+-    repeat(room->tileCount, i) {
+-        if (room->tiles[i].instanceID != id) continue;
++    int32_t i = findTileIndex(room, id);
++    if (i >= 0) {
+         room->tiles[i].scaleX = (float) RValue_toReal(args[1]);
+         room->tiles[i].scaleY = (float) RValue_toReal(args[2]);
+         return RValue_makeUndefined();
