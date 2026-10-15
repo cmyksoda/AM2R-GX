@@ -74,6 +74,7 @@ wii: $(BUTTER)/CMakeLists.txt
 	cd $(BUTTER) && git apply ../../wii/patches/0033-collision-clip-divisions.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0034-list-set-arguments.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0035-seed-unused-argument.patch
+	cd $(BUTTER) && git apply ../../wii/patches/0036-event-slot-reuse.patch
 	if [ "$(HOOKS)" != 0 ] && [ -f wii/test/patches/0099-debug-collision-trace.patch ]; then cd $(BUTTER) && git apply ../../wii/test/patches/0099-debug-collision-trace.patch; fi
 	cmake -B $(WII_BUILD) -S $(BUTTER) $(WII_CMAKE_FLAGS)
 	cmake --build $(WII_BUILD) -j$(shell nproc)

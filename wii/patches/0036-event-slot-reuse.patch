@@ -1,0 +1,18 @@
+Reason: every instance in an event-dispatch pass shares the already resolved event slot.
+Resolve its current object handler directly, as the other dispatch branch already does.
+Upstream: speed only, every platform. Retire this patch when merged.
+
+--- a/src/runner.c
++++ b/src/runner.c
+@@ -531,7 +531,10 @@
+         repeat(snapshotCount, i) {
+             Instance* inst = scratch[i];
+             if (!inst->active) continue;
+-            Runner_executeEvent(runner, inst, eventType, eventSubtype);
++            int32_t ownerObjectIndex = -1;
++            int32_t codeId = ResolvedEventTable_lookup(table, inst->objectIndex, slot, &ownerObjectIndex);
++            if (0 > codeId) continue;
++            Runner_executeResolvedEvent(runner, inst, eventType, eventSubtype, codeId, ownerObjectIndex);
+         }
+         }
+         return;
