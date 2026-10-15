@@ -2652,6 +2652,10 @@ static void gxDrawSprite(Renderer *renderer, int32_t tpagIndex, float x, float y
 
 	if (tpagIndex < 0 || (uint32_t)tpagIndex >= dw->tpag.count)
 		return;
+	if (gx->skipView && gx->currentTarget == gx->appSurfId) {
+		gx_stat.skipped++;
+		return;
+	}
 	tpag = &dw->tpag.items[tpagIndex];
 	localX0 = (float)tpag->targetX - originX;
 	localY0 = (float)tpag->targetY - originY;
