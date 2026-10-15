@@ -1,0 +1,19 @@
+Reason: unrotated sprites use the same transform arithmetic without calling the trig library.
+Keep the signed zero sine so the cross terms retain their original floating-point behavior.
+Upstream: speed only, every platform. Retire this patch when merged.
+
+diff --git a/src/matrix_math.h b/src/matrix_math.h
+index 9f33998..34b7cdb 100644
+--- a/src/matrix_math.h
++++ b/src/matrix_math.h
+@@ -184,8 +184,8 @@ static inline Matrix4f* Matrix4f_scale(Matrix4f* dest, float sx, float sy, float
+ // Directly sets dest to a combined translate * rotateZ * scale matrix (no post-multiply)
+ // Equivalent to: identity -> translate(x, y, 0) -> rotateZ(angleRad) -> scale(sx, sy, 1)
+ static inline Matrix4f* Matrix4f_setTransform2D(Matrix4f* dest, float x, float y, float sx, float sy, float angleRad) {
+-    float c = cosf(angleRad);
+-    float s = sinf(angleRad);
++    float c = angleRad == 0.0f ? 1.0f : cosf(angleRad);
++    float s = angleRad == 0.0f ? angleRad : sinf(angleRad);
+ 
+     // Column 0: rotated+scaled X axis
+     dest->m[0] = c * sx;
