@@ -457,20 +457,7 @@ static u8 mixu8(u8 a, u8 b, float t)
 	return (u8)((float)a + ((float)b - (float)a) * t + 0.5f);
 }
 
-static GxPage *gx_page_of(GxRenderer *gx, GXTexObj *obj)
-{
-	uint32_t i;
-
-	if (!gx || !obj)
-		return NULL;
-	for (i = 0; i < gx->pageCount; i++) {
-		if (gx->pages[i].loaded && &gx->pages[i].obj == obj)
-			return &gx->pages[i];
-	}
-	return NULL;
-}
-
-static void gx_bind_tex(GxRenderer *gx, GXTexObj *obj)
+static void gx_bind_tex(GxRenderer *gx, GXTexObj *obj, GxPage *page)
 {
 	if (gx->texBound && gx->boundTex == obj)
 		return;
@@ -479,7 +466,7 @@ static void gx_bind_tex(GxRenderer *gx, GXTexObj *obj)
 	GX_SetTevOp(GX_TEVSTAGE0, GX_MODULATE);
 	gx->texBound = true;
 	gx->boundTex = obj;
-	gx->boundPage = gx_page_of(gx, obj);
+	gx->boundPage = page && page->loaded ? page : NULL;
 }
 
 static void gx_unbind_tex(GxRenderer *gx)
@@ -979,7 +966,7 @@ static bool gx_load_page(GxRenderer *gx, uint32_t pageId)
 	u16 *texels = NULL;
 	int w, h, tw, th;
 	bool streamed;
-	u64 t0 = gettime();
+	u64 t0;
 
 	if (pageId >= gx->pageCount)
 		return false;
@@ -991,6 +978,7 @@ static bool gx_load_page(GxRenderer *gx, uint32_t pageId)
 	if (page->failed && gx->frameCounter < page->retryAt)
 		return false;
 
+	t0 = gettime();
 	page->failed = false;
 	gx_make_room(gx, PAGE_LOAD_NEED);
 	DataWin_loadTxtrIfNeeded(dw, pageId);
@@ -1507,7 +1495,7 @@ static void gx_restore_surface(GxRenderer *gx, int32_t id)
 	if (!s->exists || !s->texels)
 		return;
 	gx_prep_surf_obj(s);
-	gx_bind_tex(gx, &s->obj);
+	gx_bind_tex(gx, &s->obj, NULL);
 	GX_SetAlphaCompare(GX_ALWAYS, 0, GX_AOP_AND, GX_ALWAYS, 0);
 	GX_SetZMode(GX_FALSE, GX_ALWAYS, GX_FALSE);
 	GX_SetColorUpdate(GX_TRUE);
@@ -1992,7 +1980,7 @@ static void gx_draw_tpag(GxRenderer *gx, int32_t tpagIndex, float x0, float y0, 
 			v0 = srcY / (float)sw->texH;
 			u1 = (srcX + srcW) / (float)sw->texW;
 			v1 = (srcY + srcH) / (float)sw->texH;
-			gx_bind_tex(gx, &sw->obj);
+			gx_bind_tex(gx, &sw->obj, NULL);
 			emit_quad(x0, y0, x1, y1, x2, y2, x3, y3,
 				  u0, v0, u1, v0, u1, v1, u0, v1,
 				  r0, g0, b0, a0, r1, g1, b1, a1, r2, g2, b2, a2, r3, g3, b3, a3);
@@ -2011,7 +1999,7 @@ static void gx_draw_tpag(GxRenderer *gx, int32_t tpagIndex, float x0, float y0, 
 	v0 = (tpag->sourceY + srcY) / (float)page->texH;
 	u1 = (tpag->sourceX + srcX + srcW) / (float)page->texW;
 	v1 = (tpag->sourceY + srcY + srcH) / (float)page->texH;
-	gx_bind_tex(gx, &page->obj);
+	gx_bind_tex(gx, &page->obj, page);
 	emit_quad(x0, y0, x1, y1, x2, y2, x3, y3,
 		  u0, v0, u1, v0, u1, v1, u0, v1,
 		  r0, g0, b0, a0, r1, g1, b1, a1, r2, g2, b2, a2, r3, g3, b3, a3);
@@ -2501,7 +2489,7 @@ static void gxEndFrameEnd(Renderer *renderer)
 		if (appId >= 0 && (uint32_t)appId < gx->surfCount && gx->surfs[appId].exists) {
 			s = &gx->surfs[appId];
 			gx_prep_surf_obj(s);
-			gx_bind_tex(gx, &s->obj);
+			gx_bind_tex(gx, &s->obj, NULL);
 			GX_SetBlendMode(GX_BM_NONE, GX_BL_ONE, GX_BL_ZERO, GX_LO_CLEAR);
 			int fbw = (int)WiiVideo_fbWidth();
 			int fbh = (int)WiiVideo_efbHeight();
@@ -2598,7 +2586,7 @@ void GxRenderer_present(void)
 	if (!s->exists || !s->texels)
 		return;
 	gx_prep_surf_obj(s);
-	gx_bind_tex(gx, &s->obj);
+	gx_bind_tex(gx, &s->obj, NULL);
 	GX_SetBlendMode(GX_BM_NONE, GX_BL_ONE, GX_BL_ZERO, GX_LO_CLEAR);
 	fbw = (int)WiiVideo_fbWidth();
 	n = s->w / 2;
@@ -2926,7 +2914,7 @@ static void gx_text_emit(GxRenderer *gx, uint32_t count, double x, double y, flo
 		}
 		if (!page)
 			continue;
-		gx_bind_tex(gx, &page->obj);
+		gx_bind_tex(gx, &page->obj, page);
 		Matrix4f_transformPoint(&transform, g->lx0, g->ly0, &px0, &py0);
 		Matrix4f_transformPoint(&transform, g->lx1, g->ly0, &px1, &py1);
 		Matrix4f_transformPoint(&transform, g->lx1, g->ly1, &px2, &py2);
@@ -2982,7 +2970,7 @@ static void gx_draw_text(GxRenderer *gx, const char *text, double x, double y, f
 		page = gx_page(gx, tpag->texturePageId);
 		if (!page)
 			return;
-		gx_bind_tex(gx, &page->obj);
+		gx_bind_tex(gx, &page->obj, page);
 	}
 	textLen = (int32_t)strlen(text);
 	if (textLen <= 0)
@@ -3698,7 +3686,7 @@ static void gxDrawSurfaceColor(Renderer *renderer, int32_t surfaceID, int32_t sr
 				Matrix4f_transformPoint(&transform, lx1, ly1, &x2, &y2);
 				Matrix4f_transformPoint(&transform, lx0, ly1, &x3, &y3);
 				gx_prep_tile_obj(t);
-				gx_bind_tex(gx, &t->obj);
+				gx_bind_tex(gx, &t->obj, NULL);
 				emit_quad(x0, y0, x1, y1, x2, y2, x3, y3, u0, v0, u1, v0, u1, v1, u0, v1,
 					  (u8)BGR_R(c1), (u8)BGR_G(c1), (u8)BGR_B(c1), a,
 					  (u8)BGR_R(c2), (u8)BGR_G(c2), (u8)BGR_B(c2), a,
@@ -3719,7 +3707,7 @@ static void gxDrawSurfaceColor(Renderer *renderer, int32_t surfaceID, int32_t sr
 	Matrix4f_transformPoint(&transform, (float)srcWidth, 0, &x1, &y1);
 	Matrix4f_transformPoint(&transform, (float)srcWidth, (float)srcHeight, &x2, &y2);
 	Matrix4f_transformPoint(&transform, 0, (float)srcHeight, &x3, &y3);
-	gx_bind_tex(gx, &s->obj);
+	gx_bind_tex(gx, &s->obj, NULL);
 	if (gb && gx_gb_begin(gx)) {
 		const u8 *k = gx->gbColor[0];
 
@@ -4309,7 +4297,7 @@ static void gxPrimitiveEnd(Renderer *renderer)
 		if ((uint32_t)gx->primTpag < dw->tpag.count) {
 			GxPage *page = gx_page(gx, dw->tpag.items[gx->primTpag].texturePageId);
 			if (page)
-				gx_bind_tex(gx, &page->obj);
+				gx_bind_tex(gx, &page->obj, page);
 			else
 				gx_unbind_tex(gx);
 		}
