@@ -41,7 +41,7 @@ wii: $(BUTTER)/CMakeLists.txt
 	rsync -a --delete wii/src/ $(BUTTER)/src/wii/
 	# The local test hooks (wii/test/, never in the repository) join the build when they are on disk.
 	if [ "$(HOOKS)" != 0 ] && [ -d wii/test/src ]; then rsync -a wii/test/src/ $(BUTTER)/src/wii/; fi
-	cd $(BUTTER) && git checkout -- CMakeLists.txt src/collision.h src/gettime.c src/ini.c src/instance.h src/loop.c src/matrix_math.h src/random.c src/random.h src/runner.c src/runner.h src/spatial_grid.c src/vm.c src/vm.h src/vm_builtins.c src/vm_builtins.h
+	cd $(BUTTER) && git checkout -- CMakeLists.txt src/collision.h src/gettime.c src/ini.c src/instance.c src/instance.h src/loop.c src/matrix_math.h src/random.c src/random.h src/runner.c src/runner.h src/spatial_grid.c src/vm.c src/vm.h src/vm_builtins.c src/vm_builtins.h
 	cd $(BUTTER) && git apply ../../wii/patches/0001-cmake-add-PLATFORM-wii.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0002-gettime-wii.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0003-loop-no-sigaction-on-wii.patch
@@ -70,6 +70,7 @@ wii: $(BUTTER)/CMakeLists.txt
 	cd $(BUTTER) && git apply ../../wii/patches/0027-spatial-grid-live-instances-skip-full-scan.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0028-matrix-zero-angle-transform.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0029-collision-line-reuse-bounds.patch
+	cd $(BUTTER) && git apply ../../wii/patches/0031-direction-range-modulo.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0032-collision-line-grid-bounds.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0033-collision-clip-divisions.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0034-list-set-arguments.patch
