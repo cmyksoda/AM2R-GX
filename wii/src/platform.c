@@ -440,9 +440,16 @@ void platformGetMousePos(double *xPos, double *yPos)
 
 void platformSwapBuffers(void)
 {
+	uint64_t cpuDone;
+
 	GxRenderer_present();
 	Wii_hooksBeforeCopy();
+	cpuDone = nowNanos();
 	WiiVideo_present();
+	/* AM2R's bubbles destroy themselves when fps_real drops under 60; here the GPU's work is part of the frame too
+	 * (but not the vsync wait, nor a 50 Hz console's pacing before the step). */
+	if (g_runner && g_runner->fpsRealFrameStartNanos && cpuDone > g_runner->fpsRealFrameStartNanos)
+		g_runner->fpsReal = 1e9 / (double)(cpuDone - g_runner->fpsRealFrameStartNanos + WiiVideo_gpuWaitNs());
 	Wii_hooksAfterPresent();
 }
 

@@ -9,6 +9,7 @@
 
 bool WiiVideo_init(void);
 void WiiVideo_present(void);
+uint64_t WiiVideo_gpuWaitNs(void); /* how long the last present waited for the GPU */
 bool WiiVideo_paceStep(u64 stepNs); /* false: not a 50 Hz console, sleep as usual */
 void WiiVideo_setActiveWidth(int w);
 GXRModeObj *WiiVideo_rmode(void);

@@ -249,12 +249,20 @@ void WiiVideo_set240p(bool on)
 	lowWanted = on;
 }
 
+static u64 gpuWait;
+
+uint64_t WiiVideo_gpuWaitNs(void)
+{
+	return ticks_to_nanosecs(gpuWait);
+}
+
 void WiiVideo_present(void)
 {
 	u64 t0 = gettime(), t1;
 
 	GX_DrawDone();
 	t1 = gettime();
+	gpuWait = t1 - t0;
 	if (fifty) {
 		present_fifty();
 		frame_stats(t0, t1, gettime());
