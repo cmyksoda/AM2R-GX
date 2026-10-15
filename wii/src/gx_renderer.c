@@ -274,7 +274,8 @@ static void swizzle_rgb5a3(u16 *dst, const u8 *rgba, int w, int h, int tw)
 {
 	int x, y;
 
-	memset(dst, 0, tex_bytes(tw, pad4(h)));
+	if (w != tw || h != pad4(h))
+		memset(dst, 0, tex_bytes(tw, pad4(h)));
 	for (y = 0; y < h; y++) {
 		for (x = 0; x < w; x++) {
 			const u8 *p = rgba + ((y * w + x) * 4);
@@ -1016,7 +1017,8 @@ static bool gx_load_page(GxRenderer *gx, uint32_t pageId)
 	if (streamed) {
 		PageRows pr = { texels, w, h, tw };
 
-		memset(texels, 0, tex_bytes(tw, th));
+		if (w != tw || h != th)
+			memset(texels, 0, tex_bytes(tw, th));
 		if (!WiiPng_decodeRows(txtr->blobData, (size_t)txtr->blobSize, gx_page_row, &pr))
 			goto fail;
 	} else {
@@ -1241,7 +1243,7 @@ static void gx_prefetch(GxRenderer *gx, int32_t pageId)
 	job.offset = txtr->blobOffset;
 	job.size = txtr->blobSize;
 	job.blob = gx_pf.blob;
-	job.clear = gx_pf.texels;
+	job.clear = page->pngW != gx_pf.tw || page->pngH != gx_pf.th ? gx_pf.texels : NULL;
 	job.clearBytes = bytes;
 	job.emit = gx_page_row;
 	job.user = &gx_pf.rows;
