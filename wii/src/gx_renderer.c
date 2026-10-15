@@ -2562,7 +2562,6 @@ static void gxEndFrameEnd(Renderer *renderer)
  * fetches, so no bilinear sampling (and no sub-pixel bias) is involved. Rows map 1:1. */
 static void gx_present_mix_column(float x, float h, float ua, float ub, float v1)
 {
-	GX_Begin(GX_QUADS, GX_VTXFMT1, 4);
 	GX_Position2f32(x, 0);
 	GX_Color4u8(255, 255, 255, 255);
 	GX_TexCoord2f32(ua, 0);
@@ -2579,7 +2578,6 @@ static void gx_present_mix_column(float x, float h, float ua, float ub, float v1
 	GX_Color4u8(255, 255, 255, 255);
 	GX_TexCoord2f32(ua, v1);
 	GX_TexCoord2f32(ub, v1);
-	GX_End();
 }
 
 void GxRenderer_present(void)
@@ -2627,9 +2625,11 @@ void GxRenderer_present(void)
 	GX_SetTevColorOp(GX_TEVSTAGE1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
 	GX_SetTevAlphaIn(GX_TEVSTAGE1, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_APREV);
 	GX_SetTevAlphaOp(GX_TEVSTAGE1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+	GX_Begin(GX_QUADS, GX_VTXFMT1, (u16)(4 * n));
 	for (k = 0; k < n; k++)
 		gx_present_mix_column((float)(ox + 3 * k + 1), h, (2.0f * (float)k + 0.5f) / tw,
 				      (2.0f * (float)k + 1.5f) / tw, v1);
+	GX_End();
 	GX_SetNumTevStages(1);
 	GX_SetNumTexGens(1);
 	gx_vtx_fmt();
