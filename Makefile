@@ -92,6 +92,7 @@ wii: $(BUTTER)/CMakeLists.txt
 	cd $(BUTTER) && git apply ../../wii/patches/0048-call-frames-recycle-their-blocks.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0049-operand-sizes-from-a-table.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0050-region-activation-checks-remembered-boxes-inline.patch
+	cd $(BUTTER) && git apply ../../wii/patches/0051-code-entries-can-run-native-code.patch
 	if [ "$(HOOKS)" != 0 ] && [ -f wii/test/patches/0099-debug-collision-trace.patch ]; then cd $(BUTTER) && git apply ../../wii/test/patches/0099-debug-collision-trace.patch; fi
 	cmake -B $(WII_BUILD) -S $(BUTTER) $(WII_CMAKE_FLAGS)
 	cmake --build $(WII_BUILD) -j$(JOBS)

@@ -399,6 +399,128 @@ static RValue wii_draw_map_surf(VMContext *ctx, RValue *args, int32_t argCount)
 	return RValue_makeUndefined();
 }
 
+/* The bytecode's instance for widescreen_space: oControl's object index in 1.5.5. */
+#define WATER_CONTROL_OBJECT 427
+
+enum { WV_MYSURF, WV_AMP, WV_THETA, WV_FREQ, WV_YBOTTOM, WV_YTOP, WV_XX, WV_YY, WV_COUNT };
+enum { WF_SURFACE_EXISTS, WF_FLOOR, WF_LERP, WF_ROUND, WF_MAX, WF_MIN, WF_SIN, WF_DRAW, WF_COUNT };
+static const char *const waterVarNames[WV_COUNT] = { "mysurf", "AMP", "THETA", "FREQ", "y_bottom", "y_top", "xx",
+						     "yy" };
+static const char *const waterFnNames[WF_COUNT] = { "surface_exists", "floor", "lerp", "round", "max", "min", "sin",
+						    "draw_surface_part_ext" };
+static int32_t waterDrawCode = -1, waterVars[WV_COUNT], waveHeightVar, widescreenSpaceVar;
+static int32_t waterFns[WF_COUNT];
+
+static RValue water_call(VMContext *ctx, int fn, RValue *args, int32_t argCount)
+{
+	return ((BuiltinFunc)ctx->funcCallCache[waterFns[fn]].builtin)(ctx, args, argCount);
+}
+
+/* The build's -ffast-math may regroup or reciprocate float steps; the bytecode rounds each one on its own. */
+#define GML_ROUNDING __attribute__((optimize("no-fast-math", "fp-contract=off")))
+
+/* GML's numeric compare: equal within GML_MATH_EPSILON, otherwise by sign. */
+static GML_ROUNDING int gml_compare(GMLReal a, GMLReal b)
+{
+	GMLReal d = a - b;
+
+	return GMLReal_fabs(d) <= GML_MATH_EPSILON ? 0 : d < 0 ? -1 : 1;
+}
+
+static bool real_var(Instance *inst, int32_t var, GMLReal *out)
+{
+	RValue v = Instance_getSelfVar(inst, var);
+
+	*out = v.real;
+	return v.type == RVALUE_REAL;
+}
+
+static bool real_builtin(VMContext *ctx, int16_t id, const char *name, int32_t index, GMLReal *out)
+{
+	RValue v = VMBuiltins_getVariable(ctx, ctx->currentInstance, id, name, index);
+	bool real = v.type == RVALUE_REAL;
+
+	*out = v.real;
+	RValue_free(&v);
+	return real;
+}
+
+static void water_strip(VMContext *ctx, RValue surf, GMLReal top, GMLReal width, GMLReal height, GMLReal x, GMLReal y)
+{
+	RValue args[11] = { surf, RValue_makeInt32(0), RValue_makeReal(top), RValue_makeReal(width),
+			    RValue_makeReal(height), RValue_makeReal(x), RValue_makeReal(y), RValue_makeInt32(1),
+			    RValue_makeInt32(1), RValue_makeInt32(-1), RValue_makeReal(0.2) };
+	RValue r = water_call(ctx, WF_DRAW, args, 11);
+
+	RValue_free(&r);
+}
+
+/* oWaterFXV2's Draw lays the screen copy back in wavy rows: ~31,000 bytecode ops a frame for ~480 draws. Here it runs
+ * as the bytecode does, same builtins in the same order and the same double math; a non-real input interprets it. */
+static GML_ROUNDING RValue wii_water_draw(VMContext *ctx)
+{
+	Instance *self = ctx->currentInstance, *g = ctx->globalScopeInstance;
+	Instance *control = VM_findInstanceByTarget(ctx, WATER_CONTROL_OBJECT);
+	GMLReal v[WV_COUNT], wave, ws, fps, viewX, viewY, viewW, viewH, y, heightTop, xx = 0, yy;
+	RValue surf, r, x, args[3];
+	bool exists, ok;
+	int k;
+
+	ok = self && g && control && real_var(g, waveHeightVar, &wave) && real_var(control, widescreenSpaceVar, &ws);
+	for (k = 0; ok && k < WV_XX; k++)
+		ok = real_var(self, waterVars[k], &v[k]);
+	ok = ok && real_builtin(ctx, BUILTIN_VAR_FPS, "fps", -1, &fps) && real_builtin(ctx, BUILTIN_VAR_Y, "y", -1, &y);
+	ok = ok && real_builtin(ctx, BUILTIN_VAR_VIEW_XVIEW, "view_xview", 0, &viewX) &&
+	     real_builtin(ctx, BUILTIN_VAR_VIEW_YVIEW, "view_yview", 0, &viewY) &&
+	     real_builtin(ctx, BUILTIN_VAR_VIEW_WVIEW, "view_wview", 0, &viewW) &&
+	     real_builtin(ctx, BUILTIN_VAR_VIEW_HVIEW, "view_hview", 0, &viewH);
+	if (!ok)
+		return VM_interpretCode(ctx, waterDrawCode);
+
+	surf = Instance_getSelfVar(self, waterVars[WV_MYSURF]);
+	r = water_call(ctx, WF_SURFACE_EXISTS, &surf, 1);
+	exists = RValue_toBool(r);
+	RValue_free(&r);
+	if (!exists)
+		return RValue_makeUndefined();
+
+	/* wave_height = max(round(lerp(wave_height, floor((60 - (fps - 1)) ^ 1.5), 0.1)) - 1, 1), ^ being xor on int64s */
+	x = RValue_makeInt32(RValue_toInt32(RValue_makeInt64(RValue_toInt64(RValue_makeReal(60 - (fps - 1))))) ^
+			     RValue_toInt32(RValue_makeInt64((int64_t)1.5)));
+	args[0] = RValue_makeReal(wave);
+	args[1] = water_call(ctx, WF_FLOOR, &x, 1);
+	args[2] = RValue_makeReal(0.1);
+	r = water_call(ctx, WF_LERP, args, 3);
+	args[0] = water_call(ctx, WF_ROUND, &r, 1);
+	args[0] = RValue_makeReal(args[0].real - 1);
+	args[1] = RValue_makeInt32(1);
+	r = water_call(ctx, WF_MAX, args, 2);
+	Instance_setSelfVar(g, waveHeightVar, r);
+	wave = r.real;
+
+	args[0] = RValue_makeReal(v[WV_YBOTTOM] - v[WV_YTOP]);
+	args[1] = r;
+	heightTop = water_call(ctx, WF_MIN, args, 2).real;
+
+	if (gml_compare(viewY + viewH, y) < 0)
+		return RValue_makeUndefined();
+	for (yy = 0; gml_compare(yy, 240) < 0; yy = yy + wave) {
+		args[0] = RValue_makeReal(v[WV_THETA] + v[WV_FREQ] * yy / v[WV_YBOTTOM]);
+		xx = v[WV_AMP] * water_call(ctx, WF_SIN, args, 1).real;
+		if (gml_compare(yy, v[WV_YTOP]) >= 0) {
+			water_strip(ctx, surf, yy, viewW + ws, wave, viewX + xx - ws / 2, viewY + yy);
+			if (gml_compare(yy - v[WV_YTOP], wave) < 0)
+				water_strip(ctx, surf, v[WV_YTOP], viewW + ws, yy - v[WV_YTOP], viewX + xx - ws / 2,
+					    viewY + v[WV_YTOP]);
+		}
+	}
+	Instance_setSelfVar(self, waterVars[WV_XX], RValue_makeReal(xx));
+	Instance_setSelfVar(self, waterVars[WV_YY], RValue_makeReal(yy));
+	if (gml_compare(heightTop, wave) < 0)
+		water_strip(ctx, surf, v[WV_YTOP], viewW + ws, heightTop, viewX + xx - ws / 2, y);
+	return RValue_makeUndefined();
+}
+
 /* Ours, then AM2R's, in its markup (* heading, / centered, a=b paired, ; next row). The roll scrolls at a speed set by
  * its row count to last as long as its music, so these rows make it a little faster, not longer. */
 static const char credits[] = "*AM2R GX;;;;;;;;;;;;"
@@ -436,7 +558,8 @@ void Wii_hookAm2rScripts(VMContext *ctx)
 	static const char *const partNames[7] = { "wallU", "wallR", "wallD", "wallL", "color", "special", "corner" };
 	ptrdiff_t s = shgeti(ctx->codeIndexByName, "reset_map"), t = shgeti(ctx->codeIndexByName, "draw_cool_text");
 	ptrdiff_t m = shgeti(ctx->codeIndexByName, "draw_map_surf"), b = shgeti(ctx->codeIndexByName, "draw_mapblock");
-	bool resetMap, mapSurf;
+	ptrdiff_t w = shgeti(ctx->codeIndexByName, "gml_Object_oWaterFXV2_Draw_0");
+	bool resetMap, mapSurf, water;
 	int k;
 
 	resetMapCode = s >= 0 ? ctx->codeIndexByName[s].value : -1;
@@ -458,9 +581,23 @@ void Wii_hookAm2rScripts(VMContext *ctx)
 		partVars[k] = Wii_varId(ctx->runner, partNames[k], INSTANCE_SELF);
 		mapSurf = mapSurf && partVars[k] >= 0;
 	}
+	waveHeightVar = Wii_varId(ctx->runner, "wave_height", INSTANCE_GLOBAL);
+	widescreenSpaceVar = Wii_varId(ctx->runner, "widescreen_space", INSTANCE_SELF);
+	water = w >= 0 && waveHeightVar >= 0 && widescreenSpaceVar >= 0 &&
+		Wii_objectIndex(ctx->runner, "oControl") == WATER_CONTROL_OBJECT;
+	for (k = 0; k < WV_COUNT; k++) {
+		waterVars[k] = Wii_varId(ctx->runner, waterVarNames[k], INSTANCE_SELF);
+		water = water && waterVars[k] >= 0;
+	}
+	for (k = 0; k < WF_COUNT; k++)
+		waterFns[k] = -1;
 	repeat(ctx->funcCallCacheCount, fi) {
 		const char *name = ctx->dataWin->func.functions[fi].name;
 		void *standIn = NULL;
+
+		for (k = 0; name && k < WF_COUNT; k++)
+			if (strcmp(name, waterFnNames[k]) == 0)
+				waterFns[k] = (int32_t)fi;
 
 		if (name && resetMap && strcmp(name, "reset_map") == 0)
 			standIn = (void *)wii_reset_map;
@@ -472,5 +609,11 @@ void Wii_hookAm2rScripts(VMContext *ctx)
 			ctx->funcCallCache[fi].builtin = standIn;
 			ctx->funcCallCache[fi].scriptCodeIndex = -1;
 		}
+	}
+	for (k = 0; k < WF_COUNT; k++)
+		water = water && waterFns[k] >= 0 && ctx->funcCallCache[waterFns[k]].builtin;
+	if (water) {
+		waterDrawCode = ctx->codeIndexByName[w].value;
+		VM_setNativeCode(ctx, waterDrawCode, wii_water_draw);
 	}
 }

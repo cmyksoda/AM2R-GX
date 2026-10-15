@@ -1,0 +1,82 @@
+Reason: a few AM2R events spend most of their time interpreting per-row math (oWaterFXV2's Draw runs ~31,000 bytecode
+ops a frame for 481 draw calls: 6.6 ms in rm_a2h01, of which the drawing is under 1 ms). A port can now give one code
+entry a C function (VM_setNativeCode) that VM_executeCode runs instead of the bytecode, with the code name, index and
+profiler entry set as for bytecode; the function can still interpret the original with VM_interpretCode when it meets
+state it doesn't handle. Scripts already had this through the call cache; events had no way in.
+Upstream: New API, every platform; nothing changes until a port registers code. Retires this patch when merged.
+
+--- a/src/vm.h
++++ b/src/vm.h
+@@ -189,6 +189,9 @@
+     char* message;
+ } VMException;
+ 
++// C code that runs instead of a code entry's bytecode (see VM_setNativeCode).
++typedef RValue (*NativeCode)(VMContext* ctx);
++
+ typedef struct { char* key; int32_t value; } CodeIndexByNameEntry;
+ typedef struct { char* key; CodeLocals* value; } CodeLocalsMapEntry;
+ typedef struct { int32_t key; int32_t* value; } CrossRefMapEntry;
+@@ -229,6 +232,7 @@
+     // Cached varID for the built-in "creator" self variable (-1 if not found)
+     int32_t creatorVarID;
+     uint32_t funcCallCacheCount;
++    NativeCode* nativeCode; // per code entry, allocated on the first VM_setNativeCode
+     bool traceEventInherited;
+     bool hasFixedSeed;
+     bool actionRelativeFlag; // D&D action relative flag (set by action_set_relative)
+@@ -308,6 +312,9 @@
+ VMContext* VM_create(DataWin* dataWin);
+ void VM_reset(VMContext* ctx);
+ RValue VM_executeCode(VMContext* ctx, int32_t codeIndex);
++RValue VM_interpretCode(VMContext* ctx, int32_t codeIndex);
++// Makes VM_executeCode run fn for this code entry; fn may still run the bytecode with VM_interpretCode.
++void VM_setNativeCode(VMContext* ctx, int32_t codeIndex, NativeCode fn);
+ RValue VM_callCodeIndex(VMContext* ctx, int32_t codeIndex, RValue* args, int32_t argCount);
+ // array[index] = val with the VM's copy-on-write rules; `slot` holds the array (e.g. a variable's slot). The caller keeps val.
+ GMLArray* VM_arraySetWithCoW(VMContext* ctx, RValue* slot, int32_t index, RValue val);
+--- a/src/vm.c
++++ b/src/vm.c
+@@ -3811,8 +3811,33 @@
+     }
+ }
+ 
++void VM_setNativeCode(VMContext* ctx, int32_t codeIndex, NativeCode fn) {
++    require(codeIndex >= 0 && ctx->dataWin->code.count > (uint32_t) codeIndex);
++    if (ctx->nativeCode == nullptr) ctx->nativeCode = (NativeCode*) safeCalloc(ctx->dataWin->code.count, sizeof(NativeCode));
++    ctx->nativeCode[codeIndex] = fn;
++}
++
+ RValue VM_executeCode(VMContext* ctx, int32_t codeIndex) {
+     require(codeIndex >= 0 && ctx->dataWin->code.count > (uint32_t) codeIndex);
++    if (ctx->nativeCode == nullptr || ctx->nativeCode[codeIndex] == nullptr) return VM_interpretCode(ctx, codeIndex);
++
++    CodeEntry* code = &ctx->dataWin->code.entries[codeIndex];
++    ctx->currentCodeName = code->name;
++    ctx->currentCodeIndex = codeIndex;
++    ctx->localVars = nullptr;
++    ctx->localVarCount = 0;
++#ifdef ENABLE_VM_GML_PROFILER
++    Profiler_enter(ctx->profiler, code->name);
++#endif
++    RValue result = ctx->nativeCode[codeIndex](ctx);
++#ifdef ENABLE_VM_GML_PROFILER
++    Profiler_exit(ctx->profiler);
++#endif
++    return result;
++}
++
++RValue VM_interpretCode(VMContext* ctx, int32_t codeIndex) {
++    require(codeIndex >= 0 && ctx->dataWin->code.count > (uint32_t) codeIndex);
+     CodeEntry* code = &ctx->dataWin->code.entries[codeIndex];
+ 
+     ctx->bytecodeBase = ctx->dataWin->bytecodeBuffer + (code->bytecodeAbsoluteOffset - ctx->dataWin->bytecodeBufferBase);
+@@ -4571,6 +4596,8 @@
+ 
+     // Free hash maps
+     shfree(ctx->codeIndexByName);
++    free(ctx->nativeCode);
++    ctx->nativeCode = nullptr;
+     repeat(shlen(ctx->varNameMap), i) {
+         free(ctx->varNameMap[i].key);
+     }
