@@ -1,0 +1,75 @@
+Reason: each draw event type (draw begin and end, the three GUI events, pre and post draw) walked the whole draw list
+to reach its instances, and a GMS1 room's list is mostly tiles (rm_a5h04: about 2,800 entries for a few hundred
+instances), so the dispatch loop was 1-3% of the CPU time in the profiled rooms (Dolphin perf). The positions of the
+list's instance entries are now found once per version of the list, bumped whenever the list is rebuilt, re-sorted,
+cleared or freed, and every dispatch walks only those, in the same order and with the same checks.
+Upstream: Speed only, every platform. Retires this patch when merged.
+
+--- a/src/runner.h
++++ b/src/runner.h
+@@ -765,6 +765,11 @@
+     Drawable* cachedDrawables; // stb_ds array
+     bool drawableListStructureDirty;
+     bool drawableListSortDirty;
++    // Bumped whenever cachedDrawables may have been refilled or reordered; draw-event dispatch keeps the positions of
++    // its instance entries (drawableInstanceSlots, stb_ds) until then.
++    uint32_t drawableListVersion, drawableInstanceSlotsVersion;
++    int32_t* drawableInstanceSlots;
++    int32_t drawableInstanceSlotsCount;
+     // Struct instances created by @@NewGMLObject@@. Reuses Instance with objectIndex=STRUCT_OBJECT_INDEX.
+     // Tracked separately so event/step/draw iteration over runner->instances stays clean.
+     Instance** structInstances;
+--- a/src/runner.c
++++ b/src/runner.c
+@@ -712,10 +712,21 @@
+     int32_t slot = EventSlotMap_lookup(&runner->eventSlotMap, EVENT_DRAW, subtype);
+     if (slot == -1) return;
+ 
+-    repeat(drawableCount, i) {
+-        Drawable* d = &drawables[i];
+-        if (d->type != DRAWABLE_INSTANCE)
+-            continue;
++    // GMS1 rooms fill the list with tiles: walk only its instance entries, found once per version of the list.
++    bool current = drawables == runner->cachedDrawables && runner->drawableInstanceSlotsCount == drawableCount &&
++                   runner->drawableInstanceSlotsVersion == runner->drawableListVersion;
++    if (!current) {
++        arrsetlen(runner->drawableInstanceSlots, 0);
++        repeat(drawableCount, i) {
++            if (drawables[i].type == DRAWABLE_INSTANCE) arrput(runner->drawableInstanceSlots, (int32_t) i);
++        }
++        runner->drawableInstanceSlotsCount = drawableCount;
++        runner->drawableInstanceSlotsVersion = drawables == runner->cachedDrawables ? runner->drawableListVersion
++                                                                                   : runner->drawableListVersion - 1;
++    }
++
++    repeat(arrlen(runner->drawableInstanceSlots), k) {
++        Drawable* d = &drawables[runner->drawableInstanceSlots[k]];
+ 
+         Instance* inst = d->instance;
+         if (!inst->active || !inst->visible)
+@@ -863,6 +874,7 @@
+ //   structureDirty - the SET of entries changed (instance/layer create or destroy, room change). Drop the cache and re-add every instance/tile/runtime-layer, then qsort.
+ //   sortDirty only - the entries are the same but .depth values may have shifted. Refresh depths from the live sources and only qsort if the order actually broke.
+ static void rebuildDrawableCacheIfDirty(Runner* runner) {
++    if (runner->drawableListStructureDirty || runner->drawableListSortDirty) runner->drawableListVersion++;
+     if (runner->drawableListStructureDirty) {
+         bool gms1 = !DataWin_isVersionAtLeast(runner->dataWin, 2, 0, 0, 0);
+         arrsetlen(drawableTileRun, 0);
+@@ -2231,6 +2243,7 @@
+     runner->lastMusicInstance = -1;
+ 
+     arrsetlen(runner->cachedDrawables, 0);
++    runner->drawableListVersion++;
+     runner->drawableListStructureDirty = true;
+     runner->drawableListSortDirty = false;
+ }
+@@ -4863,6 +4876,9 @@
+ 
+     arrfree(runner->cachedDrawables);
+     runner->cachedDrawables = nullptr;
++    arrfree(runner->drawableInstanceSlots);
++    runner->drawableInstanceSlots = nullptr;
++    runner->drawableListVersion++;
+     arrfree(runner->instanceSnapshots);
+     runner->instanceSnapshots = nullptr;
+     arrfree(runner->eventDispatchInstances);
