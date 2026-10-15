@@ -1,0 +1,40 @@
+Reason: collision_line uses the bounds already computed by the overlap check instead of computing them twice.
+The instance and its collision sprite are unchanged between these reads; clipping, masks and hit ordering stay the same.
+Upstream: speed only, every platform. Retire this patch when merged.
+
+--- a/src/collision.h
++++ b/src/collision.h
+@@ -361,16 +361,16 @@
+ }
+ 
+ // Line segment (x1,y1)-(x2,y2) vs instance collision rect.
+-static inline bool Collision_lineOverlapsInstance(Runner* runner, Instance* inst, GMLReal x1, GMLReal y1, GMLReal x2, GMLReal y2) {
+-    InstanceBBox bbox = Collision_computeBBox(runner, inst);
+-    if (!bbox.valid) return false;
++static inline bool Collision_lineOverlapsInstance(Runner* runner, Instance* inst, GMLReal x1, GMLReal y1, GMLReal x2, GMLReal y2, InstanceBBox* bbox) {
++    *bbox = Collision_computeBBox(runner, inst);
++    if (!bbox->valid) return false;
+ 
+     // Epsilon from GameMaker-HTML5, we apply it because the BBox is "exclusive" (outside of the sprite) but we need to put the right/bottom INSIDE of the sprite
+     // So we nudge it to be inside on it
+     GMLReal eps = 1e-5;
+     Sprite* spr = Collision_getSprite(runner->dataWin, inst);
+     if (!Collision_obbNeedsSAT(spr, inst)) {
+-        return Collision_segmentVsAARect(x1, y1, x2, y2, bbox.left, bbox.top, bbox.right - eps, bbox.bottom - eps);
++        return Collision_segmentVsAARect(x1, y1, x2, y2, bbox->left, bbox->top, bbox->right - eps, bbox->bottom - eps);
+     }
+ 
+     // For rotated OBB: transform line endpoints into local frame and clip against local rect.
+--- a/src/vm_builtins.c
++++ b/src/vm_builtins.c
+@@ -12658,8 +12658,8 @@
+ 
+ // collision_line's test of one instance: true where the line touches it (its mask too when prec is set).
+ static bool collisionLineHitsInstance(VMContext* ctx, Instance* inst, GMLReal lx1, GMLReal ly1, GMLReal lx2, GMLReal ly2, int32_t prec) {
+-    if (!Collision_lineOverlapsInstance(ctx->runner, inst, lx1, ly1, lx2, ly2)) return false;
+-    InstanceBBox bbox = Collision_computeBBox(ctx->runner, inst);
++    InstanceBBox bbox;
++    if (!Collision_lineOverlapsInstance(ctx->runner, inst, lx1, ly1, lx2, ly2, &bbox)) return false;
+ 
+     // Normalize line left-to-right for clipping
+     GMLReal xl = lx1, yl = ly1, xr = lx2, yr = ly2;
