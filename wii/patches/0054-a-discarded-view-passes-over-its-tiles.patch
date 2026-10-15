@@ -1,0 +1,35 @@
+Reason: a GameMaker 1 room keeps every tile in the draw list (rm_a5h04: ~2,300), and 1.5.5's wide mode draws the room
+twice, the first time into a surface it never shows. The Wii port already drops those draws, but the runner still
+walked each tile to reach it: the layer lookup, the tile record and a renderer call, ~2,300 times a frame for nothing.
+A renderer can now say its current target is thrown away; the runner then passes over the whole run of tiles at once
+(no GML runs between neighboring tiles, so the answer holds for the run). Nothing else changes.
+Upstream: New optional renderer hook, every platform; nothing changes for renderers that leave it unset. Retires this patch when merged.
+
+--- a/src/renderer.h
++++ b/src/renderer.h
+@@ -185,6 +185,8 @@ typedef struct {
+     void (*gpuSetFog)(Renderer* renderer, bool enable, uint32_t color);
+     // Optional: platform-specific tile rendering (nullptr = use default drawSpritePart path)
+     void (*drawTile)(Renderer* renderer, RoomTile* tile, float offsetX, float offsetY);
++    // Optional: true while whatever is drawn now is thrown away, so the runner can pass over a run of tiles at once.
++    bool (*tilesDiscarded)(Renderer* renderer);
+     void (*drawSpriteTiled)(Renderer* renderer, int32_t tpagIndex, float originX, float originY, float x, float y, float xscale, float yscale, bool tileX, bool tileY, float roomW, float roomH, uint32_t color, float alpha);
+     // Surface Functions
+     int32_t (*createSurface)(Renderer* renderer, int32_t width, int32_t height);
+--- a/src/runner.c
++++ b/src/runner.c
+@@ -1023,6 +1023,14 @@ void Runner_draw(Runner* runner) {
+         lastProcessedDrawKey = drawableKey(d);
+         if (d->type != DRAWABLE_TILE) tileLayerKnown = false;
+ 
++        // No GML runs between neighboring tiles, so the renderer's answer holds for the whole run.
++        if (d->type == DRAWABLE_TILE && runner->renderer != nullptr && runner->renderer->vtable->tilesDiscarded != nullptr &&
++            runner->renderer->vtable->tilesDiscarded(runner->renderer)) {
++            while (drawableCount > i && runner->cachedDrawables[i].type == DRAWABLE_TILE) i++;
++            lastProcessedDrawKey = drawableKey(&runner->cachedDrawables[i - 1]);
++            continue;
++        }
++
+         if (d->type == DRAWABLE_TILE) {
+             if (runner->renderer != nullptr) {
+                 RoomTile* tile = &room->tiles[d->tileIndex];

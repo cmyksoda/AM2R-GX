@@ -2726,6 +2726,13 @@ static void gxDrawSpritePart(Renderer *renderer, int32_t tpagIndex, int32_t srcO
 		     r, g, b, a, r, g, b, a, r, g, b, a, r, g, b, a);
 }
 
+static bool gxTilesDiscarded(Renderer *renderer)
+{
+	GxRenderer *gx = (GxRenderer *)renderer;
+
+	return gx->skipView && gx->currentTarget == gx->appSurfId;
+}
+
 /* A GameMaker 1 room keeps every tile in the draw list (rm_a5h04: 2,256, about 60 on screen); this drops the ones
  * outside the projection before the engine's generic path resolves and clips each, then steps aside for the rest. */
 static void gxDrawTile(Renderer *renderer, RoomTile *tile, float offsetX, float offsetY)
@@ -4382,6 +4389,7 @@ Renderer *GxRenderer_create(void)
 	gxVtable.gpuGetBlendEnable = gxGpuGetBlendEnable;
 	gxVtable.gpuSetFog = gxGpuSetFog;
 	gxVtable.drawTile = gxDrawTile;
+	gxVtable.tilesDiscarded = gxTilesDiscarded;
 	gxVtable.drawSpriteTiled = gxDrawSpriteTiled;
 	gxVtable.createSurface = gxCreateSurface;
 	gxVtable.surfaceExists = gxSurfaceExists;
