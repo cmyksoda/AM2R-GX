@@ -1,0 +1,77 @@
+Reason: mouse handlers can grow the shared instance snapshot while callbacks run.
+Keep an index and reload the allocation before each callback.
+Upstream: correctness fix, every platform. Retire this patch when merged.
+
+--- a/src/runner.c
++++ b/src/runner.c
+@@ -3155,11 +3155,11 @@
+ 
+ // Fires one local mouse subtype event on every instance in a snapshot that currently has the mouse over it.
+ // mouseIsOver must already have been computed for each instance.
+-static void fireLocalMouseSubtype(Runner* runner, int32_t subtype, int32_t slot, Instance** snapshot, int32_t count, bool* isOverArr) {
++static void fireLocalMouseSubtype(Runner* runner, int32_t subtype, int32_t slot, int32_t snapshotBase, int32_t count, bool* isOverArr) {
+     if (slot < 0) return;
+     ResolvedEventTable* table = &runner->eventTable;
+     repeat(count, i) {
+-        Instance* inst = snapshot[i];
++        Instance* inst = runner->instanceSnapshots[snapshotBase + i];
+         if (!inst->active) continue;
+         if (!isOverArr[i]) continue;
+         int32_t ownerObjectIndex = -1;
+@@ -3277,46 +3277,46 @@
+ 
+     // Button-held local events (0-2)
+     if (RunnerMouse_checkButton(mouse, GML_MB_LEFT))
+-        fireLocalMouseSubtype(runner, MOUSE_LEFT_BUTTON, slotLeftBtn, &runner->instanceSnapshots[snapshotBase], instCount, isOver);
++        fireLocalMouseSubtype(runner, MOUSE_LEFT_BUTTON, slotLeftBtn, snapshotBase, instCount, isOver);
+     if (runner->pendingRoom >= 0) { arrsetlen(runner->instanceSnapshots, snapshotBase); free(isOver); return; }
+ 
+     if (RunnerMouse_checkButton(mouse, GML_MB_RIGHT))
+-        fireLocalMouseSubtype(runner, MOUSE_RIGHT_BUTTON, slotRightBtn, &runner->instanceSnapshots[snapshotBase], instCount, isOver);
++        fireLocalMouseSubtype(runner, MOUSE_RIGHT_BUTTON, slotRightBtn, snapshotBase, instCount, isOver);
+     if (runner->pendingRoom >= 0) { arrsetlen(runner->instanceSnapshots, snapshotBase); free(isOver); return; }
+ 
+     if (RunnerMouse_checkButton(mouse, GML_MB_MIDDLE))
+-        fireLocalMouseSubtype(runner, MOUSE_MIDDLE_BUTTON, slotMiddleBtn, &runner->instanceSnapshots[snapshotBase], instCount, isOver);
++        fireLocalMouseSubtype(runner, MOUSE_MIDDLE_BUTTON, slotMiddleBtn, snapshotBase, instCount, isOver);
+     if (runner->pendingRoom >= 0) { arrsetlen(runner->instanceSnapshots, snapshotBase); free(isOver); return; }
+ 
+     // No-button local event (3): mouse over but nothing held
+     if (!RunnerMouse_checkButton(mouse, GML_MB_ANY))
+-        fireLocalMouseSubtype(runner, MOUSE_NO_BUTTON, slotNoBtn, &runner->instanceSnapshots[snapshotBase], instCount, isOver);
++        fireLocalMouseSubtype(runner, MOUSE_NO_BUTTON, slotNoBtn, snapshotBase, instCount, isOver);
+     if (runner->pendingRoom >= 0) { arrsetlen(runner->instanceSnapshots, snapshotBase); free(isOver); return; }
+ 
+     // Button-pressed local events (4-6)
+     if (RunnerMouse_checkButtonPressed(mouse, GML_MB_LEFT))
+-        fireLocalMouseSubtype(runner, MOUSE_LEFT_PRESSED, slotLeftPress, &runner->instanceSnapshots[snapshotBase], instCount, isOver);
++        fireLocalMouseSubtype(runner, MOUSE_LEFT_PRESSED, slotLeftPress, snapshotBase, instCount, isOver);
+     if (runner->pendingRoom >= 0) { arrsetlen(runner->instanceSnapshots, snapshotBase); free(isOver); return; }
+ 
+     if (RunnerMouse_checkButtonPressed(mouse, GML_MB_RIGHT))
+-        fireLocalMouseSubtype(runner, MOUSE_RIGHT_PRESSED, slotRightPress, &runner->instanceSnapshots[snapshotBase], instCount, isOver);
++        fireLocalMouseSubtype(runner, MOUSE_RIGHT_PRESSED, slotRightPress, snapshotBase, instCount, isOver);
+     if (runner->pendingRoom >= 0) { arrsetlen(runner->instanceSnapshots, snapshotBase); free(isOver); return; }
+ 
+     if (RunnerMouse_checkButtonPressed(mouse, GML_MB_MIDDLE))
+-        fireLocalMouseSubtype(runner, MOUSE_MIDDLE_PRESSED, slotMiddlePress, &runner->instanceSnapshots[snapshotBase], instCount, isOver);
++        fireLocalMouseSubtype(runner, MOUSE_MIDDLE_PRESSED, slotMiddlePress, snapshotBase, instCount, isOver);
+     if (runner->pendingRoom >= 0) { arrsetlen(runner->instanceSnapshots, snapshotBase); free(isOver); return; }
+ 
+     // Button-released local events (7-9)
+     if (RunnerMouse_checkButtonReleased(mouse, GML_MB_LEFT))
+-        fireLocalMouseSubtype(runner, MOUSE_LEFT_RELEASED, slotLeftRel, &runner->instanceSnapshots[snapshotBase], instCount, isOver);
++        fireLocalMouseSubtype(runner, MOUSE_LEFT_RELEASED, slotLeftRel, snapshotBase, instCount, isOver);
+     if (runner->pendingRoom >= 0) { arrsetlen(runner->instanceSnapshots, snapshotBase); free(isOver); return; }
+ 
+     if (RunnerMouse_checkButtonReleased(mouse, GML_MB_RIGHT))
+-        fireLocalMouseSubtype(runner, MOUSE_RIGHT_RELEASED, slotRightRel, &runner->instanceSnapshots[snapshotBase], instCount, isOver);
++        fireLocalMouseSubtype(runner, MOUSE_RIGHT_RELEASED, slotRightRel, snapshotBase, instCount, isOver);
+     if (runner->pendingRoom >= 0) { arrsetlen(runner->instanceSnapshots, snapshotBase); free(isOver); return; }
+ 
+     if (RunnerMouse_checkButtonReleased(mouse, GML_MB_MIDDLE))
+-        fireLocalMouseSubtype(runner, MOUSE_MIDDLE_RELEASED, slotMiddleRel, &runner->instanceSnapshots[snapshotBase], instCount, isOver);
++        fireLocalMouseSubtype(runner, MOUSE_MIDDLE_RELEASED, slotMiddleRel, snapshotBase, instCount, isOver);
+ 
+     arrsetlen(runner->instanceSnapshots, snapshotBase);
+     free(isOver);
