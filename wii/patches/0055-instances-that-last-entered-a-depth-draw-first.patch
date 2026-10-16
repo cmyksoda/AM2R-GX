@@ -1,0 +1,74 @@
+Reason: GameMaker 1 draws instances that share a depth in the order they entered it: the one that arrived last, by being
+created or by having its depth changed to that value, is drawn first. Butterscotch broke the tie by instance id (higher
+first), which is the same whenever nothing moves. AM2R's make_liquid creates its filter (oWaterFXV2, born at -500) and
+then moves the liquid to -500, so on PC the water's tint or the lava goes down first and the wave strips over it; by
+id the strips went first (rm_a5h04's water settled 1.56x too bright, rm_a3a26's lava bright orange where PC's is dark
+red). Rooms that move both to -90 keep the id order. Each instance now carries the count at which it last entered its
+depth. Checked against PC under Wine in five rooms (two water, three lava).
+Upstream: Correctness fix for GameMaker 1 games, every platform. Retires this patch when merged.
+
+--- a/src/instance.h
++++ b/src/instance.h
+@@ -18,6 +18,7 @@ struct Runner;
+ 
+ struct Instance {
+     uint32_t instanceId;
++    uint32_t depthEntry; // when it last entered its depth, by creation or a depth change (GameMaker 1 draw order)
+     int32_t objectIndex;
+     // Reference count for GML structs (objectIndex == STRUCT_OBJECT_INDEX mode). Unused for game-object instances.
+     // The runner's structInstances registry holds an implicit +1 ref while the struct is registered, so a refCount of 1 means "only the registry references this"; the per-frame sweep (Runner_sweepDeadStructs) decRefs those to free them. RValues with ownsReference=true on RVALUE_STRUCT contribute one ref each.
+--- a/src/runner.c
++++ b/src/runner.c
+@@ -679,7 +679,7 @@ static DrawKey drawableKey(const Drawable* d) {
+     DrawKey k = { d->depth, d->type, 0 };
+     switch (d->type) {
+         case DRAWABLE_TILE: k.order = d->tileIndex; break;
+-        case DRAWABLE_INSTANCE: k.order = (int32_t) d->instance->instanceId;  break;
++        case DRAWABLE_INSTANCE: k.order = (int32_t) d->instance->depthEntry;  break;
+         case DRAWABLE_LAYER: k.order = d->runtimeLayerId; break;
+         case DRAWABLE_PARTICLE_SYSTEM: k.order = d->particleSystemId; break;
+     }
+@@ -696,6 +696,7 @@ static int compareDrawKeys(const DrawKey* a, const DrawKey* b) {
+     if (a->type == DRAWABLE_TILE)
+         return (a->order > b->order) - (a->order < b->order); // tiles: higher index later
+ 
++    // Instances: the one that entered its depth last (created, or moved there) first, as GameMaker 1 draws them.
+     return (a->order < b->order) - (a->order > b->order); // instance/layer: higher first
+ }
+ 
+@@ -1490,6 +1491,7 @@ static Instance* createAndInitInstance(Runner* runner, int32_t instanceId, int32
+     inst->solid = objDef->solid;
+     inst->persistent = objDef->persistent;
+     inst->depth = objDef->depth;
++    inst->depthEntry = ++runner->lastDepthEntry;
+     inst->maskIndex = objDef->textureMaskId;
+ 
+     hmput(runner->instancesById, instanceId, inst);
+--- a/src/runner.h
++++ b/src/runner.h
+@@ -701,6 +701,7 @@ struct Runner {
+     bool gameStartFired;
+     int frameCount;
+     uint32_t nextInstanceId;
++    uint32_t lastDepthEntry;
+     RunnerKeyboardState* keyboard;
+     RunnerMouseState* mouse;
+     RuntimeView views[MAX_VIEWS];
+--- a/src/vm_builtins.c
++++ b/src/vm_builtins.c
+@@ -1405,6 +1405,7 @@ void VMBuiltins_setVariable(VMContext* ctx, Instance* inst, int16_t builtinVarId
+             int32_t newDepth = RValue_toInt32(val);
+             if (newDepth != inst->depth) {
+                 inst->depth = newDepth;
++                inst->depthEntry = ++ctx->runner->lastDepthEntry;
+                 ctx->runner->drawableListSortDirty = true;
+             }
+             return;
+@@ -9086,6 +9087,7 @@ static RValue builtin_instance_change(VMContext* ctx, RValue* args, int32_t argC
+     inst->visible = newObjDef->visible;
+     inst->solid = newObjDef->solid;
+     inst->persistent = newObjDef->persistent;
++    if (inst->depth != newObjDef->depth) inst->depthEntry = ++runner->lastDepthEntry;
+     inst->depth = newObjDef->depth;
+     inst->maskIndex = newObjDef->textureMaskId;
+     inst->imageIndex = 0.0;

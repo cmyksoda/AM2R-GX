@@ -95,6 +95,7 @@ wii: $(BUTTER)/CMakeLists.txt
 	cd $(BUTTER) && git apply ../../wii/patches/0051-code-entries-can-run-native-code.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0052-tiles-are-found-by-id-through-an-index.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0054-a-discarded-view-passes-over-its-tiles.patch
+	cd $(BUTTER) && git apply ../../wii/patches/0055-instances-that-last-entered-a-depth-draw-first.patch
 	if [ "$(HOOKS)" != 0 ] && [ -f wii/test/patches/0099-debug-collision-trace.patch ]; then cd $(BUTTER) && git apply ../../wii/test/patches/0099-debug-collision-trace.patch; fi
 	cmake -B $(WII_BUILD) -S $(BUTTER) $(WII_CMAKE_FLAGS)
 	cmake --build $(WII_BUILD) -j$(JOBS)
