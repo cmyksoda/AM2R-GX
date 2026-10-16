@@ -403,6 +403,20 @@ static RValue wii_draw_map_surf(VMContext *ctx, RValue *args, int32_t argCount)
 	return RValue_makeUndefined();
 }
 
+static int32_t controlUser4Code = -1, screenSurfaceVar;
+static BuiltinFunc engineSurfaceFree;
+
+/* oControl's user event 4 frees screen_surface every step but keeps the id, so whichever surface reused the slot (the
+ * water's, the lights') was freed each frame. Here the id goes with the surface, back to Create's -1. */
+static RValue wii_surface_free(VMContext *ctx, RValue *args, int32_t argCount)
+{
+	RValue r = engineSurfaceFree(ctx, args, argCount);
+
+	if (ctx->currentCodeIndex == controlUser4Code && ctx->currentInstance)
+		Instance_setSelfVar(ctx->currentInstance, screenSurfaceVar, RValue_makeReal(-1));
+	return r;
+}
+
 /* The bytecode's instance for widescreen_space: oControl's object index in 1.5.5. */
 #define WATER_CONTROL_OBJECT 427
 
@@ -1035,6 +1049,7 @@ void Wii_hookAm2rScripts(VMContext *ctx)
 	static const char *const partNames[7] = { "wallU", "wallR", "wallD", "wallL", "color", "special", "corner" };
 	ptrdiff_t s = shgeti(ctx->codeIndexByName, "reset_map"), t = shgeti(ctx->codeIndexByName, "draw_cool_text");
 	ptrdiff_t m = shgeti(ctx->codeIndexByName, "draw_map_surf"), b = shgeti(ctx->codeIndexByName, "draw_mapblock");
+	ptrdiff_t u = shgeti(ctx->codeIndexByName, "gml_Object_oControl_Other_14");
 	ptrdiff_t w = shgeti(ctx->codeIndexByName, "gml_Object_oWaterFXV2_Draw_0");
 	ptrdiff_t a = shgeti(ctx->codeIndexByName, "gml_Object_oTilesRandomAlpha_Other_10");
 	ptrdiff_t lb = shgeti(ctx->codeIndexByName, "gml_Object_oLBubble_Step_0");
@@ -1065,6 +1080,10 @@ void Wii_hookAm2rScripts(VMContext *ctx)
 		partVars[k] = Wii_varId(ctx->runner, partNames[k], INSTANCE_SELF);
 		mapSurf = mapSurf && partVars[k] >= 0;
 	}
+	screenSurfaceVar = Wii_varId(ctx->runner, "screen_surface", INSTANCE_SELF);
+	engineSurfaceFree = VM_findBuiltin(ctx, "surface_free");
+	if (u >= 0 && screenSurfaceVar >= 0 && engineSurfaceFree)
+		controlUser4Code = ctx->codeIndexByName[u].value;
 	waveHeightVar = Wii_varId(ctx->runner, "wave_height", INSTANCE_GLOBAL);
 	widescreenSpaceVar = Wii_varId(ctx->runner, "widescreen_space", INSTANCE_SELF);
 	water = w >= 0 && waveHeightVar >= 0 && widescreenSpaceVar >= 0 &&
@@ -1126,6 +1145,8 @@ void Wii_hookAm2rScripts(VMContext *ctx)
 			standIn = (void *)wii_draw_map_surf;
 		else if (name && mapBlockNative && strcmp(name, "draw_mapblock") == 0)
 			standIn = (void *)wii_draw_mapblock;
+		else if (name && controlUser4Code >= 0 && strcmp(name, "surface_free") == 0)
+			standIn = (void *)wii_surface_free;
 		if (standIn) {
 			ctx->funcCallCache[fi].builtin = standIn;
 			ctx->funcCallCache[fi].scriptCodeIndex = -1;
