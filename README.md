@@ -1,6 +1,6 @@
 # AM2R GX
 
-**AM2R 1.5.5 on the Wii**, as a Homebrew Channel app. 
+**AM2R 1.5.5 on the Wii**, as a Homebrew Channel app.
 
 AM2R (Another Metroid 2 Remake) is Milton "DoctorM64" Guasti's GameMaker game; the 1.5.5 Community Update is the AM2R Community Developers' work. AM2R GX runs the game's own bytecode on the console through [Butterscotch](https://github.com/ButterscotchRunner/Butterscotch), an open-source GameMaker: Studio runner, with a native **GX** renderer, a texture repacker and an audio path written for the Wii.
 
@@ -10,7 +10,7 @@ Not affiliated with Nintendo, YoYo Games, Milton Guasti or the AM2R Community De
 
 ## What you need
 
-- A Wii (or a Wii U in Wii mode) with the Homebrew Channel, and an SD card or USB drive.
+- A Wii (or a Wii U in Wii mode) with the Homebrew Channel, and an SD card or a FAT32 USB drive.
 - A GameCube controller, Wii Remote with Nunchuk, or a Classic Controller.
 - The original **AM2R 1.1** release zip (use a search engine to find this!).
 
@@ -30,9 +30,9 @@ By default, missiles work in **Hold** style: hold Arm Weapon to use the selected
 
 | Action | Classic Controller | GameCube Controller | Wii Remote + Nunchuk |
 |---|---|---|---|
-| Move | stick or d-pad| stick or d-pad | Nunchuk stick |
+| Move | stick or d-pad | stick or d-pad | Nunchuk stick |
 | Jump | B | A | A |
-| Fire (hold to charge; bombs in ball) | y | B | B trigger |
+| Fire (hold to charge; bombs in ball) | Y | B | B trigger |
 | Morph | A | X | C |
 | Weapon Select | X or − | Y | − |
 | Aim Diagonal (hold) | L | L | d-pad ↑ / ↓ (up / down diagonal) |
@@ -45,8 +45,7 @@ Hold **HOME** for a second (Wii Remote or Classic Controller), or **X + B + Star
 ## Picture
 
 - The console's own screen setting (Wii Settings → Screen → 4:3 or 16:9) picks the video mode. The game's own Options → Display → Widescreen toggle still decides whether the game draws a 16:9 picture on a widescreen display. With it toggled off, you get pillarboxed 4:3.
-- **240p** (Options → Display, where the PC version has VSync) draws each of the game's 240 lines once, for CRT TVs
-  that show 240p sharply.
+- **240p** (Options → Display, where the PC version has VSync) draws each of the game's 240 lines once, for CRT TVs that show 240p sharply.
 - **Resize/Move Screen** (Options → Display): if your TV cuts the edges, the d-pad pulls the picture in from the sides and the top/bottom, and **A** held with the d-pad moves the whole picture. **B** closes it.
 - **HUD Margins** (Options → Display): moves the HUD, the corner prompts and the notification box in from the sides and the top/bottom, one game pixel at a time, while the world keeps its sharp 2× pixels. The default keeps them 11 pixels from the top and bottom (typical safe area for overscanning televisions); a TV that shows the whole picture can bring them back out to the edges. **B** closes it.
 - Both are saved per console (`overscan-<console id>.txt` in `/apps/am2r/`, with `overscan.txt` as a shared fallback: `h v [viWidth] [up/down shift] [sideways shift] [HUD sides] [HUD top/bottom]`).
