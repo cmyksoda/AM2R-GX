@@ -1464,14 +1464,13 @@ static void gx_flush_target(GxRenderer *gx)
 		return;
 	u64 tc = gettime();
 
+	/* No cache walk over the texels: CPU writers flush them after writing, CPU readers wait and invalidate first. */
 	GX_Flush();
 	GX_DrawDone();
-	DCInvalidateRange(texels, surf_bytes(texW, texH));
 	GX_SetTexCopySrc(0, 0, (u16)copyW, (u16)copyH);
 	GX_SetTexCopyDst((u16)texW, (u16)texH, SURF_TEX_FMT, GX_FALSE);
 	GX_CopyTex(texels, GX_FALSE);
 	GX_PixModeSync();
-	DCInvalidateRange(texels, surf_bytes(texW, texH));
 	GX_InvalidateTexAll();
 	gx->targetDirty = false;
 	gx_stat.copies++;
