@@ -1,6 +1,6 @@
 # AM2R GX
 
-**AM2R 1.5.5 on the Wii**, as a Homebrew Channel app.
+*AM2R (Another Metroid 2 Remake) 1.5.5 on the Wii!*
 
 ![AM2R's title screen on a TV, with the Wii standing beside it](images/title-screen.jpg)
 
