@@ -53,18 +53,26 @@ Hold **HOME** for a second (Wii Remote or Classic Controller), or **X + B + Star
 
 **Randomizer seeds:** a custom seed gives the same item layout every time, on every Wii. It is *almost certainly* not the same layout the PC version gives for that seed, because the Wii build seeds its random numbers differently from GameMaker.
 
-## License and credits
+## Credits
 
-The runner source here is **GNU Affero GPL v3.0** (see [LICENSE](LICENSE)); combined with Butterscotch (AGPL-3.0) the `.dol` is AGPL. The game and its assets stay whatever copy of AM2R you supply.
+- **AM2R** by Milton "DoctorM64" Guasti, the game this port is for, with its 1.5.5 Community Update by the AM2R Community Developers
+- **Butterscotch**, the GameMaker: Studio runner this port is built on, at [ButterscotchRunner/Butterscotch](https://github.com/ButterscotchRunner/Butterscotch)
+- **devkitPPC**, **libogc**, **libfat**, **aesnd**, and the portlibs by [devkitPro](https://devkitpro.org/)
+- **wiiuse** by Michael Laforest, for the Wii Remote, as included in libogc
+- **xdelta3** by Joshua MacDonald (Apache License 2.0), the on-console delta decoder
+- **stb** by Sean Barrett and contributors, for image decoding
+- **FreeType** by the FreeType Project, which draws the game's fonts
+- **zlib** by Jean-loup Gailly and Mark Adler, for unpacking zip files and PNG images
+
+The full list, with every library and its license, is in [NOTICE](NOTICE).
+
+## License
+
+The runner source here is free software under the [GNU Affero General Public License, version 3](LICENSE); combined with Butterscotch (AGPL version 3), the `.dol` is AGPL. Some parts use other licenses: xdelta3 is under the Apache License 2.0 ([`wii/src/xdelta3/LICENSE`](wii/src/xdelta3/LICENSE)), and the libraries in the `.dol` keep their own licenses, which [NOTICE](NOTICE) lists. The game and its assets stay whatever copy of AM2R you supply.
 
 This repository and its releases never contain music, sprites or any Nintendo, DoctorM64 or Community assets (apart from the AM2R logo used as `icon.png`); the console builds 1.5.5 from *your supplied copy of AM2R 1.1* on first boot.
 
 Not affiliated with Nintendo, YoYo Games, Milton Guasti or the AM2R Community Developers.
-
-- AM2R by Milton "DoctorM64" Guasti; the 1.5.5 Community Update by the AM2R Community Developers.
-- [Butterscotch](https://github.com/ButterscotchRunner/Butterscotch), the GameMaker: Studio runner this port is built on.
-- [devkitPro](https://devkitpro.org/): devkitPPC, libogc, libfat, wiiuse and the portlibs.
-- xdelta3 (Joshua MacDonald, Apache-2.0) as the on-console delta decoder; stb (Sean Barrett) for image decoding.
 
 ---
 
