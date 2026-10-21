@@ -70,7 +70,7 @@ The full list, with every library and its license, is in [NOTICE](NOTICE).
 
 The runner source here is free software under the [GNU Affero General Public License, version 3](LICENSE); combined with Butterscotch (AGPL version 3), the `.dol` is AGPL. Some parts use other licenses: xdelta3 is under the Apache License 2.0 ([`wii/src/xdelta3/LICENSE`](wii/src/xdelta3/LICENSE)), and the libraries in the `.dol` keep their own licenses, which [NOTICE](NOTICE) lists. The game and its assets stay whatever copy of AM2R you supply.
 
-This repository and its releases never contain music, sprites or any Nintendo, DoctorM64 or Community assets (apart from the AM2R logo used as `icon.png`); the console builds 1.5.5 from *your supplied copy of AM2R 1.1* on first boot.
+This repository and its releases never contain music, sprites or any Nintendo, DoctorM64 or Community assets (apart from the AM2R logo used as `icon.png`, and the Community's GPL v3 1.5.5 patch data in `patch/`); the console builds 1.5.5 from *your supplied copy of AM2R 1.1* on first boot.
 
 Not affiliated with Nintendo, YoYo Games, Milton Guasti or the AM2R Community Developers.
 
