@@ -1,10 +1,13 @@
 #include "safearea.h"
 
 #include "am2r.h"
+#include "assets.h"
+#include "controller_art.h"
 #include "overscan.h"
 #include "instance.h"
 #include "runner.h"
 #include "rvalue.h"
+#include "stb_image.h"
 #include "stb_ds.h"
 #include "utils.h"
 #include "vm.h"
@@ -144,17 +147,55 @@ float WiiSafe_shift(Runner *runner)
 	return inst->objectIndex == notify ? (float)Overscan_marginH() : 0.0f;
 }
 
+#define CONTROLLER_ART_ROWS 192 /* bgController's legal lines start below this row */
+
+/* Asophia's Classic Controller Pro over black: it hides bgController's Xbox pad and leaves its legal lines showing. */
+static int32_t controller_art(DataWin *dw)
+{
+	int w, h, n, i;
+	uint8_t *rgba = stbi_load_from_memory(controller_art_png, (int)controller_art_png_len, &w, &h, &n, 4);
+	int32_t bg;
+
+	if (!rgba)
+		return -1;
+	if (h > CONTROLLER_ART_ROWS)
+		h = CONTROLLER_ART_ROWS;
+	for (i = 0; i < w * h; i++) {
+		uint8_t *p = rgba + (size_t)i * 4;
+
+		p[0] = (uint8_t)(p[0] * p[3] / 255);
+		p[1] = (uint8_t)(p[1] * p[3] / 255);
+		p[2] = (uint8_t)(p[2] * p[3] / 255);
+		p[3] = 255;
+	}
+	bg = WiiAssets_addBackground(dw, rgba, w, h);
+	stbi_image_free(rgba);
+	return bg;
+}
+
 /* The first screen is one picture whose legal lines reach row 236; it rises with its caption (oIntroController). */
 void WiiSafe_frame(Runner *runner)
 {
-	static int32_t controllerRoom = -2;
+	static int32_t controllerRoom = -2, art = -2;
+	RuntimeBackground *pic, *top;
 
 	if (!runner)
 		return;
 	if (controllerRoom == -2)
 		controllerRoom = Wii_roomIndex(runner, "rm_controller");
-	if (runner->currentRoomIndex == controllerRoom)
-		runner->backgrounds[0].y = (float)-WiiSafe_rows();
+	if (runner->currentRoomIndex != controllerRoom)
+		return;
+	if (art == -2)
+		art = controller_art(runner->dataWin);
+	pic = &runner->backgrounds[0];
+	pic->y = (float)-WiiSafe_rows();
+	if (art < 0)
+		return;
+	top = &runner->backgrounds[1];
+	*top = *pic;
+	top->backgroundIndex = art;
+	top->x = 0.0f;
+	top->tileX = top->tileY = false;
 }
 
 static GMLCamera *view0(Runner *runner)

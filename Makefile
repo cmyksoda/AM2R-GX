@@ -43,6 +43,7 @@ wii: $(BUTTER)/CMakeLists.txt
 	rsync -a --delete wii/src/ $(BUTTER)/src/wii/
 	# The local test hooks (wii/test/, never in the repository) join the build when they are on disk.
 	if [ "$(HOOKS)" != 0 ] && [ -d wii/test/src ]; then rsync -a wii/test/src/ $(BUTTER)/src/wii/; fi
+	xxd -i -n controller_art_png wii/art/classic-controller-pro.png > $(BUTTER)/src/wii/controller_art.h
 	cd $(BUTTER) && git checkout -- CMakeLists.txt src/collision.h src/gettime.c src/ini.c src/instance.c src/instance.h src/loop.c src/matrix_math.h src/random.c src/random.h src/real_type.h src/renderer.h src/runner.c src/runner.h src/spatial_grid.c src/vm.c src/vm.h src/vm_builtins.c src/vm_builtins.h
 	cd $(BUTTER) && git apply ../../wii/patches/0001-cmake-add-PLATFORM-wii.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0002-gettime-wii.patch

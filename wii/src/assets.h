@@ -11,4 +11,7 @@ BuiltinFunc WiiAssets_builtin(const char *name);
 void WiiAssets_addSprites(DataWin *dw, const uint8_t *rgba, int w, int h, const int *cellX, const int *cellW, int n,
 			  int32_t *sprites);
 
+/* A background from an RGBA image; its index, or -1 when there is no room for the page. */
+int32_t WiiAssets_addBackground(DataWin *dw, const uint8_t *rgba, int w, int h);
+
 #endif

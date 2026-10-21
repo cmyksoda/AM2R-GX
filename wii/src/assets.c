@@ -241,6 +241,19 @@ static RValue wii_background_replace(VMContext *ctx, RValue *args, int32_t argCo
 	return RValue_makeReal(1.0);
 }
 
+static uint32_t bgnd_append(DataWin *dw, int32_t tpag)
+{
+	uint32_t i = dw->bgnd.count;
+
+	dw->bgnd.backgrounds = (Background *)safeRealloc(dw->bgnd.backgrounds, (i + 1) * sizeof(Background));
+	memset(&dw->bgnd.backgrounds[i], 0, sizeof(Background));
+	dw->bgnd.backgrounds[i].present = true;
+	dw->bgnd.backgrounds[i].name = "__newbackground";
+	dw->bgnd.backgrounds[i].tpagIndex = tpag;
+	dw->bgnd.count++;
+	return i;
+}
+
 /* background_add(fname, removeback, smooth) */
 static RValue wii_background_add(VMContext *ctx, RValue *args, int32_t argCount)
 {
@@ -251,15 +264,25 @@ static RValue wii_background_add(VMContext *ctx, RValue *args, int32_t argCount)
 
 	if (!tpags)
 		return RValue_makeReal(-1.0);
-	i = dw->bgnd.count;
-	dw->bgnd.backgrounds = (Background *)safeRealloc(dw->bgnd.backgrounds, (i + 1) * sizeof(Background));
-	memset(&dw->bgnd.backgrounds[i], 0, sizeof(Background));
-	dw->bgnd.backgrounds[i].present = true;
-	dw->bgnd.backgrounds[i].name = "__newbackground";
-	dw->bgnd.backgrounds[i].tpagIndex = tpags[0];
-	dw->bgnd.count++;
+	i = bgnd_append(dw, tpags[0]);
 	free(tpags);
 	return RValue_makeReal((GMLReal)i);
+}
+
+int32_t WiiAssets_addBackground(DataWin *dw, const uint8_t *rgba, int w, int h)
+{
+	int32_t page = GxRenderer_addImage(rgba, w, h), tpag;
+	TexturePageItem *item;
+
+	if (page < 0)
+		return -1;
+	tpag = tpag_append(dw);
+	item = &dw->tpag.items[tpag];
+	item->present = true;
+	item->sourceWidth = item->targetWidth = item->boundingWidth = (uint16_t)w;
+	item->sourceHeight = item->targetHeight = item->boundingHeight = (uint16_t)h;
+	item->texturePageId = (int16_t)page;
+	return (int32_t)bgnd_append(dw, tpag);
 }
 
 /* font_replace(ind, fname, size, bold, italic, first, last): FreeType rasterises the TTF into an
