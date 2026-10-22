@@ -2,6 +2,7 @@
 #include "log.h"
 
 #include <gccore.h>
+#include <ogc/lwp_watchdog.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -40,7 +41,11 @@ void WiiLog_close(void)
 
 void WiiLog_enableGecko(void)
 {
-	g_gecko = usb_isgeckoalive(1);
+	u64 end = gettime() + millisecs_to_ticks(500);
+
+	/* libogc 3.2 answers "no device" for 300 ms after it first probes a slot. */
+	while (!(g_gecko = usb_isgeckoalive(1)) && gettime() < end)
+		usleep(10000);
 }
 
 void platformLog(const logType type, const char *format, va_list va)
