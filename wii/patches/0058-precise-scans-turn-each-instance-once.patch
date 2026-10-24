@@ -1,0 +1,84 @@
+Reason: Collision_pointInInstance works out cos and sin of a rotated instance's angle every time it is asked, and
+Collision_instancesOverlapPrecise asks it at every pixel of the overlap. A power bomb's blast spins, overlaps dozens
+of solids every frame, and needs a pixel scan for each, so the same two values were recomputed thousands of times a
+frame (sin, cos and their argument reduction were ~3.6% of Dolphin's CPU thread during power bombs in rm_a6a13). The
+rotation is now worked out once per scan for each instance with the same expression; the single-point test keeps
+working it out per call.
+Upstream: Speed only, every platform. Retires this patch when merged.
+
+--- a/src/collision.h
++++ b/src/collision.h
+@@ -437,10 +437,27 @@
+     return Collision_segmentVsAARect(lx1, ly1, lx2, ly2, obb.lx0, obb.ly0, obb.lx1 - eps, obb.ly1 - eps);
+ }
+ 
++// An instance's rotation, worked out once for a whole pixel scan instead of once per pixel.
++typedef struct {
++    bool on;
++    GMLReal cs, sn;
++} CollisionTurn;
++
++static inline CollisionTurn Collision_turn(Instance* inst) {
++    CollisionTurn turn = { false, 0.0, 0.0 };
++    if (GMLReal_fabs(inst->imageAngle) > 0.0001) {
++        GMLReal rad = inst->imageAngle * M_PI / 180.0;
++        turn.on = true;
++        turn.cs = GMLReal_cos(rad);
++        turn.sn = GMLReal_sin(rad);
++    }
++    return turn;
++}
++
+ // Tests if world point (px, py) is inside the given instance's collision shape.
+ // The point is inverse-transformed into sprite-local coords (translation, rotation, inverse scale, origin) and bounds-checked against the full sprite texture [0, spr.width) x [0, spr.height).
+ // Precise sprites (sepMasks == 1) additionally require the mask bit at the resulting local pixel to be set.
+-static inline bool Collision_pointInInstance(Sprite* spr, Instance* inst, GMLReal px, GMLReal py) {
++static inline bool Collision_pointInInstanceTurned(Sprite* spr, Instance* inst, GMLReal px, GMLReal py, const CollisionTurn* turn) {
+     if (spr == nullptr) return false;
+ 
+     // Reject degenerate scales to avoid divide-by-zero.
+@@ -452,12 +469,9 @@
+     GMLReal dy = py - inst->y;
+ 
+     // Inverse of CW rotation is standard CCW rotation (positive angle)
+-    if (GMLReal_fabs(inst->imageAngle) > 0.0001) {
+-        GMLReal rad = inst->imageAngle * M_PI / 180.0;
+-        GMLReal cs = GMLReal_cos(rad);
+-        GMLReal sn = GMLReal_sin(rad);
+-        GMLReal rx = cs * dx - sn * dy;
+-        GMLReal ry = sn * dx + cs * dy;
++    if (turn->on) {
++        GMLReal rx = turn->cs * dx - turn->sn * dy;
++        GMLReal ry = turn->sn * dx + turn->cs * dy;
+         dx = rx;
+         dy = ry;
+     }
+@@ -492,6 +506,11 @@
+     return true;
+ }
+ 
++static inline bool Collision_pointInInstance(Sprite* spr, Instance* inst, GMLReal px, GMLReal py) {
++    CollisionTurn turn = Collision_turn(inst);
++    return Collision_pointInInstanceTurned(spr, inst, px, py, &turn);
++}
++
+ // Returns true if the two instances' collision shapes overlap.
+ //
+ // Matches the native GMS 1.4 runner's flow in FUN_0043fde0:
+@@ -584,13 +603,14 @@
+         sampleOffset = 0.5;
+     }
+ 
++    CollisionTurn turnA = Collision_turn(a), turnB = Collision_turn(b);
+     for (int32_t py = startY; (compatMode ? py <= endY : py < endY); py++) {
+         for (int32_t px = startX; (compatMode ? px <= endX : px < endX); px++) {
+             GMLReal wpx = (GMLReal) px + sampleOffset;
+             GMLReal wpy = (GMLReal) py + sampleOffset;
+ 
+-            if (!Collision_pointInInstance(sprA, a, wpx, wpy)) continue;
+-            if (!Collision_pointInInstance(sprB, b, wpx, wpy)) continue;
++            if (!Collision_pointInInstanceTurned(sprA, a, wpx, wpy, &turnA)) continue;
++            if (!Collision_pointInInstanceTurned(sprB, b, wpx, wpy, &turnB)) continue;
+             return true;
+         }
+     }
