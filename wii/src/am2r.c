@@ -1044,6 +1044,41 @@ void Wii_addCredits(DataWin *dw)
 	}
 }
 
+/* oPBombExpl's collision with a solid runs for every solid a power bomb's blast covers, ~100 a frame:
+ * with (other.id) { if (sprite_index is a bomb block's) { event_user(1); visible = 1 } }. For a plain solid that does
+ * nothing; a bomb block, or anything unusual, runs the bytecode. */
+static int32_t pbombSolidCode = -1;
+
+static GML_ROUNDING RValue wii_pbomb_solid(VMContext *ctx)
+{
+	static const int blockSprites[] = { 118, 115, 116, 113, 114, 117 };
+	Instance *other = ctx->otherInstance, *target;
+	RValue r;
+	int32_t targetId;
+	GMLReal sprite;
+	uint32_t k;
+
+	if (!ctx->currentInstance || !other)
+		return VM_interpretCode(ctx, pbombSolidCode);
+	r = VMBuiltins_getVariable(ctx, other, BUILTIN_VAR_ID, "id", -1);
+	targetId = RValue_toInt32(r);
+	RValue_free(&r);
+	target = targetId >= INSTANCE_ID_BASE ? hmget(ctx->runner->instancesById, targetId) : NULL;
+	if (!target || !target->active)
+		return VM_interpretCode(ctx, pbombSolidCode);
+
+	r = VMBuiltins_getVariable(ctx, target, BUILTIN_VAR_SPRITE_INDEX, "sprite_index", -1);
+	if (r.type != RVALUE_REAL && r.type != RVALUE_INT32 && r.type != RVALUE_INT64) {
+		RValue_free(&r);
+		return VM_interpretCode(ctx, pbombSolidCode);
+	}
+	sprite = RValue_toReal(r);
+	for (k = 0; k < sizeof blockSprites / sizeof blockSprites[0]; k++)
+		if (gml_compare(sprite, blockSprites[k]) == 0)
+			return VM_interpretCode(ctx, pbombSolidCode);
+	return RValue_makeUndefined();
+}
+
 void Wii_hookAm2rScripts(VMContext *ctx)
 {
 	static const char *const partNames[7] = { "wallU", "wallR", "wallD", "wallL", "color", "special", "corner" };
@@ -1055,6 +1090,7 @@ void Wii_hookAm2rScripts(VMContext *ctx)
 	ptrdiff_t lb = shgeti(ctx->codeIndexByName, "gml_Object_oLBubble_Step_0");
 	ptrdiff_t ow = shgeti(ctx->codeIndexByName, "gml_Object_oWater_Draw_0");
 	ptrdiff_t ls = shgeti(ctx->codeIndexByName, "gml_Object_oLavaSurface_Draw_0");
+	ptrdiff_t pb = shgeti(ctx->codeIndexByName, "gml_Object_oPBombExpl_Collision_268");
 	bool resetMap, mapSurf, water, tiles, bubbles, owater, lava;
 	int k;
 
@@ -1188,5 +1224,9 @@ void Wii_hookAm2rScripts(VMContext *ctx)
 	if (lava) {
 		lavaDrawCode = ctx->codeIndexByName[ls].value;
 		VM_setNativeCode(ctx, lavaDrawCode, wii_lava_draw);
+	}
+	if (pb >= 0 && ctx->dataWin->code.entries[ctx->codeIndexByName[pb].value].length == 180) {
+		pbombSolidCode = ctx->codeIndexByName[pb].value;
+		VM_setNativeCode(ctx, pbombSolidCode, wii_pbomb_solid);
 	}
 }
