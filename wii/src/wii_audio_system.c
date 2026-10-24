@@ -4,6 +4,7 @@
 #include "data_win.h"
 #include "file_system.h"
 #include "log.h"
+#include "wii_paths.h"
 
 #include <aesndlib.h>
 #include <gccore.h>
@@ -116,6 +117,7 @@ typedef struct {
     AudioSystem base;
     DataWin* dw;
     FileSystem* fs;
+    FILE* sfxFile;          // data.win again, unbuffered: the engine's handle refills 128 KB for every sound
     WiiVoice voices[WII_VOICES];
     WiiStream streams[WII_STREAMS];
     int32_t nextInstanceId;
@@ -243,9 +245,18 @@ static void sfxConvert(SfxPcm* sfx, const AudioEntry* entry) {
     uint8_t* pcm = (uint8_t*) memalign(32, size);
     if (pcm == nullptr) return;
     memset(pcm + len, 0, size - len);
-    // WAV is little-endian; the DSP wants native big-endian, so swap each 16-bit sample
-    // (byte-wise: source may be unaligned).
-    for (uint32_t i = 0; i + 1 < len; i += 2) {
+    // WAV is little-endian; the DSP wants native big-endian, so swap each 16-bit sample, two at a time when the
+    // source is word-aligned (it sits 44 bytes into a malloc'd blob) and byte-wise for the rest.
+    uint32_t i = 0;
+    if (((uintptr_t) audioData & 3) == 0) {
+        for (; i + 3 < len; i += 4) {
+            uint32_t w;
+            memcpy(&w, audioData + i, 4);
+            w = ((w & 0x00FF00FFu) << 8) | ((w >> 8) & 0x00FF00FFu);
+            memcpy(pcm + i, &w, 4);
+        }
+    }
+    for (; i + 1 < len; i += 2) {
         pcm[i] = audioData[i + 1];
         pcm[i + 1] = audioData[i];
     }
@@ -257,13 +268,32 @@ static void sfxConvert(SfxPcm* sfx, const AudioEntry* entry) {
     sfx->rate = rate;
 }
 
+// DataWin_loadAudoIfNeeded's read, through the audio system's own unbuffered handle.
+static void sfxRead(WiiAudioSystem* a, uint32_t audioFile) {
+    AudioEntry* entry = &a->dw->audo.entries[audioFile];
+    if (a->sfxFile == nullptr) {
+        DataWin_loadAudoIfNeeded(a->dw, audioFile);
+        return;
+    }
+    if (!entry->present || entry->dataSize == 0 || entry->data != nullptr) return;
+    entry->data = (uint8_t*) malloc(entry->dataSize);
+    if (entry->data == nullptr) return;
+    size_t got = 0;
+    if (fseek(a->sfxFile, (long) entry->dataOffset, SEEK_SET) == 0)
+        got = fread(entry->data, 1, entry->dataSize, a->sfxFile);
+    if (got != entry->dataSize) {
+        memset(entry->data + got, 0, entry->dataSize - got);
+        logError("loadAudoIfNeeded: couldn't read %u bytes to load audio entry %u.\n", entry->dataSize, audioFile);
+    }
+}
+
 // The raw WAV is dropped once converted; an evicted sound is read and converted again.
 static SfxPcm* sfxLoad(WiiAudioSystem* a, uint32_t audioFile) {
     SfxPcm* sfx = &a->sfx[audioFile];
     if (sfx->bad) return nullptr;
     if (sfx->pcm == nullptr) {
         AudioEntry* entry = &a->dw->audo.entries[audioFile];
-        DataWin_loadAudoIfNeeded(a->dw, audioFile);
+        sfxRead(a, audioFile);
         sfxConvert(sfx, entry);
         free(entry->data);
         entry->data = nullptr;
@@ -605,6 +635,8 @@ static void wiiInit(AudioSystem* audio, DataWin* dataWin, FileSystem* fs) {
     a->fs = fs;
     a->base.dw = dataWin;
     a->sfx = (SfxPcm*) calloc(dataWin->audo.count ? dataWin->audo.count : 1, sizeof(SfxPcm));
+    a->sfxFile = fopen(WII_DATA_WIN, "rb");
+    if (a->sfxFile != nullptr) setvbuf(a->sfxFile, nullptr, _IONBF, 0);
     AESND_Init();
     AESND_Pause(false);
     for (int i = 0; i < WII_VOICES; i++) {
@@ -660,6 +692,7 @@ static void wiiDestroy(AudioSystem* audio) {
     if (a->sfx != nullptr)
         for (uint32_t i = 0; i < a->dw->audo.count; i++) free(a->sfx[i].pcm);
     free(a->sfx);
+    if (a->sfxFile != nullptr) fclose(a->sfxFile);
     free(a);
 }
 
