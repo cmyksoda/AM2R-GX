@@ -41,7 +41,7 @@
 #define DECODE_THREAD_PRIO 80
 #define DECODE_NAP_US 4000
 #define BLOB_CACHE_BYTES (6u << 20)       // converted SFX kept for replay, shared by every voice playing them
-#define BLOB_BIG_BYTES (256u << 10)       // ambience-sized: cheap to re-read once, expensive to keep resident
+#define BLOB_BIG_BYTES (512u << 10)       // ambience-sized: re-read on each play; a power bomb (265 KB) stays cached
 #define DRAIN_UPDATES 3                   // updates a stopped voice must stay stopped before its buffer is freed
 
 // libaesnd copies each voice back from its working copy after the DSP mixes it, flags included, so a stop, start or
