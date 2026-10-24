@@ -1,0 +1,233 @@
+Reason: collision_point, instance_position and collision_rectangle tested every instance of their target, while
+place_meeting and position_meeting look only in the grid cells they cover. In rm_a6a13 each Skorp's lure walks 32
+pixels with collision_point against the solids when its alarm fires, which cost up to 6.7 ms in one frame in
+Dolphin's emulated time. The three now look in the grid cells under the point or rectangle when those hold fewer
+instances than the target's bucket (clean instances are in their cells, dirty ones are tested by their flag, and the
+grid is not synced, which would reorder cells for later queries); when several are hit, the first in the order the
+whole bucket used to be walked in still wins. An instance id target, or a bucket the cells outnumber, keeps the walk.
+Upstream: Speed only, every platform. Retires this patch when merged.
+
+--- a/src/vm_builtins.c
++++ b/src/vm_builtins.c
+@@ -12896,6 +12896,106 @@
+     return RValue_makeReal(2.0);
+ }
+ 
++// The first instance, in the order the target's bucket is walked, that passes test, looked for in the grid cells under
++// the box when they hold fewer instances than the bucket. Clean instances are in their cells and dirty ones are tested
++// by their flag; the grid is not synced (that would reorder cells for later queries). False: walk the bucket instead.
++typedef bool (*GridHitTest)(VMContext* ctx, Instance* inst, const GMLReal* box, int32_t prec);
++static bool gridFirstHit(VMContext* ctx, int32_t target, const GMLReal* box, int32_t prec, bool notme, GridHitTest test, int32_t* resultId) {
++    Runner* runner = ctx->runner;
++    Instance** bucket;
++    if (target == INSTANCE_ALL) bucket = runner->instances;
++    else if (target >= 0 && runner->dataWin->objt.count > (uint32_t) target) bucket = runner->instancesByObject[target];
++    else return false;
++    int32_t bucketCount = (int32_t) arrlen(bucket);
++    *resultId = INSTANCE_NOONE;
++    if (bucketCount == 0) return true;
++    GMLReal limit = 1000000.0;
++    repeat(4, i) if (!(limit > GMLReal_fabs(box[i]))) return false;
++
++    SpatialGrid* grid = runner->spatialGrid;
++    SpatialGridRange range = SpatialGrid_computeCellRange(grid, box[0], box[1], box[2], box[3]);
++    int32_t cellTotal = 0;
++    for (int32_t gx = range.minGridX; range.maxGridX >= gx; gx++)
++        for (int32_t gy = range.minGridY; range.maxGridY >= gy; gy++)
++            cellTotal += (int32_t) arrlen(grid->grid[SpatialGrid_cellIndex(grid, gx, gy)]);
++    if (cellTotal >= bucketCount) return false;
++
++    Instance* self = ctx->currentInstance;
++    static Instance** hits = nullptr;
++    arrsetlen(hits, 0);
++    SpatialGridQuery query = SpatialGrid_prepareQuery(runner, box[0], box[1], box[2], box[3], target);
++    for (int32_t gx = query.range.minGridX; query.range.maxGridX >= gx; gx++) {
++        for (int32_t gy = query.range.minGridY; query.range.maxGridY >= gy; gy++) {
++            Instance** cell = grid->grid[SpatialGrid_cellIndex(grid, gx, gy)];
++            int32_t cellLen = (int32_t) arrlen(cell);
++            repeat(cellLen, ci) {
++                Instance* inst = cell[ci];
++                if (inst->spatialGridDirty || inst->lastCollisionQueryId == query.queryId) continue;
++                inst->lastCollisionQueryId = query.queryId;
++                if (!inst->active || (notme && inst == self)) continue;
++                if (!query.matchAll && !VM_isObjectOrDescendant(runner->dataWin, inst->objectIndex, target)) continue;
++                if (test(ctx, inst, box, prec)) arrput(hits, inst);
++            }
++        }
++    }
++    repeat(bucketCount, bi) {
++        Instance* inst = bucket[bi];
++        if (!inst->spatialGridDirty || !inst->active || (notme && inst == self)) continue;
++        if (test(ctx, inst, box, prec)) arrput(hits, inst);
++    }
++
++    int32_t hitCount = (int32_t) arrlen(hits);
++    if (hitCount == 1) {
++        *resultId = hits[0]->instanceId;
++    } else if (hitCount > 1) {
++        for (int32_t i = 0; bucketCount > i && *resultId == INSTANCE_NOONE; i++) {
++            repeat(hitCount, h) {
++                if (hits[h] == bucket[i]) {
++                    *resultId = bucket[i]->instanceId;
++                    break;
++                }
++            }
++        }
++    }
++    return true;
++}
++
++// collision_rectangle's test of one instance (box = x1, y1, x2, y2, normalized).
++static bool collisionRectHitsInstance(VMContext* ctx, Instance* inst, const GMLReal* box, int32_t prec) {
++    GMLReal x1 = box[0], y1 = box[1], x2 = box[2], y2 = box[3];
++    if (!Collision_rectOverlapsInstance(ctx->runner, inst, x1, y1, x2, y2)) return false;
++
++    InstanceBBox bbox = Collision_computeBBox(ctx->runner, inst);
++
++    // Precise check if requested and sprite has precise masks
++    if (prec != 0) {
++        Sprite* spr = Collision_getSprite(ctx->dataWin, inst);
++        if (Collision_hasFrameMasks(spr)) {
++            // Check if any pixel in the overlap region hits the mask
++            GMLReal iLeft   = GMLReal_fmax(x1, bbox.left);
++            GMLReal iRight  = GMLReal_fmin(x2, bbox.right);
++            GMLReal iTop    = GMLReal_fmax(y1, bbox.top);
++            GMLReal iBottom = GMLReal_fmin(y2, bbox.bottom);
++
++            bool found = false;
++            int32_t startX = (int32_t) GMLReal_floor(iLeft);
++            int32_t endX   = (int32_t) GMLReal_ceil(iRight);
++            int32_t startY = (int32_t) GMLReal_floor(iTop);
++            int32_t endY   = (int32_t) GMLReal_ceil(iBottom);
++
++            for (int32_t py = startY; endY > py && !found; py++) {
++                for (int32_t px = startX; endX > px && !found; px++) {
++                    if (Collision_pointInInstance(spr, inst, (GMLReal) px + 0.5, (GMLReal) py + 0.5)) {
++                        found = true;
++                    }
++                }
++            }
++            if (!found) return false;
++        }
++    }
++    return true;
++}
++
+ // collision_rectangle(x1, y1, x2, y2, obj, prec, notme)
+ static RValue builtin_collision_rectangle(VMContext* ctx, RValue* args, int32_t argCount) {
+     REQUIRE_ARGC_AT_LEAST("collision_rectangle", 7, RValue_makeReal((GMLReal) INSTANCE_NOONE));
+@@ -12921,43 +13021,16 @@
+     Instance* self = ctx->currentInstance;
+ 
+     int32_t resultId = INSTANCE_NOONE;
++    GMLReal box[4] = { x1, y1, x2, y2 };
++    if (gridFirstHit(ctx, targetObjIndex, box, prec, notme, collisionRectHitsInstance, &resultId)) return RValue_makeReal((GMLReal) resultId);
++
+     int32_t snapBase = Runner_pushInstancesForTarget(runner, targetObjIndex);
+     int32_t snapEnd  = (int32_t) arrlen(runner->instanceSnapshots);
+     for (int32_t snapIdx = snapBase; snapEnd > snapIdx; snapIdx++) {
+         Instance* inst = runner->instanceSnapshots[snapIdx];
+         if (!inst->active) continue;
+         if (notme && inst == self) continue;
+-
+-        if (!Collision_rectOverlapsInstance(ctx->runner, inst, x1, y1, x2, y2)) continue;
+-
+-        InstanceBBox bbox = Collision_computeBBox(ctx->runner, inst);
+-
+-        // Precise check if requested and sprite has precise masks
+-        if (prec != 0) {
+-            Sprite* spr = Collision_getSprite(ctx->dataWin, inst);
+-            if (Collision_hasFrameMasks(spr)) {
+-                // Check if any pixel in the overlap region hits the mask
+-                GMLReal iLeft   = GMLReal_fmax(x1, bbox.left);
+-                GMLReal iRight  = GMLReal_fmin(x2, bbox.right);
+-                GMLReal iTop    = GMLReal_fmax(y1, bbox.top);
+-                GMLReal iBottom = GMLReal_fmin(y2, bbox.bottom);
+-
+-                bool found = false;
+-                int32_t startX = (int32_t) GMLReal_floor(iLeft);
+-                int32_t endX   = (int32_t) GMLReal_ceil(iRight);
+-                int32_t startY = (int32_t) GMLReal_floor(iTop);
+-                int32_t endY   = (int32_t) GMLReal_ceil(iBottom);
+-
+-                for (int32_t py = startY; endY > py && !found; py++) {
+-                    for (int32_t px = startX; endX > px && !found; px++) {
+-                        if (Collision_pointInInstance(spr, inst, (GMLReal) px + 0.5, (GMLReal) py + 0.5)) {
+-                            found = true;
+-                        }
+-                    }
+-                }
+-                if (!found) continue;
+-            }
+-        }
++        if (!collisionRectHitsInstance(ctx, inst, box, prec)) continue;
+ 
+         resultId = inst->instanceId;
+         break;
+@@ -13528,6 +13601,16 @@
+     return RValue_makeReal((GMLReal) count);
+ }
+ 
++// collision_point's test of one instance (box = the point twice); prec also asks for the mask.
++static bool collisionPointHitsInstance(VMContext* ctx, Instance* inst, const GMLReal* box, int32_t prec) {
++    if (!Collision_pointInsideInstanceBox(ctx->runner, inst, box[0], box[1])) return false;
++    if (prec != 0) {
++        Sprite* spr = Collision_getSprite(ctx->dataWin, inst);
++        if (Collision_hasFrameMasks(spr) && !Collision_pointInInstance(spr, inst, box[0], box[1])) return false;
++    }
++    return true;
++}
++
+ // collision_point(x, y, obj, prec, notme)
+ static RValue builtin_collision_point(VMContext* ctx, RValue* args, int32_t argCount) {
+     REQUIRE_ARGC_AT_LEAST("collision_point", 5, RValue_makeReal((GMLReal) INSTANCE_NOONE));
+@@ -13546,21 +13629,16 @@
+     Instance* self = ctx->currentInstance;
+ 
+     int32_t resultId = INSTANCE_NOONE;
++    GMLReal box[4] = { px, py, px, py };
++    if (gridFirstHit(ctx, targetObjIndex, box, prec, notme, collisionPointHitsInstance, &resultId)) return RValue_makeReal((GMLReal) resultId);
++
+     int32_t snapBase = Runner_pushInstancesForTarget(runner, targetObjIndex);
+     int32_t snapEnd  = (int32_t) arrlen(runner->instanceSnapshots);
+     for (int32_t snapIdx = snapBase; snapEnd > snapIdx; snapIdx++) {
+         Instance* inst = runner->instanceSnapshots[snapIdx];
+         if (!inst->active) continue;
+         if (notme && inst == self) continue;
+-
+-        if (!Collision_pointInsideInstanceBox(ctx->runner, inst, px, py)) continue;
+-
+-        if (prec != 0) {
+-            Sprite* spr = Collision_getSprite(ctx->dataWin, inst);
+-            if (Collision_hasFrameMasks(spr)) {
+-                if (!Collision_pointInInstance(spr, inst, px, py)) continue;
+-            }
+-        }
++        if (!collisionPointHitsInstance(ctx, inst, box, prec)) continue;
+ 
+         resultId = inst->instanceId;
+         break;
+@@ -13703,18 +13781,17 @@
+         px = compatRoundCoord(px); py = compatRoundCoord(py);
+     }
+ 
++    // GameMaker ALWAYS does precise collision checks here
+     int32_t resultId = INSTANCE_NOONE;
++    GMLReal box[4] = { px, py, px, py };
++    if (gridFirstHit(ctx, targetObjIndex, box, 1, false, collisionPointHitsInstance, &resultId)) return RValue_makeReal((GMLReal) resultId);
++
+     int32_t snapBase = Runner_pushInstancesForTarget(runner, targetObjIndex);
+     int32_t snapEnd  = (int32_t) arrlen(runner->instanceSnapshots);
+     for (int32_t i = snapBase; snapEnd > i; i++) {
+         Instance* inst = runner->instanceSnapshots[i];
+         if (!inst->active) continue;
+-
+-        if (!Collision_pointInsideInstanceBox(ctx->runner, inst, px, py)) continue;
+-
+-        // GameMaker ALWAYS does precise collision checks here
+-        Sprite* spr = Collision_getSprite(ctx->dataWin, inst);
+-        if (Collision_hasFrameMasks(spr) && !Collision_pointInInstance(spr, inst, px, py)) continue;
++        if (!collisionPointHitsInstance(ctx, inst, box, 1)) continue;
+ 
+         resultId = inst->instanceId;
+         break;
