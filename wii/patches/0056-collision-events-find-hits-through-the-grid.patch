@@ -1,0 +1,112 @@
+Reason: every frame each instance with a collision event copied every instance of each target object, sorted them by
+object and id, and boxed them one by one, though almost every frame nothing touches. Each of Samus's shots is such an
+instance (against the solids and every enemy), so shooting alone cost up to 1.7 ms a frame in collision dispatch in
+Dolphin's emulated time (rm_a3a19 0.07 -> 1.81 ms). The pair tests change nothing, so the first hit can be looked for
+anywhere: in the grid cells under self when they hold fewer instances than the target's bucket (clean instances are
+in their cells; dirty ones are tested by their flag, and the grid is not synced, which would reorder cells for later
+queries). With no hit the event is done; with one, the unchanged sorted walk starts at that hit, since every instance
+before it misses. rm_a3a19's collision dispatch while firing: 1.81 -> 0.34 ms.
+Upstream: Speed only, every platform. Retires this patch when merged.
+
+--- a/src/runner.c
++++ b/src/runner.c
+@@ -3411,6 +3411,72 @@
+     return 0;
+ }
+ 
++// The sorted walk's tests for one pair: none of them change anything, so hits can be looked for in any order.
++static bool collisionPairHits(Runner* runner, Instance* self, Instance* other, int32_t targetObjIndex, InstanceBBox* bboxSelf, Sprite** sprSelf, bool* selfDirty) {
++    if (!other->active || other == self) return false;
++    if (mostSpecificCollisionTarget(runner, self, other) != targetObjIndex) return false;
++    if (*selfDirty) {
++        *bboxSelf = Collision_computeBBox(runner, self);
++        *sprSelf = Collision_getSprite(runner->dataWin, self);
++        *selfDirty = false;
++    }
++    InstanceBBox bboxOther = Collision_computeBBox(runner, other);
++    if (!bboxSelf->valid || !bboxOther.valid) return false;
++    if (bboxSelf->left >= bboxOther.right || bboxOther.left >= bboxSelf->right || bboxSelf->top >= bboxOther.bottom || bboxOther.top >= bboxSelf->bottom) return false;
++    Sprite* sprOther = Collision_getSprite(runner->dataWin, other);
++    bool needsPrecise = (*sprSelf != nullptr && (*sprSelf)->sepMasks == 1) || (sprOther != nullptr && sprOther->sepMasks == 1) || Collision_obbNeedsSAT(*sprSelf, self) || Collision_obbNeedsSAT(sprOther, other);
++    return !needsPrecise || Collision_instancesOverlapPrecise(runner, self, other, *bboxSelf, bboxOther);
++}
++
++// The first instance in the sorted walk's order that self hits, when the grid cells under self hold fewer instances
++// than the target's bucket; otherwise *walkAll. The grid is not synced (that would reorder cells for later queries), so
++// dirty bucket members are tested directly.
++static Instance* firstCollisionHit(Runner* runner, Instance* self, int32_t targetObjIndex, InstanceBBox* bboxSelf, Sprite** sprSelf, bool* selfDirty, bool* walkAll) {
++    Instance** bucket = runner->instancesByObject[targetObjIndex];
++    int32_t bucketCount = (int32_t) arrlen(bucket);
++    if (bucketCount == 0) return nullptr;
++    InstanceBBox box = Collision_computeBBox(runner, self);
++    if (!box.valid) return nullptr;
++    GMLReal limit = 1000000.0;
++    if (!(GMLReal_fabs(box.left) < limit && GMLReal_fabs(box.right) < limit && GMLReal_fabs(box.top) < limit && GMLReal_fabs(box.bottom) < limit)) {
++        *walkAll = true;
++        return nullptr;
++    }
++    SpatialGrid* grid = runner->spatialGrid;
++    SpatialGridRange range = SpatialGrid_computeCellRange(grid, box.left, box.top, box.right, box.bottom);
++    int32_t cellTotal = 0;
++    for (int32_t gx = range.minGridX; range.maxGridX >= gx; gx++)
++        for (int32_t gy = range.minGridY; range.maxGridY >= gy; gy++)
++            cellTotal += (int32_t) arrlen(grid->grid[SpatialGrid_cellIndex(grid, gx, gy)]);
++    if (cellTotal >= bucketCount) {
++        *walkAll = true;
++        return nullptr;
++    }
++
++    SpatialGridQuery query = SpatialGrid_prepareQuery(runner, box.left, box.top, box.right, box.bottom, targetObjIndex);
++    Instance* best = nullptr;
++    for (int32_t gx = query.range.minGridX; query.range.maxGridX >= gx; gx++) {
++        for (int32_t gy = query.range.minGridY; query.range.maxGridY >= gy; gy++) {
++            Instance** cell = grid->grid[SpatialGrid_cellIndex(grid, gx, gy)];
++            int32_t cellLen = (int32_t) arrlen(cell);
++            repeat(cellLen, ci) {
++                Instance* other = cell[ci];
++                if (other->spatialGridDirty || other->lastCollisionQueryId == query.queryId) continue;
++                other->lastCollisionQueryId = query.queryId;
++                if ((best == nullptr || 0 > sortInstancesByObjectIndexThenInstanceIdAscending(&other, &best)) && collisionPairHits(runner, self, other, targetObjIndex, bboxSelf, sprSelf, selfDirty))
++                    best = other;
++            }
++        }
++    }
++    repeat(bucketCount, bi) {
++        Instance* other = bucket[bi];
++        if (!other->spatialGridDirty) continue;
++        if ((best == nullptr || 0 > sortInstancesByObjectIndexThenInstanceIdAscending(&other, &best)) && collisionPairHits(runner, self, other, targetObjIndex, bboxSelf, sprSelf, selfDirty))
++            best = other;
++    }
++    return best;
++}
++
+ static void dispatchCollisionEvents(Runner* runner) {
+     DataWin* dataWin = runner->dataWin;
+     // Iterate only the objects that have any collision event in their parent chain.
+@@ -3458,6 +3524,11 @@
+                 if (0 > evt->codeId)
+                     continue;
+ 
++                // Most frames nothing collides: only a hit needs the sorted walk below.
++                bool walkAll = false;
++                Instance* first = firstCollisionHit(runner, self, targetObjIndex, &bboxSelf, &sprSelf, &selfDirty, &walkAll);
++                if (first == nullptr && !walkAll) continue;
++
+                 // Iterate only the descendant-inclusive list for the target object via a snapshot, so nested user code (collision handlers calling instance_exists, with (...), etc.) can push/pop their own snapshots above ours without corrupting this iteration.
+                 int32_t snapBase = Runner_pushInstancesOfObject(runner, targetObjIndex);
+                 int32_t snapEnd = (int32_t) arrlen(runner->instanceSnapshots);
+@@ -3465,7 +3536,13 @@
+                 // The YoYo Runner sorts it by the object index THEN by the instanceId
+                 qsort(runner->instanceSnapshots + snapBase, snapEnd - snapBase, sizeof(Instance*), sortInstancesByObjectIndexThenInstanceIdAscending);
+ 
+-                for (int32_t snapIdx = snapBase; snapEnd > snapIdx; snapIdx++) {
++                // Everything before the first hit misses, and a miss changes nothing.
++                int32_t snapIdx = snapBase;
++                if (first != nullptr) {
++                    while (snapEnd > snapIdx && runner->instanceSnapshots[snapIdx] != first) snapIdx++;
++                    if (snapIdx == snapEnd) snapIdx = snapBase;
++                }
++                for (; snapEnd > snapIdx; snapIdx++) {
+                     Instance* other = runner->instanceSnapshots[snapIdx];
+                     if (!other->active) continue;
+                     if (other == self) continue;
