@@ -1,0 +1,62 @@
+Reason: a collision event's sorted walk copies the target's bucket and qsorts it by object and id, once for every
+instance with the event, every frame. A power bomb's blast pieces all walk the same few hundred solids, so the same
+bucket was sorted five times a frame and again the next frame (qsort and its comparator were ~3.8% of Dolphin's CPU
+thread during power bombs in rm_a6a13). The last sorted order is now kept per target and reused when the bucket is
+the same list as last time and the kept order is still sorted under the current keys; ids are unique, so that is the
+only sorted order and the one qsort would give. Otherwise it sorts as before.
+Upstream: Speed only, every platform. Retires this patch when merged.
+
+--- a/src/runner.c
++++ b/src/runner.c
+@@ -3411,6 +3411,42 @@
+     return 0;
+ }
+ 
++// The sorted walk sorts the same bucket for every instance with the event, frame after frame. The last order per target
++// is reused when the bucket is unchanged and that order is still sorted: ids are unique, so it is the order qsort gives.
++typedef struct {
++    Instance** bucket;
++    Instance** sorted;
++} CollisionSortMemo;
++
++static void sortCollisionTargets(Runner* runner, int32_t targetObjIndex, Instance** snap, int32_t count) {
++    static CollisionSortMemo* memos = nullptr;
++    static uint32_t memoCount = 0;
++    if (memoCount != runner->dataWin->objt.count) {
++        repeat(memoCount, i) {
++            arrfree(memos[i].bucket);
++            arrfree(memos[i].sorted);
++        }
++        memoCount = runner->dataWin->objt.count;
++        memos = (CollisionSortMemo*) safeRealloc(memos, (size_t) (memoCount > 0 ? memoCount : 1) * sizeof(CollisionSortMemo));
++        memset(memos, 0, (size_t) memoCount * sizeof(CollisionSortMemo));
++    }
++    CollisionSortMemo* memo = &memos[targetObjIndex];
++    size_t bytes = (size_t) count * sizeof(Instance*);
++    if (count > 1 && arrlen(memo->bucket) == count && memcmp(memo->bucket, snap, bytes) == 0) {
++        memcpy(snap, memo->sorted, bytes);
++        bool sorted = true;
++        for (int32_t i = 1; count > i && sorted; i++)
++            sorted = 0 > sortInstancesByObjectIndexThenInstanceIdAscending(&snap[i - 1], &snap[i]);
++        if (sorted) return;
++        memcpy(snap, memo->bucket, bytes);
++    }
++    arrsetlen(memo->bucket, count);
++    if (count > 0) memcpy(memo->bucket, snap, bytes);
++    qsort(snap, (size_t) count, sizeof(Instance*), sortInstancesByObjectIndexThenInstanceIdAscending);
++    arrsetlen(memo->sorted, count);
++    if (count > 0) memcpy(memo->sorted, snap, bytes);
++}
++
+ // The sorted walk's tests for one pair: none of them change anything, so hits can be looked for in any order.
+ static bool collisionPairHits(Runner* runner, Instance* self, Instance* other, int32_t targetObjIndex, InstanceBBox* bboxSelf, Sprite** sprSelf, bool* selfDirty) {
+     if (!other->active || other == self) return false;
+@@ -3534,7 +3570,7 @@
+                 int32_t snapEnd = (int32_t) arrlen(runner->instanceSnapshots);
+ 
+                 // The YoYo Runner sorts it by the object index THEN by the instanceId
+-                qsort(runner->instanceSnapshots + snapBase, snapEnd - snapBase, sizeof(Instance*), sortInstancesByObjectIndexThenInstanceIdAscending);
++                sortCollisionTargets(runner, targetObjIndex, runner->instanceSnapshots + snapBase, snapEnd - snapBase);
+ 
+                 // Everything before the first hit misses, and a miss changes nothing.
+                 int32_t snapIdx = snapBase;
