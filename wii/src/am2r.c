@@ -1079,6 +1079,60 @@ static GML_ROUNDING RValue wii_pbomb_solid(VMContext *ctx)
 	return RValue_makeUndefined();
 }
 
+/* skorp_get_lure(spr) runs for every Skorp every frame: in a room whose name has "6a" or "6b" at characters 5-6 it
+ * returns the sprite named sprite_get_name(spr) + "A6" or "A6b", elsewhere spr itself. The room's answer is kept. */
+static int32_t skorpLureCode = -1;
+static BuiltinFunc spriteGetNameFn;
+
+static RValue wii_skorp_get_lure(VMContext *ctx, RValue *args, int32_t argCount)
+{
+	static int32_t lastRoom = -1;
+	static const char *suffix;
+	Runner *runner = ctx->runner;
+	RValue nameRv, r;
+	char *name, *full;
+	int32_t value;
+	size_t len;
+
+	if (argCount < 1 || !charAtFn || !spriteGetNameFn || runner->currentRoomIndex < 0 ||
+	    (uint32_t)runner->currentRoomIndex >= ctx->dataWin->room.count ||
+	    (args[0].type != RVALUE_REAL && args[0].type != RVALUE_INT32 && args[0].type != RVALUE_INT64))
+		return VM_callCodeIndex(ctx, skorpLureCode, args, argCount);
+	if (runner->currentRoomIndex != lastRoom) {
+		RValue call[2], a, b;
+		char *sa, *sb;
+
+		call[0] = RValue_makeOwnedString(safeStrdup(ctx->dataWin->room.rooms[runner->currentRoomIndex].name));
+		call[1] = RValue_makeInt32(5);
+		a = charAtFn(ctx, call, 2);
+		call[1] = RValue_makeInt32(6);
+		b = charAtFn(ctx, call, 2);
+		sa = RValue_toString(a, ctx->dataWin);
+		sb = RValue_toString(b, ctx->dataWin);
+		suffix = !strcmp(sa, "6") && !strcmp(sb, "a") ? "A6" : !strcmp(sa, "6") && !strcmp(sb, "b") ? "A6b" : NULL;
+		free(sa);
+		free(sb);
+		RValue_free(&a);
+		RValue_free(&b);
+		RValue_free(&call[0]);
+		lastRoom = runner->currentRoomIndex;
+	}
+	if (!suffix)
+		return args[0];
+	nameRv = spriteGetNameFn(ctx, args, 1);
+	name = RValue_toString(nameRv, ctx->dataWin);
+	RValue_free(&nameRv);
+	len = strlen(name);
+	full = (char *)safeMalloc(len + 4);
+	memcpy(full, name, len);
+	strcpy(full + len, suffix);
+	value = shget(runner->assetsByName, full);
+	free(full);
+	free(name);
+	r = RValue_makeReal(value);
+	return r;
+}
+
 void Wii_hookAm2rScripts(VMContext *ctx)
 {
 	static const char *const partNames[7] = { "wallU", "wallR", "wallD", "wallL", "color", "special", "corner" };
@@ -1091,6 +1145,7 @@ void Wii_hookAm2rScripts(VMContext *ctx)
 	ptrdiff_t ow = shgeti(ctx->codeIndexByName, "gml_Object_oWater_Draw_0");
 	ptrdiff_t ls = shgeti(ctx->codeIndexByName, "gml_Object_oLavaSurface_Draw_0");
 	ptrdiff_t pb = shgeti(ctx->codeIndexByName, "gml_Object_oPBombExpl_Collision_268");
+	ptrdiff_t sl = shgeti(ctx->codeIndexByName, "skorp_get_lure");
 	bool resetMap, mapSurf, water, tiles, bubbles, owater, lava;
 	int k;
 
@@ -1108,6 +1163,9 @@ void Wii_hookAm2rScripts(VMContext *ctx)
 	stringFn = VM_findBuiltin(ctx, "string");
 	charAtFn = VM_findBuiltin(ctx, "string_char_at");
 	drawSpriteFn = VM_findBuiltin(ctx, "draw_sprite");
+	spriteGetNameFn = VM_findBuiltin(ctx, "sprite_get_name");
+	if (sl >= 0 && ctx->dataWin->code.entries[ctx->codeIndexByName[sl].value].length == 316)
+		skorpLureCode = ctx->codeIndexByName[sl].value;
 	/* the sprite numbers below are 1.5.5's, baked into this length of bytecode */
 	mapBlockNative = mapBlockCode >= 0 && drawSpriteFn && ctx->dataWin->code.entries[mapBlockCode].length == 5016;
 	mapSurf = mapSurfCode >= 0 && mapBlockCode >= 0 && mapVar >= 0 && dmapVar >= 0 && mystrVar >= 0 &&
@@ -1183,6 +1241,8 @@ void Wii_hookAm2rScripts(VMContext *ctx)
 			standIn = (void *)wii_draw_mapblock;
 		else if (name && controlUser4Code >= 0 && strcmp(name, "surface_free") == 0)
 			standIn = (void *)wii_surface_free;
+		else if (name && skorpLureCode >= 0 && strcmp(name, "skorp_get_lure") == 0)
+			standIn = (void *)wii_skorp_get_lure;
 		if (standIn) {
 			ctx->funcCallCache[fi].builtin = standIn;
 			ctx->funcCallCache[fi].scriptCodeIndex = -1;
