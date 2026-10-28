@@ -39,7 +39,13 @@
 // Top the rings up from a worker thread: a long main-thread frame (a room load) otherwise
 // starves them, audibly cutting the music out right after a track starts.
 #define DECODE_STACK_BYTES (64 * 1024)
-#define DECODE_THREAD_PRIO 80
+// Below the game's main thread (64), so music decodes in the frame's vsync and GPU waits instead of in the middle of
+// a frame; above the texture page loader (32). Boosted over the game whenever a ring runs low, and as a track starts.
+#define DECODE_IDLE_PRIO 48
+#define DECODE_BOOST_PRIO 80
+#define DECODE_LOW_CHUNKS 16              // ~420 ms left in a ring: boost
+#define DECODE_FULL_CHUNKS 36             // ~940 ms: back to idle
+#define SFX_PRELOAD_BYTES (32u << 10)     // sounds this small (footsteps, ~1.9 MB in all) are read at boot and kept
 #define DECODE_NAP_US 4000
 #define BLOB_CACHE_BYTES (6u << 20)       // converted SFX kept for replay, shared by every voice playing them
 #define BLOB_BIG_BYTES (512u << 10)       // ambience-sized: re-read on each play; a power bomb (265 KB) stays cached
@@ -72,6 +78,7 @@ typedef struct {
     uint32_t used;          // blobTick of the last play, for LRU
     uint32_t voices;        // voices playing or draining it: never freed under them
     bool bad;               // not 16-bit PCM the DSP can play
+    bool pinned;            // read at boot, never evicted
 } SfxPcm;
 
 typedef struct {
@@ -212,7 +219,7 @@ static void blobTrim(WiiAudioSystem* a, uint32_t keep) {
         bool over = a->blobBytes > BLOB_CACHE_BYTES;
         for (uint32_t i = 0; i < count; i++) {
             SfxPcm* sfx = &a->sfx[i];
-            if (sfx->pcm == nullptr || sfx->voices > 0 || i == keep) continue;
+            if (sfx->pcm == nullptr || sfx->voices > 0 || i == keep || sfx->pinned) continue;
             if (sfx->size > BLOB_BIG_BYTES) {
                 victim = i;
                 break;
@@ -414,6 +421,13 @@ static void applyStreamVolume(WiiAudioSystem* a, WiiStream* s) {
 static mutex_t g_decodeMutex;   // recursive: streamPlay can evict (streamStop) while holding it
 static lwp_t g_decodeThread = LWP_THREAD_NULL;
 static volatile bool g_decodeQuit;
+static bool g_decodeBoosted;
+
+static void decodeBoost(bool boost) {
+    if (g_decodeThread == LWP_THREAD_NULL || boost == g_decodeBoosted) return;
+    g_decodeBoosted = boost;
+    LWP_SetThreadPriority(g_decodeThread, boost ? DECODE_BOOST_PRIO : DECODE_IDLE_PRIO);
+}
 #define DECODE_LOCK()   LWP_MutexLock(g_decodeMutex)
 #define DECODE_UNLOCK() LWP_MutexUnlock(g_decodeMutex)
 
@@ -561,6 +575,8 @@ static int32_t streamPlayLocked(WiiAudioSystem* a, int32_t soundIndex, Sound* so
     AESND_PlayVoice(s->pb, (s->channels == 2) ? VOICE_STEREO16 : VOICE_MONO16,
                     s->ring, STREAM_CHUNK_BYTES, (f32) s->rate, 0, true);
     applyStreamVolume(a, s);
+    // A track's first moments are where a long frame (a room load) used to starve it.
+    decodeBoost(true);
     logInfo("WiiAudio: stream snd %d '%s' ch=%d rate=%u loop=%d slot=%d prime=%u ms\n",
             soundIndex, sound->name, s->channels, s->rate, loop, (int) (s - a->streams),
             (unsigned) ticks_to_millisecs(gettime() - t0));
@@ -599,6 +615,15 @@ static void streamsUpdate(WiiAudioSystem* a, float dt) {
             streamStop(s);
         }
     }
+    uint32_t lowest = STREAM_RING_CHUNKS;
+    for (int i = 0; i < WII_STREAMS; i++) {
+        WiiStream* s = &a->streams[i];
+        if (!s->active || s->paused || s->eof) continue;
+        uint32_t fill = s->writeChunk - s->readChunk;
+        if (fill < lowest) lowest = fill;
+    }
+    if (lowest < DECODE_LOW_CHUNKS) decodeBoost(true);
+    else if (lowest >= DECODE_FULL_CHUNKS) decodeBoost(false);
     if (++a->statFrames >= STREAM_STATS_FRAMES) {
         uint32_t starved = 0;
         int active = 0;
@@ -660,7 +685,19 @@ static void wiiInit(AudioSystem* audio, DataWin* dataWin, FileSystem* fs) {
     }
     LWP_MutexInit(&g_decodeMutex, true);
     g_decodeQuit = false;
-    LWP_CreateThread(&g_decodeThread, decodeThreadMain, a, nullptr, DECODE_STACK_BYTES, DECODE_THREAD_PRIO);
+    g_decodeBoosted = false;
+    LWP_CreateThread(&g_decodeThread, decodeThreadMain, a, nullptr, DECODE_STACK_BYTES, DECODE_IDLE_PRIO);
+    // A small sound's first play read the card in the middle of a frame (5–20 ms on the Wii).
+    uint32_t preloaded = 0;
+    for (uint32_t i = 0; i < dataWin->audo.count; i++) {
+        AudioEntry* entry = &dataWin->audo.entries[i];
+        if (!entry->present || entry->dataSize == 0 || entry->dataSize > SFX_PRELOAD_BYTES) continue;
+        SfxPcm* sfx = sfxLoad(a, i);
+        if (sfx == nullptr) continue;
+        sfx->pinned = true;
+        preloaded++;
+    }
+    logInfo("WiiAudio: preloaded %u small sounds, %u KB\n", preloaded, a->blobBytes >> 10);
     logInfo("WiiAudio: AESND up, %d voices, %d streams, decode thread\n", WII_VOICES, streams);
 }
 
