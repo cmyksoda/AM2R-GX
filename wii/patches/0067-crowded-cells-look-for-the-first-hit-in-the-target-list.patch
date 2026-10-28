@@ -1,0 +1,133 @@
+Reason: in the mine room (rm_a5c22) a power bomb sets off a chain of mines, each throwing 108 projectiles: ~1,000
+projectiles at once, crowded into the same grid cells. firstCollisionHit (patch 0056) then found the cells fuller than
+the target's own instance list and fell back to the full sorted walk for almost every projectile (984 a frame on the
+Wii): ~20,000 pair tests a frame at ~0.34 µs, ~14 ms a frame, though only ~34 collisions fire. In that case it now
+looks for the first hit in the target's list itself, unsorted, as it already does in the grid cells, so the sorted
+walk starts at that hit or is skipped when nothing hits. The list's boxes are worked out once per box epoch (a counter
+moved by every dirty mark and every removal from the per-object lists; every write to a box input marks dirty) and
+shared by all the selves that ask, so only members whose box meets self's go through the pair's full tests. A pair's
+boxes are also compared before its collision target is resolved (all its tests must pass and none changes anything).
+Upstream: Speed only, every platform. Retires this patch when merged.
+
+--- a/src/spatial_grid.h
++++ b/src/spatial_grid.h
+@@ -81,6 +81,9 @@
+ }
+ 
+ SpatialGrid* SpatialGrid_create(uint32_t gridWidth, uint32_t gridHeight);
++// Moves whenever an instance may have a new box (every dirty mark) or leaves the per-object lists, in any room: a box
++// saved while it stood still is still the box.
++extern uint64_t SpatialGrid_boxEpoch;
+ void SpatialGrid_free(SpatialGrid* grid);
+ void SpatialGrid_removeInstance(SpatialGrid* grid, Instance* instance);
+ 
+--- a/src/spatial_grid.c
++++ b/src/spatial_grid.c
+@@ -5,6 +5,8 @@
+ #include "runner.h"
+ #include "utils.h"
+ 
++uint64_t SpatialGrid_boxEpoch = 1;
++
+ SpatialGrid* SpatialGrid_create(uint32_t roomWidth, uint32_t roomHeight) {
+     SpatialGrid* grid = (SpatialGrid *)safeCalloc(1, sizeof(SpatialGrid));
+ 
+@@ -136,6 +138,7 @@
+ }
+ 
+ void SpatialGrid_markInstanceAsDirty(SpatialGrid* grid, Instance* dirtyInstance) {
++    SpatialGrid_boxEpoch++;
+     // Structs should NOT be included in the spatial grid!
+     if (dirtyInstance->objectIndex == STRUCT_OBJECT_INDEX)
+         return;
+--- a/src/runner.c
++++ b/src/runner.c
+@@ -119,6 +119,7 @@
+ }
+ 
+ void Runner_removeInstanceFromObjectLists(Runner* runner, Instance* inst) {
++    SpatialGrid_boxEpoch++;
+     DataWin* dataWin = runner->dataWin;
+     int32_t currentObj = inst->objectIndex;
+     int32_t depth = 0;
+@@ -133,6 +134,7 @@
+ }
+ 
+ void Runner_clearAllObjectLists(Runner* runner) {
++    SpatialGrid_boxEpoch++;
+     if (runner->instancesByObject == nullptr) return;
+     uint32_t count = runner->dataWin->objt.count;
+     repeat(count, i) {
+@@ -3776,23 +3778,30 @@
+ // The sorted walk's tests for one pair: none of them change anything, so hits can be looked for in any order.
+ static bool collisionPairHits(Runner* runner, Instance* self, Instance* other, int32_t targetObjIndex, InstanceBBox* bboxSelf, Sprite** sprSelf, bool* selfDirty) {
+     if (!other->active || other == self) return false;
+-    if (mostSpecificCollisionTarget(runner, self, other) != targetObjIndex) return false;
+     if (*selfDirty) {
+         *bboxSelf = Collision_computeBBox(runner, self);
+         *sprSelf = Collision_getSprite(runner->dataWin, self);
+         *selfDirty = false;
+     }
++    // The boxes first: most pairs miss, and the walk's checks all have to pass, in any order.
+     InstanceBBox bboxOther = Collision_computeBBox(runner, other);
+     if (!bboxSelf->valid || !bboxOther.valid) return false;
+     if (bboxSelf->left >= bboxOther.right || bboxOther.left >= bboxSelf->right || bboxSelf->top >= bboxOther.bottom || bboxOther.top >= bboxSelf->bottom) return false;
++    if (mostSpecificCollisionTarget(runner, self, other) != targetObjIndex) return false;
+     Sprite* sprOther = Collision_getSprite(runner->dataWin, other);
+     bool needsPrecise = (*sprSelf != nullptr && (*sprSelf)->sepMasks == 1) || (sprOther != nullptr && sprOther->sepMasks == 1) || Collision_obbNeedsSAT(*sprSelf, self) || Collision_obbNeedsSAT(sprOther, other);
+     return !needsPrecise || Collision_instancesOverlapPrecise(runner, self, other, *bboxSelf, bboxOther);
+ }
+ 
+-// The first instance in the sorted walk's order that self hits, when the grid cells under self hold fewer instances
+-// than the target's bucket; otherwise *walkAll. The grid is not synced (that would reorder cells for later queries), so
+-// dirty bucket members are tested directly.
++typedef struct {
++    uint64_t epoch;
++    int32_t count;
++    InstanceBBox* boxes;
++} TargetBoxes;
++
++// The first instance in the sorted walk's order that self hits, from the grid cells under self or from the target's
++// bucket, whichever holds fewer; *walkAll when self's box is unusable. The grid is not synced (that would reorder cells
++// for later queries), so dirty bucket members are tested directly.
+ static Instance* firstCollisionHit(Runner* runner, Instance* self, int32_t targetObjIndex, InstanceBBox* bboxSelf, Sprite** sprSelf, bool* selfDirty, bool* walkAll) {
+     Instance** bucket = runner->instancesByObject[targetObjIndex];
+     int32_t bucketCount = (int32_t) arrlen(bucket);
+@@ -3810,9 +3819,35 @@
+     for (int32_t gx = range.minGridX; range.maxGridX >= gx; gx++)
+         for (int32_t gy = range.minGridY; range.maxGridY >= gy; gy++)
+             cellTotal += (int32_t) arrlen(grid->grid[SpatialGrid_cellIndex(grid, gx, gy)]);
++    // Cells crowded with movers (a mine's 108 projectiles share them) hold more than the target's own list: look for the
++    // first hit in that list instead, unsorted. The sorted walk then starts at it, or is skipped when nothing hits.
+     if (cellTotal >= bucketCount) {
+-        *walkAll = true;
+-        return nullptr;
++        // The list's boxes are worked out once per box epoch and shared by every self that asks; only members whose box
++        // meets self's go through the pair's full tests.
++        static TargetBoxes* targetBoxes = nullptr;
++        static uint32_t targetBoxesCount = 0;
++        if (targetBoxesCount < runner->dataWin->objt.count) {
++            targetBoxes = (TargetBoxes*) safeRealloc(targetBoxes, (size_t) runner->dataWin->objt.count * sizeof(TargetBoxes));
++            memset(&targetBoxes[targetBoxesCount], 0, (size_t) (runner->dataWin->objt.count - targetBoxesCount) * sizeof(TargetBoxes));
++            targetBoxesCount = runner->dataWin->objt.count;
++        }
++        TargetBoxes* tb = &targetBoxes[targetObjIndex];
++        if (tb->epoch != SpatialGrid_boxEpoch || tb->count != bucketCount) {
++            arrsetlen(tb->boxes, bucketCount);
++            repeat(bucketCount, bi) tb->boxes[bi] = Collision_computeBBox(runner, bucket[bi]);
++            tb->epoch = SpatialGrid_boxEpoch;
++            tb->count = bucketCount;
++        }
++        Instance* best = nullptr;
++        repeat(bucketCount, bi) {
++            InstanceBBox* ob = &tb->boxes[bi];
++            if (!ob->valid || box.left >= ob->right || ob->left >= box.right || box.top >= ob->bottom || ob->top >= box.bottom)
++                continue;
++            Instance* other = bucket[bi];
++            if ((best == nullptr || 0 > sortInstancesByObjectIndexThenInstanceIdAscending(&other, &best)) && collisionPairHits(runner, self, other, targetObjIndex, bboxSelf, sprSelf, selfDirty))
++                best = other;
++        }
++        return best;
+     }
+ 
+     SpatialGridQuery query = SpatialGrid_prepareQuery(runner, box.left, box.top, box.right, box.bottom, targetObjIndex);
