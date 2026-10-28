@@ -1,0 +1,90 @@
+Reason: place_empty and place_free walked every instance in the room and worked out each one's bounding box.
+move_bounce_all asks place_empty four times, and AM2R calls it from every debris piece, ice shard and spark that
+touches a wall: during a power bomb in rm_a3a19 the debris's bounces cost 3.2 ms a frame on the real Wii, and the
+collision phase 7.5 ms, so most of those frames ran late. The two now look in the grid cells under the box, plus the
+grid's dirty list, when those hold fewer instances than the room; the answer is only whether anything blocks, so the
+order instances are tested in cannot change it. Otherwise they walk the room as before.
+Upstream: Speed only, every platform. Retires this patch when merged.
+
+--- a/src/vm_builtins.c
++++ b/src/vm_builtins.c
+@@ -6920,6 +6920,53 @@
+     return RValue_makeBool(free);
+ }
+ 
++// Whether an instance blocks the caller's box: active, not the caller, solid when only solids count, and overlapping.
++static bool placeBlockedBy(Runner* runner, Instance* caller, Instance* other, InstanceBBox callerBBox, bool solidOnly) {
++    if (!other->active || (solidOnly && !other->solid) || other == caller) return false;
++    InstanceBBox otherBBox = Collision_computeBBox(runner, other);
++    return otherBBox.valid && Collision_instancesOverlapPrecise(runner, caller, other, callerBBox, otherBBox);
++}
++
++// Whether anything blocks the caller's box, looked for in the grid cells under it when those and the grid's dirty list
++// hold fewer instances than the room: clean instances are in their cells and dirty ones are on the list; the grid is
++// not synced (that would reorder cells for later queries). The answer is "any hit", so the order cannot change it.
++// -1: walk the room instead.
++static int32_t placeBlockedInGrid(Runner* runner, Instance* caller, InstanceBBox callerBBox, bool solidOnly) {
++    SpatialGrid* grid = runner->spatialGrid;
++    GMLReal limit = 1000000.0;
++    if (!(limit > GMLReal_fabs(callerBBox.left) && limit > GMLReal_fabs(callerBBox.top) &&
++          limit > GMLReal_fabs(callerBBox.right) && limit > GMLReal_fabs(callerBBox.bottom))) return -1;
++
++    int32_t dirtyCount = (int32_t) arrlen(grid->dirtyInstances);
++    int32_t candidates = dirtyCount;
++    SpatialGridRange range = SpatialGrid_computeCellRange(grid, callerBBox.left, callerBBox.top, callerBBox.right, callerBBox.bottom);
++    for (int32_t gx = range.minGridX; range.maxGridX >= gx; gx++)
++        for (int32_t gy = range.minGridY; range.maxGridY >= gy; gy++)
++            candidates += (int32_t) arrlen(grid->grid[SpatialGrid_cellIndex(grid, gx, gy)]);
++    if (candidates >= (int32_t) arrlen(runner->instances)) return -1;
++
++    SpatialGridQuery query = SpatialGrid_prepareQuery(runner, callerBBox.left, callerBBox.top, callerBBox.right, callerBBox.bottom, INSTANCE_ALL);
++    for (int32_t gx = query.range.minGridX; query.range.maxGridX >= gx; gx++) {
++        for (int32_t gy = query.range.minGridY; query.range.maxGridY >= gy; gy++) {
++            Instance** cell = grid->grid[SpatialGrid_cellIndex(grid, gx, gy)];
++            int32_t cellLen = (int32_t) arrlen(cell);
++            repeat(cellLen, ci) {
++                Instance* other = cell[ci];
++                if (other->spatialGridDirty || other->lastCollisionQueryId == query.queryId) continue;
++                other->lastCollisionQueryId = query.queryId;
++                if (placeBlockedBy(runner, caller, other, callerBBox, solidOnly)) return 1;
++            }
++        }
++    }
++    repeat(dirtyCount, di) {
++        Instance* other = hmget(runner->instancesById, grid->dirtyInstances[di]);
++        if (other == nullptr || !other->spatialGridDirty || other->lastCollisionQueryId == query.queryId) continue;
++        other->lastCollisionQueryId = query.queryId;
++        if (placeBlockedBy(runner, caller, other, callerBBox, solidOnly)) return 1;
++    }
++    return 0;
++}
++
+ // place_empty(x, y) - returns true if no instance overlaps at position (x, y), checking ALL instances (not just solid)
+ static bool placeEmptyAt(Runner* runner, Instance* caller, GMLReal testX, GMLReal testY) {
+     GMLReal savedX = caller->x;
+@@ -6929,8 +6976,11 @@
+ 
+     InstanceBBox callerBBox = Collision_computeBBox(runner, caller);
+     bool empty = true;
++    int32_t gridBlocked = callerBBox.valid ? placeBlockedInGrid(runner, caller, callerBBox, false) : -1;
+ 
+-    if (callerBBox.valid) {
++    if (gridBlocked >= 0) {
++        empty = gridBlocked == 0;
++    } else if (callerBBox.valid) {
+         int32_t instanceCount = (int32_t) arrlen(runner->instances);
+         repeat(instanceCount, i) {
+             Instance* other = runner->instances[i];
+@@ -6960,8 +7010,11 @@
+ 
+     InstanceBBox callerBBox = Collision_computeBBox(runner, caller);
+     bool free = true;
++    int32_t gridBlocked = callerBBox.valid ? placeBlockedInGrid(runner, caller, callerBBox, true) : -1;
+ 
+-    if (callerBBox.valid) {
++    if (gridBlocked >= 0) {
++        free = gridBlocked == 0;
++    } else if (callerBBox.valid) {
+         int32_t instanceCount = (int32_t) arrlen(runner->instances);
+         repeat(instanceCount, i) {
+             Instance* other = runner->instances[i];

@@ -101,6 +101,7 @@ wii: $(BUTTER)/CMakeLists.txt
 	cd $(BUTTER) && git apply ../../wii/patches/0057-point-and-rectangle-queries-use-the-grid.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0058-precise-scans-turn-each-instance-once.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0059-collision-walks-reuse-the-last-sorted-order.patch
+	cd $(BUTTER) && git apply ../../wii/patches/0060-place-checks-use-the-grid.patch
 	if [ "$(HOOKS)" != 0 ] && [ -f wii/test/patches/0099-debug-collision-trace.patch ]; then cd $(BUTTER) && git apply ../../wii/test/patches/0099-debug-collision-trace.patch; fi
 	cmake -B $(WII_BUILD) -S $(BUTTER) $(WII_CMAKE_FLAGS)
 	cmake --build $(WII_BUILD) -j$(JOBS)
