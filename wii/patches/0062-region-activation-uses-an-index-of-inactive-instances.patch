@@ -1,0 +1,289 @@
+Reason: every enemy's begin step calls instance_activate_region on the 64×64 square around itself, after Samus's
+begin step has put the far solids to sleep and woken the ones near the view, and each call walked every instance in
+the room working out the box of each one that sits out (about 0.18 ms a call on the real Wii in rm_a5h04). The
+inactive instances are now kept in room order and bucketed by box over the collision grid's cells; a call tests
+only those in the cells it covers, in room order, with the same test as before. The index is rebuilt whenever the
+runner's activation version (any instance turning active or inactive, any change to the instance list) or the
+grid's count of edits to sitting-out instances has moved since; Samus's own begin step moves it, so that is about
+once a frame, which costs more than it saves in rooms under 300 instances: those, and a region that is inverted,
+huge, or asks for the outside, walk the room as before. On the Wii: rm_a5h04 1.03–1.08 → 0.55–0.67 ms a frame,
+rm_a2h02 0.93 → 0.35.
+Upstream: Speed only, every platform. Retires this patch when merged.
+
+--- a/src/runner.h
++++ b/src/runner.h
+@@ -697,6 +697,8 @@
+     Instance** instanceSnapshots;
+     SpatialGrid* spatialGrid;
+     uint32_t collisionQueryCounter;
++    // Moves whenever an instance turns active or inactive or the instance list changes (instance_activate_region's index).
++    uint32_t activationVersion;
+     int32_t pendingRoom;  // -1 = none
+     bool gameStartFired;
+     int frameCount;
+@@ -1000,6 +1002,8 @@
+ #endif
+ 
+     bool waking = active && !instance->active;
++    if (instance->active != active)
++        runner->activationVersion++;
+     instance->active = active;
+     // AM2R deactivates far solids as a room starts, before the grid's first sync, so they never got cells: list them again
+     // as they wake, or position_meeting and collision_point (ledge grabs, spider ball) never see them.
+--- a/src/runner.c
++++ b/src/runner.c
+@@ -1496,6 +1496,7 @@
+ 
+     hmput(runner->instancesById, instanceId, inst);
+     arrput(runner->instances, inst);
++    runner->activationVersion++;
+     Runner_addInstanceToObjectLists(runner, inst);
+     runner->drawableListStructureDirty = true;
+ 
+@@ -1552,6 +1553,7 @@
+ 
+     arrfree(runner->instances);
+     runner->instances = nullptr;
++    runner->activationVersion++;
+ 
+     // The per-object lists referenced both the freed non-persistents and the carried persistents; clear them entirely.
+     // Persistents are re-added when they return via returnPersistentInstances, and room-local instances are added as they get created.
+@@ -1567,6 +1569,7 @@
+         Runner_addInstanceToObjectLists(runner, carriedPersistent[i]);
+     }
+     arrfree(carriedPersistent);
++    runner->activationVersion++;
+ }
+ 
+ GMLCamera* Runner_getCameraById(Runner* runner, int32_t id) {
+@@ -1679,6 +1682,7 @@
+             arrput(runner->instances, savedState->instances[i]);
+             Runner_addInstanceToObjectLists(runner, savedState->instances[i]);
+         }
++        runner->activationVersion++;
+         arrfree(savedState->instances);
+         savedState->instances = nullptr;
+ 
+@@ -1913,6 +1917,7 @@
+         inst->imageXscale = (float) roomObj->scaleX;
+         inst->imageYscale = (float) roomObj->scaleY;
+         inst->imageAngle = (float) roomObj->rotation;
++        runner->activationVersion++;
+         inst->imageSpeed = roomObj->imageSpeed;
+         inst->imageIndex = (float) roomObj->imageIndex;
+         // Room editor stores per-instance color as ABGR (0xAABBGGRR): low 24 bits feed image_blend, top 8 bits feed image_alpha.
+@@ -2002,6 +2007,7 @@
+     }
+     arrfree(runner->instances);
+     runner->instances = nullptr;
++    runner->activationVersion++;
+ 
+     // Empty the per-object lists. We keep the outer instancesByObject array allocated so Runner_reset can be reused; Runner_free releases it.
+     Runner_clearAllObjectLists(runner);
+@@ -2878,6 +2884,7 @@
+             runner->drawableListStructureDirty = true;
+         }
+     }
++    if (writeIdx != count) runner->activationVersion++;
+     arrsetlen(runner->instances, writeIdx);
+ }
+ 
+@@ -3989,6 +3996,7 @@
+     }
+     arrfree(runner->instances);
+     runner->instances = keptInstances;
++    runner->activationVersion++;
+ 
+     // The per-object lists referenced the full pre-transition instance set (persistents, saved-to-state, and soon-to-be-freed). Only the kept persistents remain live, so rebuild from scratch from the final runner->instances.
+     Runner_clearAllObjectLists(runner);
+--- a/src/spatial_grid.h
++++ b/src/spatial_grid.h
+@@ -20,6 +20,8 @@
+     int16_t gridWidth;
+     int16_t gridHeight;
+     int32_t* dirtyInstances;
++    // Moves when an inactive or destroyed instance is marked dirty (its box may have changed while it sits out).
++    uint32_t inactiveEdits;
+     // Flat 2D grid of Instance* stb_ds arrays
+     Instance*** grid;
+ } SpatialGrid;
+--- a/src/spatial_grid.c
++++ b/src/spatial_grid.c
+@@ -144,6 +144,7 @@
+         // Destroyed instances are updated instantly because, if we didn't, we would need to track the ID + all grids that the instance is in
+         // Guard against stale entries left behind by room transitions or earlier clears of collisionCells.
+         SpatialGrid_removeInstance(grid, dirtyInstance);
++        grid->inactiveEdits++;
+         return;
+     }
+ 
+--- a/src/vm_builtins.c
++++ b/src/vm_builtins.c
+@@ -9211,6 +9211,135 @@
+     return RValue_makeUndefined();
+ }
+ 
++// Whether an inactive instance lies outside the region, the way the region walk has always tested it.
++static bool activationRegionOutside(Runner* runner, DataWin* dataWin, Instance* inst, GMLReal left, GMLReal top, GMLReal right, GMLReal bottom) {
++    Sprite* spr = Collision_getSprite(dataWin, inst);
++    if (spr != nullptr) {
++        InstanceBBox bbox;
++        if (!Collision_memoBBox(runner, inst, spr, &bbox)) bbox = Collision_computeBBox(runner, inst);
++        return bbox.right < left || bbox.left > right || bbox.bottom < top || bbox.top > bottom;
++    }
++    return inst->x > right || left > inst->x || inst->y > bottom || top > inst->y;
++}
++
++// The inactive instances in room order, bucketed by box over the collision grid's cells. Rebuilt when the runner's
++// activation version or the grid's inactive edits moved since: anything that changes who sits out, the instance
++// list, or the box of an instance that sits out moves one of them. Activations made here are skipped by their flag.
++typedef struct {
++    bool built;
++    uint32_t version, gridEdits;
++    SpatialGrid* grid;
++    Instance** entries;
++    int32_t** cells;
++    int32_t cellCount;
++    int32_t* unbucketed;
++    int32_t* picked;
++    uint32_t* seen;
++    uint32_t stamp;
++} ActivationIndex;
++static ActivationIndex activationIndex;
++
++static bool activationCoordsUsable(GMLReal left, GMLReal top, GMLReal right, GMLReal bottom) {
++    GMLReal limit = 1000000.0;
++    return limit > GMLReal_fabs(left) && limit > GMLReal_fabs(top) && limit > GMLReal_fabs(right) &&
++           limit > GMLReal_fabs(bottom) && right >= left && bottom >= top;
++}
++
++static void activationIndexRebuild(Runner* runner, DataWin* dataWin) {
++    ActivationIndex* ix = &activationIndex;
++    SpatialGrid* grid = runner->spatialGrid;
++    int32_t cellCount = (int32_t) grid->gridWidth * grid->gridHeight;
++    if (cellCount > ix->cellCount) {
++        ix->cells = (int32_t**) realloc(ix->cells, (size_t) cellCount * sizeof(int32_t*));
++        for (int32_t c = ix->cellCount; cellCount > c; c++) ix->cells[c] = nullptr;
++        ix->cellCount = cellCount;
++    }
++    repeat(cellCount, c) arrsetlen(ix->cells[c], 0);
++    arrsetlen(ix->entries, 0);
++    arrsetlen(ix->unbucketed, 0);
++    int32_t count = (int32_t) arrlen(runner->instances);
++    repeat(count, i) {
++        Instance* inst = runner->instances[i];
++        if (inst->active || inst->destroyed) continue;
++        int32_t entry = (int32_t) arrlen(ix->entries);
++        arrput(ix->entries, inst);
++        GMLReal box[4];
++        Sprite* spr = Collision_getSprite(dataWin, inst);
++        if (spr != nullptr) {
++            InstanceBBox bbox;
++            if (!Collision_memoBBox(runner, inst, spr, &bbox)) bbox = Collision_computeBBox(runner, inst);
++            box[0] = bbox.left; box[1] = bbox.top; box[2] = bbox.right; box[3] = bbox.bottom;
++        } else {
++            box[0] = box[2] = inst->x;
++            box[1] = box[3] = inst->y;
++        }
++        if (!activationCoordsUsable(box[0], box[1], box[2], box[3])) {
++            arrput(ix->unbucketed, entry);
++            continue;
++        }
++        SpatialGridRange range = SpatialGrid_computeCellRange(grid, box[0], box[1], box[2], box[3]);
++        for (int32_t gx = range.minGridX; range.maxGridX >= gx; gx++)
++            for (int32_t gy = range.minGridY; range.maxGridY >= gy; gy++)
++                arrput(ix->cells[SpatialGrid_cellIndex(grid, gx, gy)], entry);
++    }
++    arrsetlen(ix->seen, arrlen(ix->entries));
++    repeat(arrlen(ix->seen), i) ix->seen[i] = 0;
++    ix->stamp = 0;
++    ix->grid = grid;
++    ix->version = runner->activationVersion;
++    ix->gridEdits = grid->inactiveEdits;
++    ix->built = true;
++}
++
++static int compareInt32Ascending(const void* a, const void* b) {
++    int32_t x = *(const int32_t*) a, y = *(const int32_t*) b;
++    return (x > y) - (x < y);
++}
++
++// Activates the inactive instances inside the region through the index, in room order. False: walk the room instead.
++static bool activationRegionIndexed(Runner* runner, DataWin* dataWin, GMLReal left, GMLReal top, GMLReal right, GMLReal bottom) {
++    ActivationIndex* ix = &activationIndex;
++    SpatialGrid* grid = runner->spatialGrid;
++    if (grid == nullptr || !activationCoordsUsable(left, top, right, bottom)) return false;
++    if (!ix->built || ix->grid != grid || ix->version != runner->activationVersion || ix->gridEdits != grid->inactiveEdits)
++        activationIndexRebuild(runner, dataWin);
++
++    if (++ix->stamp == 0) {
++        repeat(arrlen(ix->seen), i) ix->seen[i] = 0;
++        ix->stamp = 1;
++    }
++    arrsetlen(ix->picked, 0);
++    SpatialGridRange range = SpatialGrid_computeCellRange(grid, left, top, right, bottom);
++    for (int32_t gx = range.minGridX; range.maxGridX >= gx; gx++) {
++        for (int32_t gy = range.minGridY; range.maxGridY >= gy; gy++) {
++            int32_t* cell = ix->cells[SpatialGrid_cellIndex(grid, gx, gy)];
++            repeat(arrlen(cell), ci) {
++                int32_t entry = cell[ci];
++                if (ix->seen[entry] == ix->stamp) continue;
++                ix->seen[entry] = ix->stamp;
++                arrput(ix->picked, entry);
++            }
++        }
++    }
++    repeat(arrlen(ix->unbucketed), u) {
++        int32_t entry = ix->unbucketed[u];
++        if (ix->seen[entry] == ix->stamp) continue;
++        ix->seen[entry] = ix->stamp;
++        arrput(ix->picked, entry);
++    }
++    int32_t pickedCount = (int32_t) arrlen(ix->picked);
++    if (pickedCount > 1) qsort(ix->picked, (size_t) pickedCount, sizeof(int32_t), compareInt32Ascending);
++
++    repeat(pickedCount, p) {
++        Instance* inst = ix->entries[ix->picked[p]];
++        if (inst->active || inst->destroyed) continue;
++        if (!activationRegionOutside(runner, dataWin, inst, left, top, right, bottom)) Runner_setActiveState(runner, inst, true);
++    }
++    // Only this call's own activations moved the version since the check above; they are skipped by their flag.
++    ix->version = runner->activationVersion;
++    return true;
++}
++
+ static RValue builtin_instance_activate_region(VMContext* ctx, RValue* args, int32_t argCount) {
+     REQUIRE_ARGC_AT_LEAST("instance_activate_region", 5, RValue_makeUndefined());
+     Runner* runner = ctx->runner;
+@@ -9224,26 +9353,17 @@
+     GMLReal right = left + width - 1;
+     GMLReal bottom = top + height - 1;
+ 
++    // Below a few hundred instances the walk costs less than keeping the index (rebuilt about once a frame on the Wii).
++    if (wantInside && arrlen(runner->instances) >= 300 && activationRegionIndexed(runner, dataWin, left, top, right, bottom))
++        return RValue_makeUndefined();
++
+     // We don't use SpatialGrid here because inactive instances are NOT included in the SpatialGrid
+     int instances = arrlen(runner->instances);
+     repeat(instances, i) {
+         Instance* inst = runner->instances[i];
+         if (inst->active || inst->destroyed) continue;
+ 
+-        bool outside = false;
+-        Sprite* spr = Collision_getSprite(dataWin, inst);
+-        if (spr != nullptr) {
+-            InstanceBBox bbox;
+-            if (!Collision_memoBBox(runner, inst, spr, &bbox)) bbox = Collision_computeBBox(runner, inst);
+-            if (bbox.right < left || bbox.left > right || bbox.bottom < top || bbox.top > bottom) {
+-                outside = true;
+-            }
+-        } else {
+-            if (inst->x > right || left > inst->x || inst->y > bottom || top > inst->y) {
+-                outside = true;
+-            }
+-        }
+-
++        bool outside = activationRegionOutside(runner, dataWin, inst, left, top, right, bottom);
+         if (outside != wantInside) Runner_setActiveState(ctx->runner, inst, true);
+     }
+     return RValue_makeUndefined();
