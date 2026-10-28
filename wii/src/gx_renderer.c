@@ -2734,6 +2734,16 @@ static bool gxTilesDiscarded(Renderer *renderer)
 
 /* A GameMaker 1 room keeps every tile in the draw list (rm_a5h04: 2,256, about 60 on screen); this drops the ones
  * outside the projection before the engine's generic path resolves and clips each, then steps aside for the rest. */
+/* The bounds gxDrawTile culls against right now: a tile wholly outside them draws nothing. */
+static bool gxTilesVisibleRect(Renderer *renderer, float *left, float *top, float *right, float *bottom)
+{
+	(void)renderer;
+	*left = gx_clipL;
+	*right = gx_clipR;
+	gx_clip_rows(top, bottom);
+	return true;
+}
+
 static void gxDrawTile(Renderer *renderer, RoomTile *tile, float offsetX, float offsetY)
 {
 	GxRenderer *gx = (GxRenderer *)renderer;
@@ -4389,6 +4399,7 @@ Renderer *GxRenderer_create(void)
 	gxVtable.gpuSetFog = gxGpuSetFog;
 	gxVtable.drawTile = gxDrawTile;
 	gxVtable.tilesDiscarded = gxTilesDiscarded;
+	gxVtable.tilesVisibleRect = gxTilesVisibleRect;
 	gxVtable.drawSpriteTiled = gxDrawSpriteTiled;
 	gxVtable.createSurface = gxCreateSurface;
 	gxVtable.surfaceExists = gxSurfaceExists;

@@ -1,0 +1,385 @@
+Reason: the draw loop visited every tile of the room every frame and the renderer threw most of them away as
+off-screen: in rm_a3h04 about 4,660 of 4,787 tiles a frame, about 0.75 µs each on the real Wii (~3.5 ms a frame),
+which kept the sand shaft over its frame budget. A renderer can now report the rectangle outside which drawTile would
+draw nothing (new optional hook tilesVisibleRect). Each run of same-depth tiles gets a grid of the tiles' boxes, built
+when the tile-order version (now also moved by tile_set_scale) or the room changes; a run of the draw list then visits
+only the tiles in the cells under that rectangle (shifted by the layer's offset, with a margin), in their order, and
+draws each exactly as before, and a hidden layer is passed over as before. Tiles whose box isn't finite are always
+visited. The tile drawing code moved into drawRoomTile, shared by both paths.
+Upstream: Speed only, every platform. Retires this patch when merged.
+
+--- a/src/renderer.h
++++ b/src/renderer.h
+@@ -187,6 +187,9 @@
+     void (*drawTile)(Renderer* renderer, RoomTile* tile, float offsetX, float offsetY);
+     // Optional: true while whatever is drawn now is thrown away, so the runner can pass over a run of tiles at once.
+     bool (*tilesDiscarded)(Renderer* renderer);
++    // Optional: the rectangle (in the coordinates tiles are drawn in) outside which drawTile would draw nothing at the
++    // moment; a tile wholly outside it can be passed over. False when the renderer can't say.
++    bool (*tilesVisibleRect)(Renderer* renderer, float* left, float* top, float* right, float* bottom);
+     void (*drawSpriteTiled)(Renderer* renderer, int32_t tpagIndex, float originX, float originY, float x, float y, float xscale, float yscale, bool tileX, bool tileY, float roomW, float roomH, uint32_t color, float alpha);
+     // Surface Functions
+     int32_t (*createSurface)(Renderer* renderer, int32_t width, int32_t height);
+--- a/src/runner.h
++++ b/src/runner.h
+@@ -699,7 +699,8 @@
+     uint32_t collisionQueryCounter;
+     // Moves whenever an instance turns active or inactive or the instance list changes (instance_activate_region's index).
+     uint32_t activationVersion;
+-    // Moves whenever a room's tiles change their depth or which tiles there are (the draw list keeps its tile run).
++    // Moves whenever a room's tiles change their depth, size or which tiles there are (the draw list keeps its tile
++    // run, and its grid of tiles).
+     uint32_t tileOrderVersion;
+     int32_t pendingRoom;  // -1 = none
+     bool gameStartFired;
+--- a/src/runner.c
++++ b/src/runner.c
+@@ -675,6 +675,11 @@
+     int32_t order;
+ } DrawKey;
+ 
++static int compareInt32Positions(const void* a, const void* b) {
++    int32_t x = *(const int32_t*) a, y = *(const int32_t*) b;
++    return (x > y) - (x < y);
++}
++
+ static DrawKey drawableKey(const Drawable* d) {
+     DrawKey k = { d->depth, d->type, 0 };
+     switch (d->type) {
+@@ -983,6 +988,257 @@
+     }
+ }
+ 
++// Draws one room tile of the draw list: its layer may be hidden or shifted (tile_layer_hide, tile_layer_shift). The
++// layer lookup is remembered between neighbouring tiles of one depth.
++static void drawRoomTile(Runner* runner, Room* room, Drawable* d, bool* tileLayerKnown, int32_t* tileLayerDepth, ptrdiff_t* tileLayerIdx) {
++    RoomTile* tile = &room->tiles[d->tileIndex];
++    // Skip tiles whose layer was hidden via tile_layer_hide(). Filtered here (not in the cache) so toggling layer visibility doesn't invalidate.
++    if (!*tileLayerKnown || *tileLayerDepth != tile->tileDepth) {
++        *tileLayerIdx = hmgeti(runner->tileLayerMap, tile->tileDepth);
++        *tileLayerDepth = tile->tileDepth;
++        *tileLayerKnown = true;
++    }
++    ptrdiff_t layerIdx = *tileLayerIdx;
++    if (layerIdx >= 0 && !runner->tileLayerMap[layerIdx].value.visible) return;
++    float offsetX = 0.0f, offsetY = 0.0f;
++    if (layerIdx >= 0) {
++        offsetX = runner->tileLayerMap[layerIdx].value.offsetX;
++        offsetY = runner->tileLayerMap[layerIdx].value.offsetY;
++    }
++
++#ifdef ENABLE_VM_TRACING
++    // Trace tile drawing if requested
++    if (shlen(runner->vmContext->tilesToBeTraced) > 0) {
++        DataWin* dataWin = runner->dataWin;
++        const char* bgName = (tile->backgroundDefinition >= 0 && dataWin->bgnd.count > (uint32_t) tile->backgroundDefinition) ? dataWin->bgnd.backgrounds[tile->backgroundDefinition].name : "<none>";
++        const char* roomName = room->name;
++
++        bool shouldTrace = shgeti(runner->vmContext->tilesToBeTraced, "*") != -1 || shgeti(runner->vmContext->tilesToBeTraced, bgName) != -1 || shgeti(runner->vmContext->tilesToBeTraced, roomName) != -1;
++
++        if (shouldTrace) {
++            int32_t tpagIndex = Renderer_resolveObjectTPAGIndex(dataWin, tile);
++            if (tpagIndex >= 0) {
++                TexturePageItem* tpag = &dataWin->tpag.items[tpagIndex];
++                logInfo("Runner: [%s] Drawing tile #%d bg=%s(%d) tpag(srcX=%d srcY=%d srcW=%d srcH=%d tgtX=%d tgtY=%d bndW=%d bndH=%d page=%d) tile(srcX=%d srcY=%d w=%u h=%u) at pos=(%d,%d) depth=%d\n", roomName, d->tileIndex, bgName, tile->backgroundDefinition, tpag->sourceX, tpag->sourceY, tpag->sourceWidth, tpag->sourceHeight, tpag->targetX, tpag->targetY, tpag->boundingWidth, tpag->boundingHeight, tpag->texturePageId, tile->sourceX, tile->sourceY, tile->width, tile->height, tile->x, tile->y, tile->tileDepth);
++
++                // Warn if tile source rect exceeds TPAG content bounds
++                if ((uint32_t) (tile->sourceX + tile->width) > (uint32_t) tpag->sourceWidth || (uint32_t) (tile->sourceY + tile->height) > (uint32_t) tpag->sourceHeight) {
++                    logWarn("Runner: [%s] Tile #%d source rect (%d,%d %ux%u) exceeds TPAG content bounds (%dx%d)\n", roomName, d->tileIndex, tile->sourceX, tile->sourceY, tile->width, tile->height, tpag->sourceWidth, tpag->sourceHeight);
++                }
++            } else {
++                logInfo("Runner: [%s] Drawing tile #%d bg=%s(%d) tpag=UNRESOLVED tile(srcX=%d srcY=%d w=%u h=%u) at pos=(%d,%d) depth=%d\n", roomName, d->tileIndex, bgName, tile->backgroundDefinition, tile->sourceX, tile->sourceY, tile->width, tile->height, tile->x, tile->y, tile->tileDepth);
++            }
++        }
++    }
++#endif
++
++    Renderer_drawTile(runner->renderer, tile, offsetX, offsetY);
++}
++
++// The tiles a run of the draw list would actually show. Tiles keep their rank (order among the list's tiles) while
++// the tile-order version holds, so each run of one depth gets a grid of ranks by box; the list's positions are mapped
++// to ranks again whenever the list changes. A tile whose box isn't finite is always visited.
++#define TILE_SKIP_CELL 128.0
++typedef struct {
++    int32_t depth, rankStart, rankEnd, cellsX, cellsY;
++    double originX, originY, cellSize;
++    int32_t** cells;
++    int32_t* always;
++} TileSkipRun;
++static struct {
++    bool gridBuilt, mapBuilt;
++    Room* room;
++    RoomTile* tiles;
++    uint32_t count, version, listVersion;
++    int32_t listCount;
++    TileSkipRun* runs;
++    int32_t* rankAt;
++    int32_t* segEndAt;
++    uint32_t* seen;
++    uint32_t stamp;
++} tileSkip;
++static int32_t* tileSkipPicked;
++
++static double tileSkipMargin(double v) {
++    return 4.0 + 1e-3 * fabs(v);
++}
++
++static void tileSkipFreeRuns(void) {
++    repeat(arrlen(tileSkip.runs), r) {
++        TileSkipRun* run = &tileSkip.runs[r];
++        repeat(run->cellsX * run->cellsY, c) arrfree(run->cells[c]);
++        free(run->cells);
++        arrfree(run->always);
++    }
++    arrsetlen(tileSkip.runs, 0);
++}
++
++// Ranks (in list order) and tile boxes; false when the list holds anything the grid can't describe.
++static bool tileSkipBuildGrid(Runner* runner, Room* room) {
++    tileSkipFreeRuns();
++    tileSkip.gridBuilt = false;
++    static int32_t* rankTile = nullptr;
++    arrsetlen(rankTile, 0);
++    repeat(arrlen(runner->cachedDrawables), i) {
++        Drawable* d = &runner->cachedDrawables[i];
++        if (d->type != DRAWABLE_TILE) continue;
++        if (0 > d->tileIndex || d->tileIndex >= (int32_t) room->tileCount) return false;
++        arrput(rankTile, d->tileIndex);
++    }
++    int32_t ranks = (int32_t) arrlen(rankTile);
++    for (int32_t r0 = 0; ranks > r0;) {
++        int32_t depth = room->tiles[rankTile[r0]].tileDepth;
++        int32_t r1 = r0;
++        double minX = 0, minY = 0, maxX = 0, maxY = 0;
++        bool any = false;
++        TileSkipRun run;
++        memset(&run, 0, sizeof run);
++        while (ranks > r1 && room->tiles[rankTile[r1]].tileDepth == depth) {
++            RoomTile* t = &room->tiles[rankTile[r1]];
++            double x0 = t->x, x1 = x0 + (double) t->width * (double) t->scaleX;
++            double y0 = t->y, y1 = y0 + (double) t->height * (double) t->scaleY;
++            if (isfinite(x1) && isfinite(y1) && 1e7 > fabs(x0) && 1e7 > fabs(x1) && 1e7 > fabs(y0) && 1e7 > fabs(y1)) {
++                double lx = fmin(x0, x1), hx = fmax(x0, x1), ly = fmin(y0, y1), hy = fmax(y0, y1);
++                if (!any || minX > lx) minX = lx;
++                if (!any || hx > maxX) maxX = hx;
++                if (!any || minY > ly) minY = ly;
++                if (!any || hy > maxY) maxY = hy;
++                any = true;
++            }
++            r1++;
++        }
++        run.depth = depth;
++        run.rankStart = r0;
++        run.rankEnd = r1;
++        run.cellSize = TILE_SKIP_CELL;
++        run.originX = minX - 64.0;
++        run.originY = minY - 64.0;
++        if (any) {
++            while (true) {
++                run.cellsX = (int32_t) ((maxX + 64.0 - run.originX) / run.cellSize) + 1;
++                run.cellsY = (int32_t) ((maxY + 64.0 - run.originY) / run.cellSize) + 1;
++                if (65536 >= (int64_t) run.cellsX * run.cellsY) break;
++                run.cellSize *= 2.0;
++            }
++            run.cells = (int32_t**) calloc((size_t) run.cellsX * run.cellsY, sizeof(int32_t*));
++        }
++        for (int32_t r = r0; r1 > r; r++) {
++            RoomTile* t = &room->tiles[rankTile[r]];
++            double x0 = t->x, x1 = x0 + (double) t->width * (double) t->scaleX;
++            double y0 = t->y, y1 = y0 + (double) t->height * (double) t->scaleY;
++            if (!(isfinite(x1) && isfinite(y1) && 1e7 > fabs(x0) && 1e7 > fabs(x1) && 1e7 > fabs(y0) && 1e7 > fabs(y1)) || run.cells == nullptr) {
++                arrput(run.always, r);
++                continue;
++            }
++            double lx = fmin(x0, x1), hx = fmax(x0, x1), ly = fmin(y0, y1), hy = fmax(y0, y1);
++            int32_t cx0 = (int32_t) floor((lx - tileSkipMargin(lx) - run.originX) / run.cellSize);
++            int32_t cx1 = (int32_t) floor((hx + tileSkipMargin(hx) - run.originX) / run.cellSize);
++            int32_t cy0 = (int32_t) floor((ly - tileSkipMargin(ly) - run.originY) / run.cellSize);
++            int32_t cy1 = (int32_t) floor((hy + tileSkipMargin(hy) - run.originY) / run.cellSize);
++            if (0 > cx0) cx0 = 0;
++            if (0 > cy0) cy0 = 0;
++            if (cx1 >= run.cellsX) cx1 = run.cellsX - 1;
++            if (cy1 >= run.cellsY) cy1 = run.cellsY - 1;
++            for (int32_t cy = cy0; cy1 >= cy; cy++)
++                for (int32_t cx = cx0; cx1 >= cx; cx++)
++                    arrput(run.cells[cy * run.cellsX + cx], r);
++        }
++        arrput(tileSkip.runs, run);
++        r0 = r1;
++    }
++    arrsetlen(tileSkip.seen, ranks);
++    repeat(ranks, r) tileSkip.seen[r] = 0;
++    tileSkip.stamp = 0;
++    tileSkip.room = room;
++    tileSkip.tiles = room->tiles;
++    tileSkip.count = room->tileCount;
++    tileSkip.version = runner->tileOrderVersion;
++    tileSkip.gridBuilt = true;
++    return true;
++}
++
++static void tileSkipBuildMap(Runner* runner) {
++    int32_t n = (int32_t) arrlen(runner->cachedDrawables);
++    arrsetlen(tileSkip.rankAt, n);
++    arrsetlen(tileSkip.segEndAt, n);
++    int32_t rank = 0;
++    for (int32_t i = n - 1, end = n; i >= 0; i--) {
++        if (runner->cachedDrawables[i].type != DRAWABLE_TILE) {
++            tileSkip.segEndAt[i] = -1;
++            end = i;
++        } else {
++            tileSkip.segEndAt[i] = end;
++        }
++    }
++    repeat(n, i) tileSkip.rankAt[i] = runner->cachedDrawables[i].type == DRAWABLE_TILE ? rank++ : -1;
++    tileSkip.listVersion = runner->drawableListVersion;
++    tileSkip.listCount = n;
++    tileSkip.mapBuilt = true;
++}
++
++// Fills tileSkipPicked with the list positions, in order, of the tiles from pos to the end of its run of tiles that
++// may be visible in the rectangle; returns that end, or 0 when the grid can't answer.
++static int32_t tileSkipVisibleRun(Runner* runner, Room* room, int32_t pos, float visL, float visT, float visR, float visB) {
++    if (!(isfinite(visL) && isfinite(visT) && isfinite(visR) && isfinite(visB))) return 0;
++    if (!tileSkip.gridBuilt || tileSkip.room != room || tileSkip.tiles != room->tiles || tileSkip.count != room->tileCount ||
++        tileSkip.version != runner->tileOrderVersion) {
++        if (!tileSkipBuildGrid(runner, room)) return 0;
++        tileSkip.mapBuilt = false;
++    }
++    if (!tileSkip.mapBuilt || tileSkip.listVersion != runner->drawableListVersion ||
++        tileSkip.listCount != (int32_t) arrlen(runner->cachedDrawables))
++        tileSkipBuildMap(runner);
++    if (pos >= tileSkip.listCount || 0 > tileSkip.rankAt[pos]) return 0;
++    int32_t end = tileSkip.segEndAt[pos], r0 = tileSkip.rankAt[pos], r1 = r0 + (end - pos);
++    if (r1 > (int32_t) arrlen(tileSkip.seen)) return 0;
++    if (++tileSkip.stamp == 0) {
++        repeat(arrlen(tileSkip.seen), r) tileSkip.seen[r] = 0;
++        tileSkip.stamp = 1;
++    }
++    arrsetlen(tileSkipPicked, 0);
++    repeat(arrlen(tileSkip.runs), ri) {
++        TileSkipRun* run = &tileSkip.runs[ri];
++        int32_t lo = run->rankStart > r0 ? run->rankStart : r0, hi = run->rankEnd < r1 ? run->rankEnd : r1;
++        if (lo >= hi) continue;
++        ptrdiff_t layerIdx = hmgeti(runner->tileLayerMap, run->depth);
++        if (layerIdx >= 0 && !runner->tileLayerMap[layerIdx].value.visible) continue;
++        double offX = layerIdx >= 0 ? runner->tileLayerMap[layerIdx].value.offsetX : 0.0;
++        double offY = layerIdx >= 0 ? runner->tileLayerMap[layerIdx].value.offsetY : 0.0;
++        repeat(arrlen(run->always), k) {
++            int32_t r = run->always[k];
++            if (r >= lo && hi > r && tileSkip.seen[r] != tileSkip.stamp) {
++                tileSkip.seen[r] = tileSkip.stamp;
++                arrput(tileSkipPicked, pos + (r - r0));
++            }
++        }
++        if (run->cells == nullptr) continue;
++        double qL = visL - offX, qR = visR - offX, qT = visT - offY, qB = visB - offY;
++        int32_t cx0 = (int32_t) floor((qL - tileSkipMargin(qL) - run->originX) / run->cellSize);
++        int32_t cx1 = (int32_t) floor((qR + tileSkipMargin(qR) - run->originX) / run->cellSize);
++        int32_t cy0 = (int32_t) floor((qT - tileSkipMargin(qT) - run->originY) / run->cellSize);
++        int32_t cy1 = (int32_t) floor((qB + tileSkipMargin(qB) - run->originY) / run->cellSize);
++        if (0 > cx0) cx0 = 0;
++        if (0 > cy0) cy0 = 0;
++        if (cx1 >= run->cellsX) cx1 = run->cellsX - 1;
++        if (cy1 >= run->cellsY) cy1 = run->cellsY - 1;
++        for (int32_t cy = cy0; cy1 >= cy; cy++) {
++            for (int32_t cx = cx0; cx1 >= cx; cx++) {
++                int32_t* cell = run->cells[cy * run->cellsX + cx];
++                repeat(arrlen(cell), k) {
++                    int32_t r = cell[k];
++                    if (r >= lo && hi > r && tileSkip.seen[r] != tileSkip.stamp) {
++                        tileSkip.seen[r] = tileSkip.stamp;
++                        arrput(tileSkipPicked, pos + (r - r0));
++                    }
++                }
++            }
++        }
++    }
++    int32_t picked = (int32_t) arrlen(tileSkipPicked);
++    if (picked > 1) qsort(tileSkipPicked, (size_t) picked, sizeof(int32_t), compareInt32Positions);
++    return end;
++}
++
+ void Runner_draw(Runner* runner) {
+     Room* room = runner->currentRoom;
+ 
+@@ -1058,51 +1314,24 @@
+             continue;
+         }
+ 
+-        if (d->type == DRAWABLE_TILE) {
+-            if (runner->renderer != nullptr) {
+-                RoomTile* tile = &room->tiles[d->tileIndex];
+-                // Skip tiles whose layer was hidden via tile_layer_hide(). Filtered here (not in the cache) so toggling layer visibility doesn't invalidate.
+-                if (!tileLayerKnown || tileLayerDepth != tile->tileDepth) {
+-                    tileLayerIdx = hmgeti(runner->tileLayerMap, tile->tileDepth);
+-                    tileLayerDepth = tile->tileDepth;
+-                    tileLayerKnown = true;
+-                }
+-                ptrdiff_t layerIdx = tileLayerIdx;
+-                if (layerIdx >= 0 && !runner->tileLayerMap[layerIdx].value.visible) continue;
+-                float offsetX = 0.0f, offsetY = 0.0f;
+-                if (layerIdx >= 0) {
+-                    offsetX = runner->tileLayerMap[layerIdx].value.offsetX;
+-                    offsetY = runner->tileLayerMap[layerIdx].value.offsetY;
+-                }
+-
+-#ifdef ENABLE_VM_TRACING
+-                // Trace tile drawing if requested
+-                if (shlen(runner->vmContext->tilesToBeTraced) > 0) {
+-                    DataWin* dataWin = runner->dataWin;
+-                    const char* bgName = (tile->backgroundDefinition >= 0 && dataWin->bgnd.count > (uint32_t) tile->backgroundDefinition) ? dataWin->bgnd.backgrounds[tile->backgroundDefinition].name : "<none>";
+-                    const char* roomName = room->name;
+-
+-                    bool shouldTrace = shgeti(runner->vmContext->tilesToBeTraced, "*") != -1 || shgeti(runner->vmContext->tilesToBeTraced, bgName) != -1 || shgeti(runner->vmContext->tilesToBeTraced, roomName) != -1;
+-
+-                    if (shouldTrace) {
+-                        int32_t tpagIndex = Renderer_resolveObjectTPAGIndex(dataWin, tile);
+-                        if (tpagIndex >= 0) {
+-                            TexturePageItem* tpag = &dataWin->tpag.items[tpagIndex];
+-                            logInfo("Runner: [%s] Drawing tile #%d bg=%s(%d) tpag(srcX=%d srcY=%d srcW=%d srcH=%d tgtX=%d tgtY=%d bndW=%d bndH=%d page=%d) tile(srcX=%d srcY=%d w=%u h=%u) at pos=(%d,%d) depth=%d\n", roomName, d->tileIndex, bgName, tile->backgroundDefinition, tpag->sourceX, tpag->sourceY, tpag->sourceWidth, tpag->sourceHeight, tpag->targetX, tpag->targetY, tpag->boundingWidth, tpag->boundingHeight, tpag->texturePageId, tile->sourceX, tile->sourceY, tile->width, tile->height, tile->x, tile->y, tile->tileDepth);
+-
+-                            // Warn if tile source rect exceeds TPAG content bounds
+-                            if ((uint32_t) (tile->sourceX + tile->width) > (uint32_t) tpag->sourceWidth || (uint32_t) (tile->sourceY + tile->height) > (uint32_t) tpag->sourceHeight) {
+-                                logWarn("Runner: [%s] Tile #%d source rect (%d,%d %ux%u) exceeds TPAG content bounds (%dx%d)\n", roomName, d->tileIndex, tile->sourceX, tile->sourceY, tile->width, tile->height, tpag->sourceWidth, tpag->sourceHeight);
+-                            }
+-                        } else {
+-                            logInfo("Runner: [%s] Drawing tile #%d bg=%s(%d) tpag=UNRESOLVED tile(srcX=%d srcY=%d w=%u h=%u) at pos=(%d,%d) depth=%d\n", roomName, d->tileIndex, bgName, tile->backgroundDefinition, tile->sourceX, tile->sourceY, tile->width, tile->height, tile->x, tile->y, tile->tileDepth);
+-                        }
+-                    }
+-                }
+-#endif
+-
+-                Renderer_drawTile(runner->renderer, tile, offsetX, offsetY);
++        // A tile wholly outside the renderer's visible rectangle draws nothing: such tiles are passed over through the
++        // grid, and the others are drawn in their order exactly as below.
++        float visL, visT, visR, visB;
++        if (d->type == DRAWABLE_TILE && runner->renderer != nullptr && room != nullptr &&
++            runner->renderer->vtable->tilesVisibleRect != nullptr &&
++            runner->renderer->vtable->tilesVisibleRect(runner->renderer, &visL, &visT, &visR, &visB)) {
++            int32_t runEnd = tileSkipVisibleRun(runner, room, i - 1, visL, visT, visR, visB);
++            if (runEnd > 0) {
++                repeat(arrlen(tileSkipPicked), k)
++                    drawRoomTile(runner, room, &runner->cachedDrawables[tileSkipPicked[k]], &tileLayerKnown, &tileLayerDepth, &tileLayerIdx);
++                i = runEnd;
++                lastProcessedDrawKey = drawableKey(&runner->cachedDrawables[i - 1]);
++                continue;
+             }
++        }
++
++        if (d->type == DRAWABLE_TILE) {
++            if (runner->renderer != nullptr) drawRoomTile(runner, room, d, &tileLayerKnown, &tileLayerDepth, &tileLayerIdx);
+         } else if (d->type == DRAWABLE_INSTANCE) {
+             Instance* inst = d->instance;
+             // Filter inactive/invisible instances at draw time so the cache doesn't need invalidation when those flags toggle.
+--- a/src/vm_builtins.c
++++ b/src/vm_builtins.c
+@@ -14879,6 +14879,7 @@
+     if (i >= 0) {
+         room->tiles[i].scaleX = (float) RValue_toReal(args[1]);
+         room->tiles[i].scaleY = (float) RValue_toReal(args[2]);
++        runner->tileOrderVersion++;
+         return RValue_makeUndefined();
+     }
+     logWarn("VM: tile_set_scale: tile does not exist (%u)\n", id);
