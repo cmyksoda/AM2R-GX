@@ -1,0 +1,89 @@
+Reason: a destroy rewrites other instances' stale copies of the dead id, and patch 0025 already limits that to
+instances flagged as holding id-like numbers, but each flagged instance still had every slot of its variable table
+scanned. Enemies, Samus and the effects that remember who made them all hold ids, and their tables are large: on the
+real Wii a destroy cost about 0.2 ms (a hit spark's animation end, which only destroys itself, took 0.84 ms a frame
+during a beam fight in rm_a5c27). Instance_setSelfVar, the one place an id-like number enters a slot, now also lists
+that variable once per instance, and the rewrite looks only at the listed variables, dropping those that no longer
+hold an id-like number; the same slots are rewritten as before.
+Upstream: Speed only, every platform. Retires this patch when merged.
+
+--- a/src/instance.h
++++ b/src/instance.h
+@@ -41,6 +41,8 @@
+     bool persistent, solid, active, destroyed, visible, createEventFired, outsideRoom, spatialGridDirty, mouseOver;
+     // Set when a self variable is given a number that could be an instance id, so a destroy only scans these instances.
+     bool mayHoldIds;
++    // The self variables that were given such a number (varIDs, each once), so a destroy looks only at them.
++    int32_t* idVarKeys;
+     // Used to track which alarms are set without looping through the entire alarm array
+     uint16_t activeAlarmMask;
+     int32_t maskIndex; // collision mask sprite override (-1 = use spriteIndex)
+@@ -135,8 +137,11 @@
+     RValue independentVal = RValue_makeIndependent(val);
+     RValue_free(pointerToSlot);
+     *pointerToSlot = independentVal;
+-    if (RValue_isIdLike(independentVal))
++    if (RValue_isIdLike(independentVal)) {
+         inst->mayHoldIds = true;
++        repeat(arrlen(inst->idVarKeys), i) if (inst->idVarKeys[i] == varID) return;
++        arrput(inst->idVarKeys, varID);
++    }
+ }
+ 
+ // Recompute speed/direction from hspeed/vspeed (called when hspeed or vspeed is set)
+--- a/src/instance.c
++++ b/src/instance.c
+@@ -90,6 +90,8 @@
+     IntRValueHashMap_freeAllValues(&instance->selfVars);
+     arrfree(instance->collisionCells);
+     instance->collisionCells = nullptr;
++    arrfree(instance->idVarKeys);
++    instance->idVarKeys = nullptr;
+ }
+ 
+ void Instance_free(Instance* instance) {
+--- a/src/runner.c
++++ b/src/runner.c
+@@ -2676,8 +2676,8 @@
+     // as an integer id (e.g. linked-list pointers, owner ids, chain heads, etc.). Rewrite any
+     // stale id equal to the dying instance back to -4.
+ 
+-    // Only instances that were ever given an id-like number can hold the id; a lower id falls back to scanning all.
+-    // A scanned instance whose slots no longer hold any id-like number drops its flag.
++    // Only instances that were ever given an id-like number can hold the id, and only in the variables listed for it; a
++    // lower id falls back to scanning every slot of every instance. An instance left with no id-like number drops its flag.
+ 
+     int32_t destroyedInstanceId = destroyedInst->instanceId;
+     bool filtered = destroyedInstanceId >= INSTANCE_ID_BASE;
+@@ -2686,6 +2686,31 @@
+         Instance* inst = runner->instances[i];
+         if (inst == nullptr || !inst->active || inst->destroyed || inst->objectIndex < 0) continue;
+         if (filtered && !inst->mayHoldIds) continue;
++        if (filtered) {
++            // Every id-like number was written through Instance_setSelfVar, which listed its variable.
++            int32_t kept = 0;
++            int32_t keyCount = (int32_t) arrlen(inst->idVarKeys);
++            repeat(keyCount, k) {
++                int32_t key = inst->idVarKeys[k];
++                RValue* value = IntRValueHashMap_findSlot(&inst->selfVars, key);
++                if (value == nullptr) continue;
++                uint8_t vtype = value->type;
++                if (
++                    (vtype == RVALUE_INT32 && value->int32 == destroyedInstanceId) ||
++#ifndef NO_RVALUE_INT64
++                    (vtype == RVALUE_INT64 && value->int64 == destroyedInstanceId) ||
++#endif
++                    (vtype == RVALUE_REAL && value->real == (GMLReal) destroyedInstanceId)
++                ) {
++                    *value = RValue_makeInt32(INSTANCE_NOONE);
++                } else if (RValue_isIdLike(*value)) {
++                    inst->idVarKeys[kept++] = key;
++                }
++            }
++            arrsetlen(inst->idVarKeys, kept);
++            inst->mayHoldIds = kept > 0;
++            continue;
++        }
+         bool stillHoldsIds = false;
+         repeat(inst->selfVars.capacity, slotIndex) {
+             IntRValueEntry* entry = &inst->selfVars.entries[slotIndex];
