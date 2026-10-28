@@ -109,6 +109,7 @@ wii: $(BUTTER)/CMakeLists.txt
 	cd $(BUTTER) && git apply ../../wii/patches/0065-off-screen-tiles-are-passed-over-through-a-grid.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0066-activation-index-survives-creates-wakes-and-destroys.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0067-crowded-cells-look-for-the-first-hit-in-the-target-list.patch
+	cd $(BUTTER) && git apply ../../wii/patches/0068-tile-index-settles-a-miss.patch
 	if [ "$(HOOKS)" != 0 ] && [ -f wii/test/patches/0099-debug-collision-trace.patch ]; then cd $(BUTTER) && git apply ../../wii/test/patches/0099-debug-collision-trace.patch; fi
 	cmake -B $(WII_BUILD) -S $(BUTTER) $(WII_CMAKE_FLAGS)
 	cmake --build $(WII_BUILD) -j$(JOBS)

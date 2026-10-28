@@ -1,0 +1,23 @@
+Reason: crumbling sand in rm_a3h04 asks tile_exists about the edge tiles it has just deleted, and every miss walked the
+room's whole tile array (~4,800 tiles, up to ~4 ms a call on the Wii) to confirm the index (patch 0063 keeps it current
+through tile_add and tile_delete; the layer deletes mark it stale). A miss in a current index without repeated ids is
+now the answer. The walk was also what healed one case the index can't see: leaving a non-persistent room frees its
+tiles, and re-entering reads them again, possibly at the same address and count, so entering a room now marks the
+index stale (one rebuild at the room's first tile lookup).
+Upstream: Speed only, every platform. Retires this patch when merged.
+
+--- a/src/vm_builtins.c
++++ b/src/vm_builtins.c
+@@ -14718,8 +14718,11 @@
+         ptrdiff_t k = hmgeti(tileIndexById, id);
+         if (k >= 0 && (uint32_t) tileIndexById[k].value < room->tileCount &&
+             room->tiles[tileIndexById[k].value].instanceID == id) return tileIndexById[k].value;
++        // tile_add and tile_delete keep the index current, so an id it lacks isn't in the room: crumbling sand asks
++        // after tiles it has just deleted, and each such miss walked all ~4,800 of rm_a3h04's tiles.
++        if (k < 0) return -1;
+     }
+-    // A miss is settled by the walk the index replaced; a tile the index missed means it is out of date.
++    // A stale entry is settled by the walk the index replaced; a tile the index missed means it is out of date.
+     repeat(room->tileCount, i) {
+         if (room->tiles[i].instanceID != id) continue;
+         if (!tileIndexRepeats) tileIndexStale = true;
