@@ -1,0 +1,109 @@
+Reason: a tile_add copied the room's whole tile array to make room for one more tile, and every tile_add or
+tile_delete marked the id index stale, so the next tile lookup rebuilt it over every tile. In rm_a3h04 each crumbling
+sand block makes its neighbours delete and re-add their edge tiles, alternating tile_exists and tile_delete, so a
+single crumble rebuilt the ~3,000-entry index dozens of times; with Samus falling through the sand the room ran at
+about 20 fps on the real Wii. The tile array now grows by half again when it is full, and tile_add and tile_delete
+keep a current index up to date (a delete re-points only the tiles after the one removed). A lookup still confirms
+each hit against the array and falls back to the walk on any miss, as before.
+Upstream: Speed only, every platform. Retires this patch when merged.
+
+--- a/src/data_win.h
++++ b/src/data_win.h
+@@ -712,6 +712,7 @@
+     RoomGameObject* gameObjects;
+     uint32_t tileCount;
+     RoomTile* tiles;
++    uint32_t tileCapacity; // tiles allocated; tile_add grows it by half again rather than one tile at a time
+     uint32_t layerCount;
+     RoomLayer* layers;
+ } Room;
+--- a/src/data_win.c
++++ b/src/data_win.c
+@@ -1683,6 +1683,7 @@
+     uint32_t tileCount;
+     uint32_t* tilePtrs = readPointerTable(reader, &tileCount);
+     room->tileCount = tileCount;
++    room->tileCapacity = tileCount;
+     if (tileCount > 0) {
+         room->tiles = (RoomTile *)safeMalloc(tileCount * sizeof(RoomTile));
+         repeat(tileCount, j) {
+@@ -2206,6 +2207,7 @@
+         room->gameObjectCount = 0;
+         room->tiles = nullptr;
+         room->tileCount = 0;
++        room->tileCapacity = 0;
+         room->layers = nullptr;
+         room->layerCount = 0;
+ 
+@@ -3300,6 +3302,7 @@
+     free(room->tiles);
+     room->tiles = nullptr;
+     room->tileCount = 0;
++    room->tileCapacity = 0;
+     if (room->layerCount != 0 && room->layers != nullptr) {
+         repeat(room->layerCount, j) {
+             RoomLayer* layer = &room->layers[j];
+--- a/src/vm_builtins.c
++++ b/src/vm_builtins.c
+@@ -14644,6 +14644,11 @@
+     tileIndexStale = false;
+ }
+ 
++// tile_add and tile_delete keep an up-to-date index current instead of marking it stale, so the next lookup needs no
++// rebuild: crumbling sand in rm_a3h04 alternates tile_exists and tile_delete, and rebuilt ~3,000 entries each time.
++static bool tileIndexCurrent(Room* room) {
++    return !tileIndexStale && tileIndexRoom == room && tileIndexTiles == room->tiles && tileIndexCount == room->tileCount;
++}
+ static int32_t findTileIndex(Room* room, uint32_t id) {
+     if (tileIndexStale || tileIndexRoom != room || tileIndexTiles != room->tiles || tileIndexCount != room->tileCount)
+         buildTileIndex(room);
+@@ -14675,7 +14680,13 @@
+ 
+     uint32_t newId = runner->nextInstanceId++;
+     uint32_t newCount = room->tileCount + 1;
+-    room->tiles = (RoomTile *)safeRealloc(room->tiles, newCount * sizeof(RoomTile));
++    bool indexCurrent = tileIndexCurrent(room);
++    if (newCount > room->tileCapacity) {
++        uint32_t capacity = room->tileCapacity > room->tileCount ? room->tileCapacity : room->tileCount;
++        capacity = 16 > capacity ? 16 : capacity + capacity / 2;
++        room->tiles = (RoomTile *)safeRealloc(room->tiles, capacity * sizeof(RoomTile));
++        room->tileCapacity = capacity;
++    }
+     RoomTile* tile = &room->tiles[room->tileCount];
+     tile->x = RValue_toInt32(args[5]);
+     tile->y = RValue_toInt32(args[6]);
+@@ -14692,7 +14703,14 @@
+     tile->color = 0xFFFFFFFFu;
+     tile->alpha = 1.0f;
+     room->tileCount = newCount;
+-    tileIndexStale = true;
++    if (indexCurrent) {
++        if (hmgeti(tileIndexById, newId) >= 0) tileIndexRepeats = true;
++        else hmput(tileIndexById, newId, (int32_t) (newCount - 1));
++        tileIndexTiles = room->tiles;
++        tileIndexCount = newCount;
++    } else {
++        tileIndexStale = true;
++    }
+ 
+     runner->drawableListStructureDirty = true;
+     return RValue_makeReal((GMLReal) newId);
+@@ -14800,10 +14818,17 @@
+     uint32_t id = (uint32_t) RValue_toInt32(args[0]);
+     int32_t i = findTileIndex(room, id);
+     if (i >= 0) {
++        bool indexCurrent = tileIndexCurrent(room) && !tileIndexRepeats;
+         uint32_t tailLen = room->tileCount - (uint32_t) i - 1;
+         if (tailLen > 0) memmove(&room->tiles[i], &room->tiles[i + 1], tailLen * sizeof(RoomTile));
+         room->tileCount--;
+-        tileIndexStale = true;
++        if (indexCurrent) {
++            (void) hmdel(tileIndexById, id);
++            for (uint32_t j = (uint32_t) i; room->tileCount > j; j++) hmput(tileIndexById, room->tiles[j].instanceID, (int32_t) j);
++            tileIndexCount = room->tileCount;
++        } else {
++            tileIndexStale = true;
++        }
+         runner->drawableListStructureDirty = true;
+         return RValue_makeUndefined();
+     }
