@@ -1,0 +1,330 @@
+Reason: in rooms busy with sleep and wake (the sand-block shaft, rm_a3h04: ~740 instances), instance_activate_region's
+index of sleeping instances (patch 0062) was rebuilt on almost every call, ~1 ms each on the Wii: Samus's begin step
+puts whole objects to sleep every frame (instance_deactivate_object) and wakes the ones near the view, and any create,
+wake, sleep or destroy invalidated the index. The index is now kept current instead: an instance falling asleep is
+added (its entry kept when its box hasn't moved since its last sleep), an awake one is passed over by its flag, and one
+being freed has its entry cleared. Wakes go in room order through a list ordinal that rises along runner->instances (set
+as an instance joins the list; the list only appends and compacts in order). The index is still rebuilt when the
+instance list is replaced (room changes, persistence), when a sleeper's box moves (a dirty mark on an inactive live
+instance), or when cleared entries pile up.
+Upstream: Speed only, every platform. Retires this patch when merged.
+
+--- a/src/instance.h
++++ b/src/instance.h
+@@ -43,6 +43,11 @@
+     bool mayHoldIds;
+     // The self variables that were given such a number (varIDs, each once), so a destroy looks only at them.
+     int32_t* idVarKeys;
++    // Increases along runner->instances (set as it joins the list), so an index can hand back room order.
++    uint32_t listOrdinal;
++    // instance_activate_region's index: the build that holds this instance (0: none) and its one live entry there.
++    uint32_t activationIndexBuild;
++    int32_t activationIndexEntry;
+     // Used to track which alarms are set without looping through the entire alarm array
+     uint16_t activeAlarmMask;
+     int32_t maskIndex; // collision mask sprite override (-1 = use spriteIndex)
+--- a/src/runner.h
++++ b/src/runner.h
+@@ -697,8 +697,11 @@
+     Instance** instanceSnapshots;
+     SpatialGrid* spatialGrid;
+     uint32_t collisionQueryCounter;
+-    // Moves whenever an instance turns active or inactive or the instance list changes (instance_activate_region's index).
++    // Moves when the instance list is replaced (room changes, persistence): instance_activate_region's index of
++    // sleeping instances is rebuilt then. Falling asleep, waking and destroys keep it current instead.
+     uint32_t activationVersion;
++    uint32_t activationIndexBuild;
++    uint32_t nextListOrdinal;
+     // Moves whenever a room's tiles change their depth, size or which tiles there are (the draw list keeps its tile
+     // run, and its grid of tiles).
+     uint32_t tileOrderVersion;
+@@ -991,6 +994,10 @@
+ uint32_t Runner_getNextLayerId(Runner* runner);
+ void Runner_freeRuntimeLayer(RuntimeLayer* runtimeLayer);
+ // Sets the active state of the instance
++// instance_activate_region's index (vm_builtins.c): an instance fell asleep, or is about to be freed.
++void ActivationIndex_noteSleep(Runner* runner, Instance* instance);
++void ActivationIndex_forget(Runner* runner, Instance* instance);
++
+ static inline void Runner_setActiveState(Runner* runner, Instance* instance, bool active) {
+ #ifdef ENABLE_VM_TRACING
+     if (active != instance->active) {
+@@ -1004,10 +1011,9 @@
+     (void)runner;
+ #endif
+ 
+-    bool waking = active && !instance->active;
+-    if (instance->active != active)
+-        runner->activationVersion++;
++    bool waking = active && !instance->active, sleeping = instance->active && !active;
+     instance->active = active;
++    if (sleeping) ActivationIndex_noteSleep(runner, instance);
+     // AM2R deactivates far solids as a room starts, before the grid's first sync, so they never got cells: list them again
+     // as they wake, or position_meeting and collision_point (ledge grabs, spider ball) never see them.
+     if (waking && arrlen(instance->collisionCells) == 0 && runner->spatialGrid != nullptr)
+--- a/src/runner.c
++++ b/src/runner.c
+@@ -1787,7 +1787,7 @@
+ 
+     hmput(runner->instancesById, instanceId, inst);
+     arrput(runner->instances, inst);
+-    runner->activationVersion++;
++    inst->listOrdinal = ++runner->nextListOrdinal;
+     Runner_addInstanceToObjectLists(runner, inst);
+     runner->drawableListStructureDirty = true;
+ 
+@@ -1857,6 +1857,7 @@
+ static void returnPersistentInstances(Runner* runner, Instance** carriedPersistent) {
+     repeat(arrlen(carriedPersistent), i) {
+         arrput(runner->instances, carriedPersistent[i]);
++        carriedPersistent[i]->listOrdinal = ++runner->nextListOrdinal;
+         Runner_addInstanceToObjectLists(runner, carriedPersistent[i]);
+     }
+     arrfree(carriedPersistent);
+@@ -1972,6 +1973,7 @@
+         int32_t savedCount = (int32_t) arrlen(savedState->instances);
+         repeat(savedCount, i) {
+             arrput(runner->instances, savedState->instances[i]);
++            savedState->instances[i]->listOrdinal = ++runner->nextListOrdinal;
+             Runner_addInstanceToObjectLists(runner, savedState->instances[i]);
+         }
+         runner->activationVersion++;
+@@ -3167,6 +3169,7 @@
+         if (!inst->destroyed) {
+             runner->instances[writeIdx++] = inst;
+         } else {
++            ActivationIndex_forget(runner, inst);
+             Runner_removeInstanceFromObjectLists(runner, inst);
+             SpatialGrid_markInstanceAsDirty(runner->spatialGrid, inst);
+             Runner_removeInstanceLayerElement(runner, inst->instanceId);
+@@ -3176,7 +3179,6 @@
+             runner->drawableListStructureDirty = true;
+         }
+     }
+-    if (writeIdx != count) runner->activationVersion++;
+     arrsetlen(runner->instances, writeIdx);
+ }
+ 
+--- a/src/spatial_grid.c
++++ b/src/spatial_grid.c
+@@ -144,7 +144,8 @@
+         // Destroyed instances are updated instantly because, if we didn't, we would need to track the ID + all grids that the instance is in
+         // Guard against stale entries left behind by room transitions or earlier clears of collisionCells.
+         SpatialGrid_removeInstance(grid, dirtyInstance);
+-        grid->inactiveEdits++;
++        // A sleeper's box moved: instance_activate_region's index rebuilds. A destroyed instance is passed over there.
++        if (!dirtyInstance->active && !dirtyInstance->destroyed) grid->inactiveEdits++;
+         return;
+     }
+ 
+--- a/src/vm_builtins.c
++++ b/src/vm_builtins.c
+@@ -9222,14 +9222,16 @@
+     return inst->x > right || left > inst->x || inst->y > bottom || top > inst->y;
+ }
+ 
+-// The inactive instances in room order, bucketed by box over the collision grid's cells. Rebuilt when the runner's
+-// activation version or the grid's inactive edits moved since: anything that changes who sits out, the instance
+-// list, or the box of an instance that sits out moves one of them. Activations made here are skipped by their flag.
++// The sleeping instances, bucketed by box over the collision grid's cells. Each holds one live entry (older ones are
++// cleared): it's added as the instance falls asleep (kept when its box is unchanged since its last sleep), passed over
++// while awake, and cleared as the instance is freed. Rebuilt when the instance list is replaced, a sleeper's box moves,
++// or cleared entries pile up; wakes go in list order through the instances' ordinals.
+ typedef struct {
+     bool built;
+-    uint32_t version, gridEdits;
++    uint32_t version, gridEdits, cleared;
+     SpatialGrid* grid;
+     Instance** entries;
++    GMLReal* boxes;
+     int32_t** cells;
+     int32_t cellCount;
+     int32_t* unbucketed;
+@@ -9238,6 +9240,8 @@
+     uint32_t stamp;
+ } ActivationIndex;
+ static ActivationIndex activationIndex;
++typedef struct { uint32_t ordinal; Instance* inst; } ActivationWake;
++static ActivationWake* activationWakes;
+ 
+ static bool activationCoordsUsable(GMLReal left, GMLReal top, GMLReal right, GMLReal bottom) {
+     GMLReal limit = 1000000.0;
+@@ -9245,7 +9249,37 @@
+            limit > GMLReal_fabs(bottom) && right >= left && bottom >= top;
+ }
+ 
+-static void activationIndexRebuild(Runner* runner, DataWin* dataWin) {
++static void activationBox(Runner* runner, Instance* inst, GMLReal box[4]) {
++    Sprite* spr = Collision_getSprite(runner->dataWin, inst);
++    if (spr != nullptr) {
++        InstanceBBox bbox;
++        if (!Collision_memoBBox(runner, inst, spr, &bbox)) bbox = Collision_computeBBox(runner, inst);
++        box[0] = bbox.left; box[1] = bbox.top; box[2] = bbox.right; box[3] = bbox.bottom;
++    } else {
++        box[0] = box[2] = inst->x;
++        box[1] = box[3] = inst->y;
++    }
++}
++
++static void activationIndexAdd(Runner* runner, Instance* inst, const GMLReal box[4]) {
++    ActivationIndex* ix = &activationIndex;
++    int32_t entry = (int32_t) arrlen(ix->entries);
++    arrput(ix->entries, inst);
++    repeat(4, k) arrput(ix->boxes, box[k]);
++    arrput(ix->seen, 0);
++    inst->activationIndexBuild = runner->activationIndexBuild;
++    inst->activationIndexEntry = entry;
++    if (!activationCoordsUsable(box[0], box[1], box[2], box[3])) {
++        arrput(ix->unbucketed, entry);
++        return;
++    }
++    SpatialGridRange range = SpatialGrid_computeCellRange(ix->grid, box[0], box[1], box[2], box[3]);
++    for (int32_t gx = range.minGridX; range.maxGridX >= gx; gx++)
++        for (int32_t gy = range.minGridY; range.maxGridY >= gy; gy++)
++            arrput(ix->cells[SpatialGrid_cellIndex(ix->grid, gx, gy)], entry);
++}
++
++static void activationIndexRebuild(Runner* runner) {
+     ActivationIndex* ix = &activationIndex;
+     SpatialGrid* grid = runner->spatialGrid;
+     int32_t cellCount = (int32_t) grid->gridWidth * grid->gridHeight;
+@@ -9256,59 +9290,84 @@
+     }
+     repeat(cellCount, c) arrsetlen(ix->cells[c], 0);
+     arrsetlen(ix->entries, 0);
++    arrsetlen(ix->boxes, 0);
++    arrsetlen(ix->seen, 0);
+     arrsetlen(ix->unbucketed, 0);
++    if (++runner->activationIndexBuild == 0) runner->activationIndexBuild = 1;
++    ix->grid = grid;
+     int32_t count = (int32_t) arrlen(runner->instances);
+     repeat(count, i) {
+         Instance* inst = runner->instances[i];
+         if (inst->active || inst->destroyed) continue;
+-        int32_t entry = (int32_t) arrlen(ix->entries);
+-        arrput(ix->entries, inst);
+         GMLReal box[4];
+-        Sprite* spr = Collision_getSprite(dataWin, inst);
+-        if (spr != nullptr) {
+-            InstanceBBox bbox;
+-            if (!Collision_memoBBox(runner, inst, spr, &bbox)) bbox = Collision_computeBBox(runner, inst);
+-            box[0] = bbox.left; box[1] = bbox.top; box[2] = bbox.right; box[3] = bbox.bottom;
+-        } else {
+-            box[0] = box[2] = inst->x;
+-            box[1] = box[3] = inst->y;
+-        }
+-        if (!activationCoordsUsable(box[0], box[1], box[2], box[3])) {
+-            arrput(ix->unbucketed, entry);
+-            continue;
+-        }
+-        SpatialGridRange range = SpatialGrid_computeCellRange(grid, box[0], box[1], box[2], box[3]);
+-        for (int32_t gx = range.minGridX; range.maxGridX >= gx; gx++)
+-            for (int32_t gy = range.minGridY; range.maxGridY >= gy; gy++)
+-                arrput(ix->cells[SpatialGrid_cellIndex(grid, gx, gy)], entry);
++        activationBox(runner, inst, box);
++        activationIndexAdd(runner, inst, box);
+     }
+-    arrsetlen(ix->seen, arrlen(ix->entries));
+-    repeat(arrlen(ix->seen), i) ix->seen[i] = 0;
+     ix->stamp = 0;
+-    ix->grid = grid;
++    ix->cleared = 0;
+     ix->version = runner->activationVersion;
+     ix->gridEdits = grid->inactiveEdits;
+     ix->built = true;
+ }
+ 
+-static int compareInt32Ascending(const void* a, const void* b) {
+-    int32_t x = *(const int32_t*) a, y = *(const int32_t*) b;
++static bool activationIndexCurrent(Runner* runner) {
++    ActivationIndex* ix = &activationIndex;
++    SpatialGrid* grid = runner->spatialGrid;
++    return ix->built && grid != nullptr && ix->grid == grid && ix->version == runner->activationVersion &&
++           ix->gridEdits == grid->inactiveEdits;
++}
++
++// The instance's live entry, or -1.
++static int32_t activationIndexEntryOf(Runner* runner, Instance* inst) {
++    ActivationIndex* ix = &activationIndex;
++    int32_t e = inst->activationIndexEntry;
++    if (inst->activationIndexBuild != runner->activationIndexBuild || 0 > e || e >= (int32_t) arrlen(ix->entries) ||
++        ix->entries[e] != inst)
++        return -1;
++    return e;
++}
++
++void ActivationIndex_noteSleep(Runner* runner, Instance* instance) {
++    ActivationIndex* ix = &activationIndex;
++    if (instance->destroyed || !activationIndexCurrent(runner)) return;
++    GMLReal box[4];
++    activationBox(runner, instance, box);
++    int32_t e = activationIndexEntryOf(runner, instance);
++    if (e >= 0) {
++        GMLReal* old = &ix->boxes[4 * e];
++        if (old[0] == box[0] && old[1] == box[1] && old[2] == box[2] && old[3] == box[3]) return;
++        ix->entries[e] = nullptr;
++        ix->cleared++;
++    }
++    activationIndexAdd(runner, instance, box);
++    if (ix->cleared > 4096 && ix->cleared > (uint32_t) arrlen(ix->entries) / 2) ix->built = false;
++}
++
++void ActivationIndex_forget(Runner* runner, Instance* instance) {
++    ActivationIndex* ix = &activationIndex;
++    int32_t e = activationIndexEntryOf(runner, instance);
++    if (e < 0) return;
++    ix->entries[e] = nullptr;
++    ix->cleared++;
++}
++
++static int compareActivationWakes(const void* a, const void* b) {
++    uint32_t x = ((const ActivationWake*) a)->ordinal, y = ((const ActivationWake*) b)->ordinal;
+     return (x > y) - (x < y);
+ }
+ 
+ // Activates the inactive instances inside the region through the index, in room order. False: walk the room instead.
+ static bool activationRegionIndexed(Runner* runner, DataWin* dataWin, GMLReal left, GMLReal top, GMLReal right, GMLReal bottom) {
+     ActivationIndex* ix = &activationIndex;
+-    SpatialGrid* grid = runner->spatialGrid;
+-    if (grid == nullptr || !activationCoordsUsable(left, top, right, bottom)) return false;
+-    if (!ix->built || ix->grid != grid || ix->version != runner->activationVersion || ix->gridEdits != grid->inactiveEdits)
+-        activationIndexRebuild(runner, dataWin);
++    if (runner->spatialGrid == nullptr || !activationCoordsUsable(left, top, right, bottom)) return false;
++    if (!activationIndexCurrent(runner)) activationIndexRebuild(runner);
+ 
+     if (++ix->stamp == 0) {
+         repeat(arrlen(ix->seen), i) ix->seen[i] = 0;
+         ix->stamp = 1;
+     }
+     arrsetlen(ix->picked, 0);
++    SpatialGrid* grid = ix->grid;
+     SpatialGridRange range = SpatialGrid_computeCellRange(grid, left, top, right, bottom);
+     for (int32_t gx = range.minGridX; range.maxGridX >= gx; gx++) {
+         for (int32_t gy = range.minGridY; range.maxGridY >= gy; gy++) {
+@@ -9327,16 +9386,19 @@
+         ix->seen[entry] = ix->stamp;
+         arrput(ix->picked, entry);
+     }
+-    int32_t pickedCount = (int32_t) arrlen(ix->picked);
+-    if (pickedCount > 1) qsort(ix->picked, (size_t) pickedCount, sizeof(int32_t), compareInt32Ascending);
+-
+-    repeat(pickedCount, p) {
++    arrsetlen(activationWakes, 0);
++    repeat(arrlen(ix->picked), p) {
+         Instance* inst = ix->entries[ix->picked[p]];
+-        if (inst->active || inst->destroyed) continue;
++        if (inst == nullptr || inst->active || inst->destroyed) continue;
++        ActivationWake w = { inst->listOrdinal, inst };
++        arrput(activationWakes, w);
++    }
++    int32_t wakeCount = (int32_t) arrlen(activationWakes);
++    if (wakeCount > 1) qsort(activationWakes, (size_t) wakeCount, sizeof(ActivationWake), compareActivationWakes);
++    repeat(wakeCount, w) {
++        Instance* inst = activationWakes[w].inst;
+         if (!activationRegionOutside(runner, dataWin, inst, left, top, right, bottom)) Runner_setActiveState(runner, inst, true);
+     }
+-    // Only this call's own activations moved the version since the check above; they are skipped by their flag.
+-    ix->version = runner->activationVersion;
+     return true;
+ }
+ 
