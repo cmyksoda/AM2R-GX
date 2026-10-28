@@ -1,0 +1,169 @@
+Reason: the draw list is rebuilt whenever an instance is created or destroyed, which in a fight is most frames. Each
+rebuild pulled the room's tiles back out of the old list, re-read every tile's depth and checked their order, then
+merged the instances in by comparing them with every tile. In rm_a3h04 (4,787 tiles) that cost about 3.9 ms a rebuild
+on the real Wii, 3 ms of it tile work, while sand crumbling rebuilt the list on a quarter of all frames. The sorted
+tile run is now kept between rebuilds while the room, its tile array, its tile count and a tile-order version (moved
+by every tile builtin that changes a depth or which tiles there are, and by every room change) all hold; and each
+instance finds its place among the tiles by binary search, with the same comparisons, so the order is the same.
+Upstream: Speed only, every platform. Retires this patch when merged.
+
+--- a/src/runner.h
++++ b/src/runner.h
+@@ -699,6 +699,8 @@
+     uint32_t collisionQueryCounter;
+     // Moves whenever an instance turns active or inactive or the instance list changes (instance_activate_region's index).
+     uint32_t activationVersion;
++    // Moves whenever a room's tiles change their depth or which tiles there are (the draw list keeps its tile run).
++    uint32_t tileOrderVersion;
+     int32_t pendingRoom;  // -1 = none
+     bool gameStartFired;
+     int frameCount;
+--- a/src/runner.c
++++ b/src/runner.c
+@@ -828,19 +828,30 @@
+ // GMS1 rooms hold many more tiles than instances. A tile run from the last rebuild that is still sorted at the room's
+ // current depths, and has every tile once, is reused as is; only the rest is sorted, then the two runs are merged.
+ static Drawable* drawableTileRun = nullptr;
++// The room, array, length and tile-order version the tile run was last built for: while all four hold, no tile has
++// changed depth or come or gone, and the run is still the room's tiles in sorted order.
++static Room* tileRunRoom;
++static RoomTile* tileRunTiles;
++static uint32_t tileRunCount, tileRunVersion;
++static bool tileRunKnown;
++
++static bool tileRunCurrent(Runner* runner, Room* room) {
++    return tileRunKnown && tileRunRoom == room && tileRunTiles == room->tiles && tileRunCount == room->tileCount &&
++           tileRunVersion == runner->tileOrderVersion && (int32_t) arrlen(drawableTileRun) == (int32_t) room->tileCount;
++}
+ 
+-static void mergeTilesIntoDrawables(Runner* runner, Room* room) {
++static void mergeTilesIntoDrawables(Runner* runner, Room* room, bool tilesKept) {
+     static Drawable* rest = nullptr;
+     Drawable* oldTiles;
+     int32_t tileCount = (int32_t) room->tileCount;
+-    bool reuse = (int32_t) arrlen(drawableTileRun) == tileCount;
++    bool reuse = tilesKept || (int32_t) arrlen(drawableTileRun) == tileCount;
+ 
+     oldTiles = drawableTileRun;
+-    for (int32_t i = 0; reuse && tileCount > i; i++) {
++    for (int32_t i = 0; reuse && !tilesKept && tileCount > i; i++) {
+         if (0 > oldTiles[i].tileIndex || oldTiles[i].tileIndex >= tileCount) reuse = false;
+         else oldTiles[i].depth = room->tiles[oldTiles[i].tileIndex].tileDepth;
+     }
+-    if (reuse) reuse = isDrawableArraySorted(oldTiles, tileCount);
++    if (reuse && !tilesKept) reuse = isDrawableArraySorted(oldTiles, tileCount);
+     if (!reuse) {
+         arrsetlen(drawableTileRun, 0);
+         repeat(tileCount, i) {
+@@ -854,6 +865,11 @@
+         oldTiles = drawableTileRun;
+         if (tileCount > 1) qsort(oldTiles, (size_t) tileCount, sizeof(Drawable), compareDrawables);
+     }
++    tileRunRoom = room;
++    tileRunTiles = room->tiles;
++    tileRunCount = room->tileCount;
++    tileRunVersion = runner->tileOrderVersion;
++    tileRunKnown = true;
+ 
+     int32_t restCount = (int32_t) arrlen(runner->cachedDrawables);
+     arrsetlen(rest, 0);
+@@ -863,12 +879,24 @@
+         if (restCount > 1) qsort(rest, (size_t) restCount, sizeof(Drawable), compareDrawables);
+     }
+ 
++    // Each entry takes its place by binary search over the tiles left: the same comparisons the step-by-step merge
++    // made, so the same order, without comparing every tile.
+     arrsetlen(runner->cachedDrawables, (size_t) (restCount + tileCount));
+-    int32_t a = 0, b = 0, out = 0;
+-    while (restCount > a || tileCount > b) {
+-        bool takeTile = restCount <= a || (tileCount > b && compareDrawables(&oldTiles[b], &rest[a]) < 0);
+-        runner->cachedDrawables[out++] = takeTile ? oldTiles[b++] : rest[a++];
++    Drawable* merged = runner->cachedDrawables;
++    int32_t b = 0, out = 0;
++    repeat(restCount, a) {
++        int32_t lo = b, hi = tileCount;
++        while (hi > lo) {
++            int32_t mid = lo + (hi - lo) / 2;
++            if (compareDrawables(&oldTiles[mid], &rest[a]) < 0) lo = mid + 1;
++            else hi = mid;
++        }
++        if (lo > b) memcpy(&merged[out], &oldTiles[b], (size_t) (lo - b) * sizeof(Drawable));
++        out += lo - b;
++        b = lo;
++        merged[out++] = rest[a];
+     }
++    if (tileCount > b) memcpy(&merged[out], &oldTiles[b], (size_t) (tileCount - b) * sizeof(Drawable));
+ }
+ 
+ // Rebuilds runner->cachedDrawables when invalidated. Two-tier strategy:
+@@ -878,8 +906,9 @@
+     if (runner->drawableListStructureDirty || runner->drawableListSortDirty) runner->drawableListVersion++;
+     if (runner->drawableListStructureDirty) {
+         bool gms1 = !DataWin_isVersionAtLeast(runner->dataWin, 2, 0, 0, 0);
+-        arrsetlen(drawableTileRun, 0);
+-        if (gms1) {
++        bool tilesKept = gms1 && runner->currentRoom != nullptr && tileRunCurrent(runner, runner->currentRoom);
++        if (!tilesKept) arrsetlen(drawableTileRun, 0);
++        if (gms1 && !tilesKept) {
+             repeat(arrlen(runner->cachedDrawables), i) {
+                 if (runner->cachedDrawables[i].type == DRAWABLE_TILE) arrput(drawableTileRun, runner->cachedDrawables[i]);
+             }
+@@ -932,7 +961,7 @@
+         }
+ 
+         if (gms1) {
+-            mergeTilesIntoDrawables(runner, room);
++            mergeTilesIntoDrawables(runner, room, tilesKept);
+         } else {
+             int32_t count = (int32_t) arrlen(runner->cachedDrawables);
+             if (count > 1) {
+@@ -1633,6 +1662,7 @@
+     Room* previousRoom = runner->currentRoom;
+ 
+     runner->currentRoom = room;
++    runner->tileOrderVersion++;
+     runner->currentRoomIndex = roomIndex;
+     runner->viewsEnabled = (room->flags & 1) != 0;
+     // Tile set, runtime layers, and instance list all change when entering a room.
+--- a/src/vm_builtins.c
++++ b/src/vm_builtins.c
+@@ -14703,6 +14703,7 @@
+     tile->color = 0xFFFFFFFFu;
+     tile->alpha = 1.0f;
+     room->tileCount = newCount;
++    runner->tileOrderVersion++;
+     if (indexCurrent) {
+         if (hmgeti(tileIndexById, newId) >= 0) tileIndexRepeats = true;
+         else hmput(tileIndexById, newId, (int32_t) (newCount - 1));
+@@ -14758,6 +14759,7 @@
+         if (tile->tileDepth != depth) continue;
+         tile->tileDepth = newdepth;
+         runner->drawableListSortDirty = true;
++        runner->tileOrderVersion++;
+     }
+     return RValue_makeUndefined();
+ }
+@@ -14776,6 +14778,7 @@
+         write++;
+     }
+     room->tileCount = write;
++    runner->tileOrderVersion++;
+     tileIndexStale = true;
+     if (removedAny) runner->drawableListStructureDirty = true;
+     return RValue_makeUndefined();
+@@ -14805,6 +14808,7 @@
+         write++;
+     }
+     room->tileCount = write;
++    runner->tileOrderVersion++;
+     tileIndexStale = true;
+     if (removedAny) runner->drawableListStructureDirty = true;
+     return RValue_makeUndefined();
+@@ -14822,6 +14826,7 @@
+         uint32_t tailLen = room->tileCount - (uint32_t) i - 1;
+         if (tailLen > 0) memmove(&room->tiles[i], &room->tiles[i + 1], tailLen * sizeof(RoomTile));
+         room->tileCount--;
++        runner->tileOrderVersion++;
+         if (indexCurrent) {
+             (void) hmdel(tileIndexById, id);
+             for (uint32_t j = (uint32_t) i; room->tileCount > j; j++) hmput(tileIndexById, room->tiles[j].instanceID, (int32_t) j);
