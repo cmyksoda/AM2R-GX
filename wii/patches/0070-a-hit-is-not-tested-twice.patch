@@ -1,0 +1,118 @@
+Reason: when firstCollisionHit (patches 0056, 0067) finds the first instance self hits, the sorted walk starts at that
+instance and ran all of the pair's tests on it again, nothing having run in between: for precise sprites that is a
+second pixel scan of the same overlap, once per collision fired (in the mine chain ~66 a frame, 3.2 → 2.1 ms of pair
+tests on the Wii). The walk now skips the tests for that one instance; every later instance is tested as before.
+Upstream: Speed only, every platform. Retires this patch when merged.
+
+--- a/src/runner.c
++++ b/src/runner.c
+@@ -3910,62 +3910,69 @@
+                 sortCollisionTargets(runner, targetObjIndex, runner->instanceSnapshots + snapBase, snapEnd - snapBase);
+ 
+                 // Everything before the first hit misses, and a miss changes nothing.
+-                int32_t snapIdx = snapBase;
++                int32_t snapIdx = snapBase, knownHit = -1;
+                 if (first != nullptr) {
+                     while (snapEnd > snapIdx && runner->instanceSnapshots[snapIdx] != first) snapIdx++;
+                     if (snapIdx == snapEnd) snapIdx = snapBase;
++                    else knownHit = snapIdx;
+                 }
+                 for (; snapEnd > snapIdx; snapIdx++) {
+                     Instance* other = runner->instanceSnapshots[snapIdx];
+-                    if (!other->active) continue;
+-                    if (other == self) continue;
+-
+-                    if (mostSpecificCollisionTarget(runner, self, other) != targetObjIndex)
+-                        continue;
+-
+-                    // Compute bboxes
+-                    if (selfDirty) {
+-                        bboxSelf = Collision_computeBBox(runner, self);
+-                        sprSelf = Collision_getSprite(dataWin, self);
+-                        selfDirty = false;
+-                    }
+-                    InstanceBBox bboxOther = Collision_computeBBox(runner, other);
+-
+ #ifdef ENABLE_VM_TRACING
+                     bool traceThisPair = shouldTraceCollisionPair(runner->vmContext, dataWin, self, other);
+-                    if (traceThisPair && (!bboxSelf.valid || !bboxOther.valid)) {
+-                        logInfo("Collision: [%s id=%d] vs [%s id=%d] bbox-invalid (selfValid=%d otherValid=%d)\n",
+-                            dataWin->objt.objects[self->objectIndex].name, self->instanceId,
+-                            dataWin->objt.objects[other->objectIndex].name, other->instanceId,
+-                            bboxSelf.valid, bboxOther.valid);
+-                    }
+ #endif
+-                    if (!bboxSelf.valid || !bboxOther.valid) continue;
++                    // firstCollisionHit ran these same tests on the first hit, and nothing has run since: only the pixel
++                    // test is costly, and it would run twice per hit.
++                    if (snapIdx != knownHit) {
++                        if (!other->active) continue;
++                        if (other == self) continue;
++
++                        if (mostSpecificCollisionTarget(runner, self, other) != targetObjIndex)
++                            continue;
++
++                        // Compute bboxes
++                        if (selfDirty) {
++                            bboxSelf = Collision_computeBBox(runner, self);
++                            sprSelf = Collision_getSprite(dataWin, self);
++                            selfDirty = false;
++                        }
++                        InstanceBBox bboxOther = Collision_computeBBox(runner, other);
+ 
+-                    // AABB overlap test
+-                    bool aabbMiss = bboxSelf.left >= bboxOther.right || bboxOther.left >= bboxSelf.right || bboxSelf.top >= bboxOther.bottom || bboxOther.top >= bboxSelf.bottom;
+ #ifdef ENABLE_VM_TRACING
+-                    if (traceThisPair) {
+-                        logInfo("Collision: [%s id=%d pos=(%g,%g)] vs [%s id=%d pos=(%g,%g)] selfBB=(%g,%g,%g,%g %gx%g) otherBB=(%g,%g,%g,%g %gx%g) selfSolid=%d otherSolid=%d AABB=%s\n",
+-                            dataWin->objt.objects[self->objectIndex].name, self->instanceId, self->x, self->y,
+-                            dataWin->objt.objects[other->objectIndex].name, other->instanceId, other->x, other->y,
+-                            bboxSelf.left, bboxSelf.top, bboxSelf.right, bboxSelf.bottom, bboxSelf.right - bboxSelf.left, bboxSelf.bottom - bboxSelf.top,
+-                            bboxOther.left, bboxOther.top, bboxOther.right, bboxOther.bottom, bboxOther.right - bboxOther.left, bboxOther.bottom - bboxOther.top,
+-                            self->solid, other->solid, aabbMiss ? "miss" : "overlap");
+-                    }
++                        if (traceThisPair && (!bboxSelf.valid || !bboxOther.valid)) {
++                            logInfo("Collision: [%s id=%d] vs [%s id=%d] bbox-invalid (selfValid=%d otherValid=%d)\n",
++                                dataWin->objt.objects[self->objectIndex].name, self->instanceId,
++                                dataWin->objt.objects[other->objectIndex].name, other->instanceId,
++                                bboxSelf.valid, bboxOther.valid);
++                        }
++#endif
++                        if (!bboxSelf.valid || !bboxOther.valid) continue;
++
++                        // AABB overlap test
++                        bool aabbMiss = bboxSelf.left >= bboxOther.right || bboxOther.left >= bboxSelf.right || bboxSelf.top >= bboxOther.bottom || bboxOther.top >= bboxSelf.bottom;
++#ifdef ENABLE_VM_TRACING
++                        if (traceThisPair) {
++                            logInfo("Collision: [%s id=%d pos=(%g,%g)] vs [%s id=%d pos=(%g,%g)] selfBB=(%g,%g,%g,%g %gx%g) otherBB=(%g,%g,%g,%g %gx%g) selfSolid=%d otherSolid=%d AABB=%s\n",
++                                dataWin->objt.objects[self->objectIndex].name, self->instanceId, self->x, self->y,
++                                dataWin->objt.objects[other->objectIndex].name, other->instanceId, other->x, other->y,
++                                bboxSelf.left, bboxSelf.top, bboxSelf.right, bboxSelf.bottom, bboxSelf.right - bboxSelf.left, bboxSelf.bottom - bboxSelf.top,
++                                bboxOther.left, bboxOther.top, bboxOther.right, bboxOther.bottom, bboxOther.right - bboxOther.left, bboxOther.bottom - bboxOther.top,
++                                self->solid, other->solid, aabbMiss ? "miss" : "overlap");
++                        }
+ #endif
+-                    if (aabbMiss) continue;
++                        if (aabbMiss) continue;
+ 
+-                    // Precise collision check if either sprite needs it (per-pixel for sepMasks==1, OBB SAT for rotated sepMasks==2).
+-                    Sprite* sprOther = Collision_getSprite(dataWin, other);
+-                    bool needsPrecise = (sprSelf != nullptr && sprSelf->sepMasks == 1) || (sprOther != nullptr && sprOther->sepMasks == 1) || Collision_obbNeedsSAT(sprSelf, self) || Collision_obbNeedsSAT(sprOther, other);
++                        // Precise collision check if either sprite needs it (per-pixel for sepMasks==1, OBB SAT for rotated sepMasks==2).
++                        Sprite* sprOther = Collision_getSprite(dataWin, other);
++                        bool needsPrecise = (sprSelf != nullptr && sprSelf->sepMasks == 1) || (sprOther != nullptr && sprOther->sepMasks == 1) || Collision_obbNeedsSAT(sprSelf, self) || Collision_obbNeedsSAT(sprOther, other);
+ 
+-                    if (needsPrecise) {
+-                        bool preciseHit = Collision_instancesOverlapPrecise(runner, self, other, bboxSelf, bboxOther);
++                        if (needsPrecise) {
++                            bool preciseHit = Collision_instancesOverlapPrecise(runner, self, other, bboxSelf, bboxOther);
+ #ifdef ENABLE_VM_TRACING
+-                        if (traceThisPair) logInfo("  precise=%s (selfSepMasks=%d otherSepMasks=%d)\n", preciseHit ? "hit" : "miss", sprSelf ? (int32_t)sprSelf->sepMasks : -1, sprOther ? (int32_t)sprOther->sepMasks : -1);
++                            if (traceThisPair) logInfo("  precise=%s (selfSepMasks=%d otherSepMasks=%d)\n", preciseHit ? "hit" : "miss", sprSelf ? (int32_t)sprSelf->sepMasks : -1, sprOther ? (int32_t)sprOther->sepMasks : -1);
+ #endif
+-                        if (!preciseHit) continue;
++                            if (!preciseHit) continue;
++                        }
+                     }
+ 
+                     // Collision detected! If either instance is solid, restore both to xprevious/yprevious.
