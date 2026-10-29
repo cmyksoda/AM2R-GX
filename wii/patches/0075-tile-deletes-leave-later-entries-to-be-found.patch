@@ -1,0 +1,61 @@
+Reason: tile_delete kept the id index current (patch 0063) by writing a new position for every tile after the deleted
+one, ~4,800 hash writes when an early tile goes. A delete only moves the tiles after it one place down, and tile_add
+only appends, so an entry at or past the lowest delete position is now left as it is, at most as many places too high
+as there were deletes since; a lookup searches that short window downward and corrects the entry. After 64 deletes the
+tail is rewritten once. Lookups give the same index as before.
+Upstream: Speed only, every platform. Retires this patch when merged.
+
+--- a/src/vm_builtins.c
++++ b/src/vm_builtins.c
+@@ -14692,6 +14692,10 @@
+ static RoomTile* tileIndexTiles;
+ static uint32_t tileIndexCount;
+ static bool tileIndexStale = true, tileIndexRepeats;
++// Deletes since the index was last exact past position tileIndexSettledBelow: a delete only moves the tiles after it one
++// place down, and adds go at the end, so an entry at or past that position is at most tileIndexShift places too high.
++static uint32_t tileIndexShift, tileIndexSettledBelow = UINT32_MAX;
++#define TILE_INDEX_MAX_SHIFT 64
+ 
+ static void buildTileIndex(Room* room) {
+     hmfree(tileIndexById);
+@@ -14704,6 +14708,8 @@
+     tileIndexTiles = room->tiles;
+     tileIndexCount = room->tileCount;
+     tileIndexStale = false;
++    tileIndexShift = 0;
++    tileIndexSettledBelow = UINT32_MAX;
+ }
+ 
+ void VMBuiltins_tileIndexForget(void) {
+@@ -14722,6 +14728,15 @@
+         ptrdiff_t k = hmgeti(tileIndexById, id);
+         if (k >= 0 && (uint32_t) tileIndexById[k].value < room->tileCount &&
+             room->tiles[tileIndexById[k].value].instanceID == id) return tileIndexById[k].value;
++        if (k >= 0 && tileIndexShift > 0 && (uint32_t) tileIndexById[k].value >= tileIndexSettledBelow) {
++            int32_t stored = tileIndexById[k].value, low = stored - (int32_t) tileIndexShift;
++            if ((int32_t) tileIndexSettledBelow > low) low = (int32_t) tileIndexSettledBelow;
++            for (int32_t i = stored < (int32_t) room->tileCount ? stored : (int32_t) room->tileCount - 1; i >= low; i--) {
++                if (room->tiles[i].instanceID != id) continue;
++                tileIndexById[k].value = i;
++                return i;
++            }
++        }
+         // tile_add and tile_delete keep the index current, so an id it lacks isn't in the room: crumbling sand asks
+         // after tiles it has just deleted, and each such miss walked all ~4,800 of rm_a3h04's tiles.
+         if (k < 0) return -1;
+@@ -14897,8 +14912,14 @@
+         room->tileCount--;
+         runner->tileOrderVersion++;
+         if (indexCurrent) {
++            // The tiles after it are found from their old place (see tileIndexShift); a long run of deletes settles them.
+             (void) hmdel(tileIndexById, id);
+-            for (uint32_t j = (uint32_t) i; room->tileCount > j; j++) hmput(tileIndexById, room->tiles[j].instanceID, (int32_t) j);
++            if ((uint32_t) i < tileIndexSettledBelow) tileIndexSettledBelow = (uint32_t) i;
++            if (++tileIndexShift > TILE_INDEX_MAX_SHIFT) {
++                for (uint32_t j = tileIndexSettledBelow; room->tileCount > j; j++) hmput(tileIndexById, room->tiles[j].instanceID, (int32_t) j);
++                tileIndexShift = 0;
++                tileIndexSettledBelow = UINT32_MAX;
++            }
+             tileIndexCount = room->tileCount;
+         } else {
+             tileIndexStale = true;
