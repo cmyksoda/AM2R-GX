@@ -1,0 +1,146 @@
+Reason: SpatialGrid_syncGrid took each moved instance out of its old cells one at a time, searching and shifting
+each cell once per mover; a mine chain's projectiles crowd the same cells (~1,150 movers a frame at its peak). The
+movers' old cells are now each compacted once, a cell entry being dropped when it is a mover and the cell is one of
+that mover's old cells (the cells the one-at-a-time removal looked in); movers are found by address in a hash table,
+so no instance memory is read per cell entry. Movers are then appended in the same order as before, so every cell
+and every instance's cell list ends up exactly as the one-at-a-time sync left them.
+Upstream: Speed only, every platform. Retires this patch when merged.
+
+--- a/src/spatial_grid.c
++++ b/src/spatial_grid.c
+@@ -88,15 +88,69 @@
+     }
+ }
+ 
++// One mover of a sync: its old cells as cell indices (the first few kept inline), and where its box lands.
++typedef struct {
++    Instance* inst;
++    int32_t oldCount;
++    int32_t oldCells[4];
++    InstanceBBox box;
++} SyncMover;
++
++static uint32_t hashMover(Instance* inst, uint32_t mask) {
++    return (uint32_t) (((uintptr_t) inst >> 4) * 2654435761u) & mask;
++}
++
++// Whether the mover in moverSlots owns an entry in cellIndex: true when the cell is one of its old cells, the cells
++// one-at-a-time removal would have looked in.
++static bool moverLeavesCell(SpatialGrid* grid, SyncMover* movers, int32_t* moverSlots, uint32_t mask, Instance* inst, int32_t cellIndex) {
++    for (uint32_t h = hashMover(inst, mask); moverSlots[h] >= 0; h = (h + 1) & mask) {
++        SyncMover* m = &movers[moverSlots[h]];
++        if (m->inst != inst) continue;
++        if (4 >= m->oldCount) {
++            repeat(m->oldCount, c) if (m->oldCells[c] == cellIndex) return true;
++            return false;
++        }
++        repeat(arrlen(inst->collisionCells), c) {
++            uint32_t g = inst->collisionCells[c];
++            if (SpatialGrid_cellIndex(grid, SpatialGrid_unpackGridX(g), SpatialGrid_unpackGridY(g)) == cellIndex) return true;
++        }
++        return false;
++    }
++    return false;
++}
++
+ void SpatialGrid_syncGrid(Runner* runner, SpatialGrid* grid) {
+-    bool requiresResync = arrlen(grid->dirtyInstances);
+-    if (!requiresResync) return;
++    int32_t dirtyCount = (int32_t) arrlen(grid->dirtyInstances);
++    if (dirtyCount == 0) return;
+ 
+ #ifdef ENABLE_SPATIAL_GRID_LOGS
+-    logInfo("SpatialGrid: Syncing grid with %d dirty instances\n", arrlen(grid->dirtyInstances));
++    logInfo("SpatialGrid: Syncing grid with %d dirty instances\n", dirtyCount);
+ #endif
+ 
+-    repeat(arrlen(grid->dirtyInstances), i) {
++    // Movers leave each old cell in one pass over it: a mine's projectiles crowd the same cells, and taking them out one
++    // at a time searched and shifted a crowded cell once per projectile. Cells end in the same order as one at a time:
++    // the others in their old order, then the movers in list order. The pass looks movers up by address, never in
++    // instance memory.
++    static SyncMover* movers = nullptr;
++    static int32_t* moverSlots = nullptr;
++    static int32_t* touched = nullptr;
++    static uint32_t* cellStamp = nullptr;
++    static int32_t cellStampCount = 0;
++    static uint32_t stamp = 0;
++    int32_t totalCells = (int32_t) grid->gridWidth * (int32_t) grid->gridHeight;
++    if (totalCells > cellStampCount) {
++        cellStamp = (uint32_t*) safeRealloc(cellStamp, (size_t) totalCells * sizeof(uint32_t));
++        memset(&cellStamp[cellStampCount], 0, (size_t) (totalCells - cellStampCount) * sizeof(uint32_t));
++        cellStampCount = totalCells;
++    }
++    if (++stamp == 0) {
++        memset(cellStamp, 0, (size_t) cellStampCount * sizeof(uint32_t));
++        stamp = 1;
++    }
++    arrsetlen(movers, 0);
++    arrsetlen(touched, 0);
++
++    repeat(dirtyCount, i) {
+         int32_t instanceId = grid->dirtyInstances[i];
+         Instance* instance = hmget(runner->instancesById, instanceId);
+ 
+@@ -111,14 +165,49 @@
+         }
+ 
+         instance->spatialGridDirty = false;
++        SyncMover m = { .inst = instance, .oldCount = 0, .box = Collision_computeBBox(runner, instance) };
++        repeat(arrlen(instance->collisionCells), c) {
++            uint32_t g = instance->collisionCells[c];
++            int32_t cellIndex = SpatialGrid_cellIndex(grid, SpatialGrid_unpackGridX(g), SpatialGrid_unpackGridY(g));
++            if (0 > cellIndex || cellIndex >= totalCells) continue;
++            if (4 > m.oldCount) m.oldCells[m.oldCount] = cellIndex;
++            m.oldCount++;
++            if (cellStamp[cellIndex] != stamp) {
++                cellStamp[cellIndex] = stamp;
++                arrput(touched, cellIndex);
++            }
++        }
++        arrput(movers, m);
++    }
+ 
+-        // Remove from old cells
+-        SpatialGrid_removeInstance(grid, instance);
++    int32_t moverCount = (int32_t) arrlen(movers);
++    uint32_t slotCount = 16;
++    while (slotCount < (uint32_t) moverCount * 2) slotCount *= 2;
++    arrsetlen(moverSlots, slotCount);
++    memset(moverSlots, 0xff, slotCount * sizeof(int32_t));
++    repeat(moverCount, m) {
++        uint32_t h = hashMover(movers[m].inst, slotCount - 1);
++        while (moverSlots[h] >= 0) h = (h + 1) & (slotCount - 1);
++        moverSlots[h] = m;
++    }
+ 
+-        InstanceBBox bbox = Collision_computeBBox(runner, instance);
++    // Remove from old cells
++    repeat(arrlen(touched), t) {
++        int32_t cellIndex = touched[t];
++        Instance** cell = grid->grid[cellIndex];
++        int32_t cellLen = (int32_t) arrlen(cell), kept = 0;
++        repeat(cellLen, j) {
++            if (moverLeavesCell(grid, movers, moverSlots, slotCount - 1, cell[j], cellIndex)) continue;
++            cell[kept++] = cell[j];
++        }
++        arrsetlen(grid->grid[cellIndex], kept);
++    }
+ 
++    repeat(moverCount, m) {
++        Instance* instance = movers[m].inst;
+         arrsetlen(instance->collisionCells, 0);
+ 
++        InstanceBBox bbox = movers[m].box;
+         if (!bbox.valid)
+             continue;
+ 
+@@ -130,8 +219,6 @@
+                 arrput(instance->collisionCells, SpatialGrid_packGridCoordinates(gx, gy));
+             }
+         }
+-
+-        // And that's it for now!
+     }
+ 
+     arrsetlen(grid->dirtyInstances, 0);
