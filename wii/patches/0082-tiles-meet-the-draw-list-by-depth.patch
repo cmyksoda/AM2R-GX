@@ -1,0 +1,204 @@
+Reason: in a GameMaker 1 room the draw list is the instances merged into the room's tiles, and every rebuild of it (any
+instance created or destroyed: most frames in rm_a3h04, with ~750 instances and ~4,800 tiles) placed each instance by
+binary search over the tiles before writing the tiles out, and then the tile-skip map and the draw events walked the
+whole list once more: on the console ~1.9 ms of rebuild plus ~0.7 ms of walks a frame. A tile sorts before an
+instance or particle system exactly when its depth is at least theirs, so one pass over the tile run writes the tiles
+and puts each other entry in as soon as the next tile is below its depth; the instances sort on keys worked out once;
+and the pass keeps the positions of the entries that are not tiles, from which the tile-skip query and the draw events
+find their places. The list is the same.
+Upstream: Speed only, every platform. Retires this patch when merged.
+
+--- a/src/runner.c
++++ b/src/runner.c
+@@ -780,6 +780,18 @@ static int compareDrawables(const void* a, const void* b) {
+     return compareDrawKeys(&drawKeyA, &drawKeyB);
+ }
+ 
++// The positions of the draw list's entries that are not tiles, in order, as the last merge wrote them: valid while the
++// list's version and length hold. Draw events and the tile-skip grid find their places from it instead of walking every
++// tile of the list.
++static int32_t* drawListNonTiles;
++static uint32_t drawListNonTilesVersion;
++static int32_t drawListNonTilesListCount = -1;
++
++static bool drawListNonTilesCurrent(Runner* runner) {
++    return drawListNonTilesVersion == runner->drawableListVersion &&
++           drawListNonTilesListCount == (int32_t) arrlen(runner->cachedDrawables);
++}
++
+ static void fireDrawSubtype(Runner* runner, Drawable* drawables, int32_t drawableCount, int32_t subtype) {
+     int32_t slot = EventSlotMap_lookup(&runner->eventSlotMap, EVENT_DRAW, subtype);
+     if (slot == -1) return;
+@@ -789,8 +801,14 @@ static void fireDrawSubtype(Runner* runner, Drawable* drawables, int32_t drawabl
+                    runner->drawableInstanceSlotsVersion == runner->drawableListVersion;
+     if (!current) {
+         arrsetlen(runner->drawableInstanceSlots, 0);
+-        repeat(drawableCount, i) {
+-            if (drawables[i].type == DRAWABLE_INSTANCE) arrput(runner->drawableInstanceSlots, (int32_t) i);
++        if (drawables == runner->cachedDrawables && drawListNonTilesCurrent(runner)) {
++            repeat(arrlen(drawListNonTiles), k) {
++                if (drawables[drawListNonTiles[k]].type == DRAWABLE_INSTANCE) arrput(runner->drawableInstanceSlots, drawListNonTiles[k]);
++            }
++        } else {
++            repeat(drawableCount, i) {
++                if (drawables[i].type == DRAWABLE_INSTANCE) arrput(runner->drawableInstanceSlots, (int32_t) i);
++            }
+         }
+         runner->drawableInstanceSlotsCount = drawableCount;
+         runner->drawableInstanceSlotsVersion = drawables == runner->cachedDrawables ? runner->drawableListVersion
+@@ -1077,38 +1095,18 @@ static bool sortTilesByDepth(Room* room, Drawable* out, int32_t tileCount) {
+     return true;
+ }
+ 
+-// Writes run entries [from, to) to out: live tiles only, with array indices, and each pseudo index's rank among the live
+-// tiles into tileRunRankOf (-1 for dead ones). Pseudo indices rise within a depth, so the gone pointer restarts at each.
++// The rest of the list sorts on keys worked out once, not on each comparison.
+ typedef struct {
+-    int32_t rank, goneAt, depth;
+-    bool started;
+-} TileRunEmit;
++    DrawKey key;
++    Drawable d;
++} KeyedDrawable;
+ 
+-static int32_t tileRunEmit(Drawable* out, int32_t from, int32_t to, TileRunEmit* state) {
+-    int32_t written = 0, gone = (int32_t) arrlen(tileRunGone);
+-    for (int32_t k = from; to > k; k++) {
+-        Drawable* d = &drawableTileRun[k];
+-        int32_t pseudo = d->tileIndex;
+-        if (!state->started || d->depth != state->depth) {
+-            state->started = true;
+-            state->depth = d->depth;
+-            state->goneAt = 0;
+-        }
+-        if (tileRunDead[k]) {
+-            tileRunRankOf[pseudo] = -1;
+-            continue;
+-        }
+-        while (gone > state->goneAt && pseudo > tileRunGone[state->goneAt]) state->goneAt++;
+-        out[written] = *d;
+-        out[written].tileIndex = pseudo - state->goneAt;
+-        written++;
+-        tileRunRankOf[pseudo] = state->rank++;
+-    }
+-    return written;
++static int compareKeyedDrawables(const void* a, const void* b) {
++    return compareDrawKeys(&((const KeyedDrawable*) a)->key, &((const KeyedDrawable*) b)->key);
+ }
+ 
+ static void mergeTilesIntoDrawables(Runner* runner, Room* room, bool tilesKept) {
+-    static Drawable* rest = nullptr;
++    static KeyedDrawable* rest = nullptr;
+     Drawable* oldTiles;
+     int32_t tileCount = (int32_t) room->tileCount;
+     bool reuse = tilesKept || (int32_t) arrlen(drawableTileRun) == tileCount;
+@@ -1138,34 +1136,45 @@ static void mergeTilesIntoDrawables(Runner* runner, Room* room, bool tilesKept)
+     tileRunRecord(runner, room);
+     int32_t runLength = (int32_t) arrlen(drawableTileRun);
+     arrsetlen(tileRunRankOf, tileRunNextPseudo);
+-    TileRunEmit emit;
+-    memset(&emit, 0, sizeof emit);
+ 
+     int32_t restCount = (int32_t) arrlen(runner->cachedDrawables);
+-    arrsetlen(rest, 0);
+-    if (restCount > 0) {
+-        arrsetlen(rest, (size_t) restCount);
+-        memcpy(rest, runner->cachedDrawables, (size_t) restCount * sizeof(Drawable));
+-        if (restCount > 1) qsort(rest, (size_t) restCount, sizeof(Drawable), compareDrawables);
+-    }
+-
+-    // Each entry takes its place by binary search over the tiles left: the same comparisons the step-by-step merge
+-    // made, so the same order, without comparing every tile.
+-    arrsetlen(runner->cachedDrawables, (size_t) (restCount + tileCount));
++    arrsetlen(rest, (size_t) restCount);
++    repeat(restCount, i) {
++        rest[i].d = runner->cachedDrawables[i];
++        rest[i].key = drawableKey(&rest[i].d);
++    }
++    if (restCount > 1) qsort(rest, (size_t) restCount, sizeof(KeyedDrawable), compareKeyedDrawables);
++
++    // One pass over the run writes the live tiles with their array indices and each pseudo index's rank among them
++    // (-1 for dead ones). A tile sorts before an instance or particle system exactly when its depth is at least theirs
++    // (tiles come first at equal depth), so each of those goes in as soon as the next tile is below its depth. Pseudo
++    // indices rise within a depth, so the gone pointer restarts at each.
++    arrsetlen(runner->cachedDrawables, (size_t) (restCount + runLength));
++    arrsetlen(drawListNonTiles, (size_t) restCount);
+     Drawable* merged = runner->cachedDrawables;
+-    int32_t b = 0, out = 0;
+-    repeat(restCount, a) {
+-        int32_t lo = b, hi = runLength;
+-        while (hi > lo) {
+-            int32_t mid = lo + (hi - lo) / 2;
+-            if (compareDrawables(&oldTiles[mid], &rest[a]) < 0) lo = mid + 1;
+-            else hi = mid;
++    int32_t k = 0, a = 0, out = 0, rank = 0, goneAt = 0, gone = (int32_t) arrlen(tileRunGone);
++    while (runLength > k || restCount > a) {
++        if (restCount > a && !(runLength > k && drawableTileRun[k].depth >= rest[a].d.depth)) {
++            drawListNonTiles[a] = out;
++            merged[out++] = rest[a++].d;
++            continue;
+         }
+-        out += tileRunEmit(&merged[out], b, lo, &emit);
+-        b = lo;
+-        merged[out++] = rest[a];
++        Drawable* d = &drawableTileRun[k];
++        int32_t pseudo = d->tileIndex;
++        if (k == 0 || d->depth != drawableTileRun[k - 1].depth) goneAt = 0;
++        k++;
++        if (tileRunDead[k - 1]) {
++            tileRunRankOf[pseudo] = -1;
++            continue;
++        }
++        while (gone > goneAt && pseudo > tileRunGone[goneAt]) goneAt++;
++        merged[out] = *d;
++        merged[out++].tileIndex = pseudo - goneAt;
++        tileRunRankOf[pseudo] = rank++;
+     }
+-    out += tileRunEmit(&merged[out], b, runLength, &emit);
++    arrsetlen(runner->cachedDrawables, (size_t) out);
++    drawListNonTilesVersion = runner->drawableListVersion;
++    drawListNonTilesListCount = out;
+ }
+ 
+ // Rebuilds runner->cachedDrawables when invalidated. Two-tier strategy:
+@@ -1247,6 +1256,8 @@ static void rebuildDrawableCacheIfDirty(Runner* runner) {
+         refreshDrawableDepths(runner, runner->cachedDrawables, count);
+         if (count > 1 && !isDrawableArraySorted(runner->cachedDrawables, count)) {
+             qsort(runner->cachedDrawables, count, sizeof(Drawable), compareDrawables);
++        } else if (drawListNonTilesVersion == runner->drawableListVersion - 1) {
++            drawListNonTilesVersion = runner->drawableListVersion;
+         }
+         runner->drawableListSortDirty = false;
+     }
+@@ -1578,11 +1589,26 @@ static int32_t tileSkipVisibleRun(Runner* runner, Room* room, int32_t pos, float
+         if (!tileSkipBuildGrid(runner, room)) return 0;
+         tileSkip.mapBuilt = false;
+     }
+-    if (!tileSkip.mapBuilt || tileSkip.listVersion != runner->drawableListVersion ||
+-        tileSkip.listCount != (int32_t) arrlen(runner->cachedDrawables))
+-        tileSkipBuildMap(runner);
+-    if (pos >= tileSkip.listCount || 0 > tileSkip.rankAt[pos]) return 0;
+-    int32_t end = tileSkip.segEndAt[pos], r0 = tileSkip.rankAt[pos], r1 = r0 + (end - pos);
++    int32_t listCount = (int32_t) arrlen(runner->cachedDrawables), end, r0;
++    if (pos >= listCount || runner->cachedDrawables[pos].type != DRAWABLE_TILE) return 0;
++    if (drawListNonTilesCurrent(runner)) {
++        // The tiles before pos are pos less the other entries before it, and its run of tiles ends at the next of those.
++        int32_t count = (int32_t) arrlen(drawListNonTiles), lo = 0, hi = count;
++        while (hi > lo) {
++            int32_t mid = lo + (hi - lo) / 2;
++            if (pos > drawListNonTiles[mid]) lo = mid + 1;
++            else hi = mid;
++        }
++        r0 = pos - lo;
++        end = count > lo ? drawListNonTiles[lo] : listCount;
++    } else {
++        if (!tileSkip.mapBuilt || tileSkip.listVersion != runner->drawableListVersion || tileSkip.listCount != listCount)
++            tileSkipBuildMap(runner);
++        if (0 > tileSkip.rankAt[pos]) return 0;
++        end = tileSkip.segEndAt[pos];
++        r0 = tileSkip.rankAt[pos];
++    }
++    int32_t r1 = r0 + (end - pos);
+     if (r1 > (int32_t) arrlen(tileSkip.seen)) return 0;
+     if (++tileSkip.stamp == 0) {
+         repeat(arrlen(tileSkip.seen), r) tileSkip.seen[r] = 0;
