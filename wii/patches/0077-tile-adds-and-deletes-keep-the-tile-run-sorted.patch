@@ -1,0 +1,141 @@
+Reason: every tile_add and tile_delete moves the tile-order version, so the next draw-list rebuild sorted all of the
+room's tiles again (patch 0076's buckets) instead of keeping its tile run: in rm_a3h04, where crumbling sand adds or
+deletes a tile on most frames, such a rebuild took 4.1 ms on the real Wii against 1.6 ms for one that keeps the run.
+tile_add and tile_delete now edit the run in place when it was current before the edit: the new tile (last in the
+array) goes after every tile of its depth, and a deleted tile leaves its place while every later array index moves
+down one. The run is then current at the new version and the rebuild keeps it. Other tile edits leave it to be built
+again, as before.
+Upstream: Speed only, every platform. Retires this patch when merged.
+
+--- a/src/runner.c
++++ b/src/runner.c
+@@ -848,6 +848,67 @@ static bool tileRunCurrent(Runner* runner, Room* room) {
+            tileRunVersion == runner->tileOrderVersion && (int32_t) arrlen(drawableTileRun) == (int32_t) room->tileCount;
+ }
+ 
++static void tileRunRecord(Runner* runner, Room* room) {
++    tileRunRoom = room;
++    tileRunTiles = room->tiles;
++    tileRunCount = room->tileCount;
++    tileRunVersion = runner->tileOrderVersion;
++    tileRunKnown = true;
++}
++
++#define TILE_EDIT_RUN 1u
++
++uint32_t Runner_tileEditBegin(Runner* runner, Room* room) {
++    return tileRunCurrent(runner, room) ? TILE_EDIT_RUN : 0;
++}
++
++// The run is in draw order (depth, higher first, then array index) and tile_add puts the new tile last in the array,
++// so it goes after every tile of its depth.
++void Runner_tileAdded(Runner* runner, Room* room, uint32_t held) {
++    if (!(held & TILE_EDIT_RUN)) return;
++    int32_t index = (int32_t) room->tileCount - 1, depth = room->tiles[index].tileDepth;
++    int32_t lo = 0, hi = (int32_t) arrlen(drawableTileRun);
++    while (hi > lo) {
++        int32_t mid = lo + (hi - lo) / 2;
++        if (drawableTileRun[mid].depth >= depth) lo = mid + 1;
++        else hi = mid;
++    }
++    Drawable d;
++    ZERO_STRUCT(d);
++    d.type = DRAWABLE_TILE;
++    d.depth = depth;
++    d.tileIndex = index;
++    arrins(drawableTileRun, lo, d);
++    tileRunRecord(runner, room);
++}
++
++// The place in the run of the tile at that depth and array index, or -1.
++static int32_t tileRunFind(int32_t depth, int32_t index) {
++    int32_t n = (int32_t) arrlen(drawableTileRun), lo = 0, hi = n;
++    while (hi > lo) {
++        int32_t mid = lo + (hi - lo) / 2;
++        Drawable* m = &drawableTileRun[mid];
++        if (m->depth > depth || (m->depth == depth && index > m->tileIndex)) lo = mid + 1;
++        else hi = mid;
++    }
++    return n > lo && drawableTileRun[lo].depth == depth && drawableTileRun[lo].tileIndex == index ? lo : -1;
++}
++
++// tile_delete moved every later tile of the array one place down.
++void Runner_tileDeleted(Runner* runner, Room* room, uint32_t held, int32_t index, const RoomTile* removed) {
++    if (!(held & TILE_EDIT_RUN)) return;
++    int32_t at = tileRunFind(removed->tileDepth, index), n = (int32_t) arrlen(drawableTileRun);
++    if (0 > at) {
++        tileRunKnown = false;
++        return;
++    }
++    arrdel(drawableTileRun, at);
++    repeat(n - 1, k) {
++        if (drawableTileRun[k].tileIndex > index) drawableTileRun[k].tileIndex--;
++    }
++    tileRunRecord(runner, room);
++}
++
+ // Tiles sort by depth, higher first, then by place in the room's array: a bucket per depth, filled in array order, is
+ // that order without comparing any two tiles. Crumbling sand adds or deletes a tile most frames, and sorting ~4,800
+ // tiles each time took ~10 ms of the Wii's frame. False (nothing written) when the room has more depths than buckets.
+@@ -925,11 +986,7 @@ static void mergeTilesIntoDrawables(Runner* runner, Room* room, bool tilesKept)
+             if (tileCount > 1) qsort(oldTiles, (size_t) tileCount, sizeof(Drawable), compareDrawables);
+         }
+     }
+-    tileRunRoom = room;
+-    tileRunTiles = room->tiles;
+-    tileRunCount = room->tileCount;
+-    tileRunVersion = runner->tileOrderVersion;
+-    tileRunKnown = true;
++    tileRunRecord(runner, room);
+ 
+     int32_t restCount = (int32_t) arrlen(runner->cachedDrawables);
+     arrsetlen(rest, 0);
+--- a/src/runner.h
++++ b/src/runner.h
+@@ -939,6 +939,11 @@ GMLCamera* Runner_getCameraById(Runner* runner, int32_t id);
+ GMLCamera* Runner_getCameraForView(Runner* runner, int32_t viewIndex);
+ void Runner_scrollBackgrounds(Runner* runner);
+ void Runner_drawTileLayer(Runner* runner, RoomLayerTilesData* data, float layerOffsetX, float layerOffsetY);
++// tile_add and tile_delete keep the draw list's sorted tile run current rather than leave it to be sorted again:
++// Runner_tileEditBegin before the edit, then the matching call once the room's tiles are updated.
++uint32_t Runner_tileEditBegin(Runner* runner, Room* room);
++void Runner_tileAdded(Runner* runner, Room* room, uint32_t held);
++void Runner_tileDeleted(Runner* runner, Room* room, uint32_t held, int32_t index, const RoomTile* removed);
+ // Allocates a fresh GML struct and registers it in instancesById and structInstances.
+ // refCount starts at 1 (the registry's implicit ref); callers that retain a reference must Instance_structIncRef.
+ Instance* Runner_createStruct(Runner* runner);
+--- a/src/vm_builtins.c
++++ b/src/vm_builtins.c
+@@ -14765,6 +14765,7 @@ static RValue builtin_tile_add(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_
+     uint32_t newId = runner->nextInstanceId++;
+     uint32_t newCount = room->tileCount + 1;
+     bool indexCurrent = tileIndexCurrent(room);
++    uint32_t held = Runner_tileEditBegin(runner, room);
+     if (newCount > room->tileCapacity) {
+         uint32_t capacity = room->tileCapacity > room->tileCount ? room->tileCapacity : room->tileCount;
+         capacity = 16 > capacity ? 16 : capacity + capacity / 2;
+@@ -14796,6 +14797,7 @@ static RValue builtin_tile_add(VMContext* ctx, RValue* args, MAYBE_UNUSED int32_
+     } else {
+         tileIndexStale = true;
+     }
++    Runner_tileAdded(runner, room, held);
+ 
+     runner->drawableListStructureDirty = true;
+     return RValue_makeReal((GMLReal) newId);
+@@ -14907,6 +14909,8 @@ static RValue builtin_tile_delete(VMContext* ctx, RValue* args, MAYBE_UNUSED int
+     int32_t i = findTileIndex(room, id);
+     if (i >= 0) {
+         bool indexCurrent = tileIndexCurrent(room) && !tileIndexRepeats;
++        uint32_t held = Runner_tileEditBegin(runner, room);
++        RoomTile removed = room->tiles[i];
+         uint32_t tailLen = room->tileCount - (uint32_t) i - 1;
+         if (tailLen > 0) memmove(&room->tiles[i], &room->tiles[i + 1], tailLen * sizeof(RoomTile));
+         room->tileCount--;
+@@ -14924,6 +14928,7 @@ static RValue builtin_tile_delete(VMContext* ctx, RValue* args, MAYBE_UNUSED int
+         } else {
+             tileIndexStale = true;
+         }
++        Runner_tileDeleted(runner, room, held, i, &removed);
+         runner->drawableListStructureDirty = true;
+         return RValue_makeUndefined();
+     }
