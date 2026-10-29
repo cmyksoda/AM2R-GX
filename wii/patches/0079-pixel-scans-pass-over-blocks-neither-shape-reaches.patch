@@ -1,0 +1,271 @@
+Reason: a precise collision test scanned the two boxes' whole overlap, sample by sample, until a hit. A power bomb's
+blast takes in walls stretched far past its disc and doors whose boxes reach 16 pixels past their sprites, and in
+rm_a5c22 those scans took 85% of the blast's samples: misses over door boxes (~640 samples each) and hits found
+thousands of samples into a long wall. The first row is still scanned as before (most hits are there); past it, in
+overlaps with 384 samples or more, the samples go in blocks of 4 by 4, and a block is passed over when its corner samples, put through the per-sample
+arithmetic, can only land outside a side's sprite or on 8 by 8 cells of its mask with no set pixel (rotation and scale
+keep every sample between its block's corners; the slack covers truncation onto pixel 0 and float rounding, and
+scales under 0.01 are always scanned). The whole overlap is checked the same way first. The answer is the same for
+every pair.
+Upstream: Speed only, every platform. Retires this patch when merged.
+
+--- a/src/collision.h
++++ b/src/collision.h
+@@ -511,6 +511,93 @@ static inline bool Collision_pointInInstance(Sprite* spr, Instance* inst, GMLRea
+     return Collision_pointInInstanceTurned(spr, inst, px, py, &turn);
+ }
+ 
++// One side of a pixel scan. A sample can only hit where it lands inside the sprite and, for a precise one, on a set
++// pixel of its mask: corner samples go through pointInInstanceTurned's arithmetic, and rotation and scale keep every
++// sample between them, so a block whose corners can't reach such pixels holds no hit.
++typedef struct {
++    Sprite* spr;
++    Instance* inst;
++    const CollisionTurn* turn;
++    double minScale;
++    int32_t box[4];
++    const uint8_t* cells;
++    int32_t cellsX;
++    bool usable, empty, blocks;
++} CollisionScanSide;
++
++static inline CollisionScanSide Collision_scanSide(Sprite* spr, Instance* inst, const CollisionTurn* turn) {
++    CollisionScanSide side;
++    memset(&side, 0, sizeof side);
++    side.spr = spr;
++    side.inst = inst;
++    side.turn = turn;
++    side.minScale = fmin(fabs((double) inst->imageXscale), fabs((double) inst->imageYscale));
++    // Under this scale the float slack below would not cover rounding; such sides are always scanned.
++    side.usable = side.minScale >= 0.01;
++    if (!side.usable) return side;
++    if (Collision_hasFrameMasks(spr)) {
++        uint32_t frameIdx = ((uint32_t) inst->imageIndex) % spr->maskCount;
++        side.empty = !DataWin_spriteMaskBox(spr, frameIdx, side.box);
++        side.cells = DataWin_spriteMaskCells(spr, frameIdx);
++        side.cellsX = (int32_t) ((spr->width + DATAWIN_MASK_CELL - 1) / DATAWIN_MASK_CELL);
++    } else {
++        side.box[2] = (int32_t) spr->width - 1;
++        side.box[3] = (int32_t) spr->height - 1;
++        side.empty = 0 > side.box[2] || 0 > side.box[3];
++    }
++    return side;
++}
++
++// Whether any sample of columns x0..x1 and rows y0..y1 may land on a pixel this side can be hit at; *inside when every
++// one lands inside its box.
++static inline bool Collision_scanSideMayHit(const CollisionScanSide* side, int32_t x0, int32_t x1, int32_t y0, int32_t y1, GMLReal sampleOffset, bool useCells, bool* inside) {
++    if (inside != nullptr) *inside = false;
++    if (!side->usable) return true;
++    if (side->empty) return false;
++    Instance* inst = side->inst;
++    double lowX = 0, highX = 0, lowY = 0, highY = 0;
++    repeat(4, corner) {
++        GMLReal dx = (GMLReal) ((corner & 1) ? x1 : x0) + sampleOffset - inst->x;
++        GMLReal dy = (GMLReal) ((corner & 2) ? y1 : y0) + sampleOffset - inst->y;
++        double slack = 0.5 + 1e-4 * ((fabs((double) dx) + fabs((double) dy)) / side->minScale + fabs((double) side->spr->originX) + fabs((double) side->spr->originY));
++        if (side->turn->on) {
++            GMLReal rx = side->turn->cs * dx - side->turn->sn * dy;
++            GMLReal ry = side->turn->sn * dx + side->turn->cs * dy;
++            dx = rx;
++            dy = ry;
++        }
++        if (inst->imageXscale != 1.0f)
++            dx = inst->imageXscale == -1.0f ? -dx : dx / inst->imageXscale;
++        if (inst->imageYscale != 1.0f)
++            dy = inst->imageYscale == -1.0f ? -dy : dy / inst->imageYscale;
++        double localX = (double) (dx + (GMLReal) side->spr->originX), localY = (double) (dy + (GMLReal) side->spr->originY);
++        if (!(fabs(localX) < 1e9 && fabs(localY) < 1e9)) return true;
++        if (corner == 0 || localX - slack < lowX) lowX = localX - slack;
++        if (corner == 0 || localX + slack > highX) highX = localX + slack;
++        if (corner == 0 || localY - slack < lowY) lowY = localY - slack;
++        if (corner == 0 || localY + slack > highY) highY = localY + slack;
++    }
++    if (!(lowX > -2e9 && highX < 2e9 && lowY > -2e9 && highY < 2e9)) return true;
++    // Truncation is monotonic, so these are the only pixels the samples can land on.
++    int32_t px0 = (int32_t) lowX, px1 = (int32_t) highX, py0 = (int32_t) lowY, py1 = (int32_t) highY;
++    if (inside != nullptr)
++        *inside = px0 >= side->box[0] && side->box[2] >= px1 && py0 >= side->box[1] && side->box[3] >= py1;
++    if (side->box[0] > px0) px0 = side->box[0];
++    if (px1 > side->box[2]) px1 = side->box[2];
++    if (side->box[1] > py0) py0 = side->box[1];
++    if (py1 > side->box[3]) py1 = side->box[3];
++    if (px0 > px1 || py0 > py1) return false;
++    if (!useCells || side->cells == nullptr) return true;
++    for (int32_t cy = py0 / DATAWIN_MASK_CELL; py1 / DATAWIN_MASK_CELL >= cy; cy++)
++        for (int32_t cx = px0 / DATAWIN_MASK_CELL; px1 / DATAWIN_MASK_CELL >= cx; cx++)
++            if (side->cells[cy * side->cellsX + cx]) return true;
++    return false;
++}
++
++#define COLLISION_SCAN_BLOCK 4
++// Overlaps with fewer samples past the first row are scanned row by row: the block tests cost more than they save.
++#define COLLISION_SCAN_BLOCKS_FROM 384
++
+ // Returns true if the two instances' collision shapes overlap.
+ //
+ // Matches the native GMS 1.4 runner's flow in FUN_0043fde0:
+@@ -625,14 +712,58 @@ static inline bool Collision_instancesOverlapPrecise(Runner* runner, Instance* a
+         return false;
+ 
+     CollisionTurn turnA = Collision_turn(a), turnB = Collision_turn(b);
+-    for (int32_t py = startY; (compatMode ? py <= endY : py < endY); py++) {
+-        for (int32_t px = startX; (compatMode ? px <= endX : px < endX); px++) {
+-            GMLReal wpx = (GMLReal) px + sampleOffset;
+-            GMLReal wpy = (GMLReal) py + sampleOffset;
+-
+-            if (!Collision_pointInInstanceTurned(sprA, a, wpx, wpy, &turnA)) continue;
+-            if (!Collision_pointInInstanceTurned(sprB, b, wpx, wpy, &turnB)) continue;
+-            return true;
++    int64_t lastX = compatMode ? endX : (int64_t) endX - 1, lastY = compatMode ? endY : (int64_t) endY - 1;
++    if (startX > lastX || startY > lastY) return false;
++    // A hit is any sample inside both shapes, in whatever order they are visited. Most hits come in the first row; past
++    // it, the samples go block by block, and blocks that can't reach either shape are passed over: a power bomb's
++    // blast takes in long walls far from its disc and doors whose boxes reach past their sprites.
++    for (int64_t px = startX; lastX >= px; px++) {
++        GMLReal wpx = (GMLReal) px + sampleOffset;
++        GMLReal wpy = (GMLReal) startY + sampleOffset;
++
++        if (!Collision_pointInInstanceTurned(sprA, a, wpx, wpy, &turnA)) continue;
++        if (!Collision_pointInInstanceTurned(sprB, b, wpx, wpy, &turnB)) continue;
++        return true;
++    }
++    if (lastX - startX > INT32_MAX / 2 || lastY - startY > INT32_MAX / 2 ||
++        COLLISION_SCAN_BLOCKS_FROM > (lastY - startY) * (lastX - startX + 1)) {
++        for (int64_t py = (int64_t) startY + 1; lastY >= py; py++) {
++            for (int64_t px = startX; lastX >= px; px++) {
++                GMLReal wpx = (GMLReal) px + sampleOffset;
++                GMLReal wpy = (GMLReal) py + sampleOffset;
++
++                if (!Collision_pointInInstanceTurned(sprA, a, wpx, wpy, &turnA)) continue;
++                if (!Collision_pointInInstanceTurned(sprB, b, wpx, wpy, &turnB)) continue;
++                return true;
++            }
++        }
++        return false;
++    }
++    CollisionScanSide sideA = Collision_scanSide(sprA, a, &turnA), sideB = Collision_scanSide(sprB, b, &turnB);
++    bool insideA, insideB;
++    if (!Collision_scanSideMayHit(&sideA, startX, (int32_t) lastX, startY + 1, (int32_t) lastY, sampleOffset, false, &insideA) ||
++        !Collision_scanSideMayHit(&sideB, startX, (int32_t) lastX, startY + 1, (int32_t) lastY, sampleOffset, false, &insideB))
++        return false;
++    // A side whose box takes in every sample can only turn blocks away through its mask.
++    sideA.blocks = sideA.usable && (sideA.cells != nullptr || !insideA);
++    sideB.blocks = sideB.usable && (sideB.cells != nullptr || !insideB);
++    for (int64_t by = (int64_t) startY + 1; lastY >= by; by += COLLISION_SCAN_BLOCK) {
++        int64_t byEnd = by + COLLISION_SCAN_BLOCK - 1 > lastY ? lastY : by + COLLISION_SCAN_BLOCK - 1;
++        for (int64_t bx = startX; lastX >= bx; bx += COLLISION_SCAN_BLOCK) {
++            int64_t bxEnd = bx + COLLISION_SCAN_BLOCK - 1 > lastX ? lastX : bx + COLLISION_SCAN_BLOCK - 1;
++            if ((sideA.blocks && !Collision_scanSideMayHit(&sideA, (int32_t) bx, (int32_t) bxEnd, (int32_t) by, (int32_t) byEnd, sampleOffset, true, nullptr)) ||
++                (sideB.blocks && !Collision_scanSideMayHit(&sideB, (int32_t) bx, (int32_t) bxEnd, (int32_t) by, (int32_t) byEnd, sampleOffset, true, nullptr)))
++                continue;
++            for (int64_t py = by; byEnd >= py; py++) {
++                for (int64_t px = bx; bxEnd >= px; px++) {
++                    GMLReal wpx = (GMLReal) px + sampleOffset;
++                    GMLReal wpy = (GMLReal) py + sampleOffset;
++
++                    if (!Collision_pointInInstanceTurned(sprA, a, wpx, wpy, &turnA)) continue;
++                    if (!Collision_pointInInstanceTurned(sprB, b, wpx, wpy, &turnB)) continue;
++                    return true;
++                }
++            }
+         }
+     }
+ 
+--- a/src/data_win.c
++++ b/src/data_win.c
+@@ -3103,6 +3103,57 @@ float DataWin_spriteMaskReach(Sprite* spr, uint32_t frameIdx) {
+     return spr->maskReach[frameIdx];
+ }
+ 
++bool DataWin_spriteMaskBox(Sprite* spr, uint32_t frameIdx, int32_t box[4]) {
++    if (spr->maskBox == nullptr) {
++        spr->maskBox = (int32_t*) safeMalloc(spr->maskCount * 4 * sizeof(int32_t));
++        repeat(spr->maskCount, i) spr->maskBox[i * 4] = -2;
++    }
++    int32_t* known = &spr->maskBox[frameIdx * 4];
++    if (known[0] == -2) {
++        uint8_t* mask = spr->masks[frameIdx];
++        uint32_t bytesPerRow = (spr->maskWidth + 7) / 8;
++        int32_t x0 = INT32_MAX, x1 = INT32_MIN, y0 = INT32_MAX, y1 = INT32_MIN;
++        repeat(spr->maskHeight, my) {
++            repeat(spr->maskWidth, mx) {
++                if (!(mask[my * bytesPerRow + (mx >> 3)] & (1 << (7 - (mx & 7))))) continue;
++                int32_t x = (int32_t) mx + spr->maskOffsetX, y = (int32_t) my + spr->maskOffsetY;
++                if (0 > x || 0 > y || x >= (int32_t) spr->width || y >= (int32_t) spr->height) continue;
++                if (x0 > x) x0 = x;
++                if (x > x1) x1 = x;
++                if (y0 > y) y0 = y;
++                if (y > y1) y1 = y;
++            }
++        }
++        known[0] = x1 >= x0 ? x0 : -1;
++        known[1] = y0;
++        known[2] = x1;
++        known[3] = y1;
++    }
++    if (0 > known[0]) return false;
++    memcpy(box, known, 4 * sizeof(int32_t));
++    return true;
++}
++
++const uint8_t* DataWin_spriteMaskCells(Sprite* spr, uint32_t frameIdx) {
++    if (spr->maskCells == nullptr) spr->maskCells = (uint8_t**) safeCalloc(spr->maskCount, sizeof(uint8_t*));
++    if (spr->maskCells[frameIdx] != nullptr) return spr->maskCells[frameIdx];
++    uint32_t cellsX = (spr->width + DATAWIN_MASK_CELL - 1) / DATAWIN_MASK_CELL;
++    uint32_t cellsY = (spr->height + DATAWIN_MASK_CELL - 1) / DATAWIN_MASK_CELL;
++    uint8_t* cells = (uint8_t*) safeCalloc((size_t) cellsX * cellsY + 1, 1);
++    uint8_t* mask = spr->masks[frameIdx];
++    uint32_t bytesPerRow = (spr->maskWidth + 7) / 8;
++    repeat(spr->maskHeight, my) {
++        repeat(spr->maskWidth, mx) {
++            if (!(mask[my * bytesPerRow + (mx >> 3)] & (1 << (7 - (mx & 7))))) continue;
++            int32_t x = (int32_t) mx + spr->maskOffsetX, y = (int32_t) my + spr->maskOffsetY;
++            if (0 > x || 0 > y || x >= (int32_t) spr->width || y >= (int32_t) spr->height) continue;
++            cells[(uint32_t) y / DATAWIN_MASK_CELL * cellsX + (uint32_t) x / DATAWIN_MASK_CELL] = 1;
++        }
++    }
++    spr->maskCells[frameIdx] = cells;
++    return cells;
++}
++
+ void DataWin_free(DataWin* dw) {
+     if (!dw) return;
+ 
+@@ -3160,6 +3211,11 @@ void DataWin_free(DataWin* dw) {
+                 free(dw->sprt.sprites[i].masks);
+             }
+             free(dw->sprt.sprites[i].maskReach);
++            free(dw->sprt.sprites[i].maskBox);
++            if (dw->sprt.sprites[i].maskCells != nullptr) {
++                repeat(dw->sprt.sprites[i].maskCount, j) free(dw->sprt.sprites[i].maskCells[j]);
++                free(dw->sprt.sprites[i].maskCells);
++            }
+             // Runtime-allocated sprites (indices >= parsedCount) own their synthesized name
+             if (i >= dw->sprt.parsedCount) free((char*) dw->sprt.sprites[i].name);
+         }
+--- a/src/data_win.h
++++ b/src/data_win.h
+@@ -240,6 +240,8 @@ typedef struct {
+     uint32_t maskCount;       // number of collision masks (one per frame, or 0)
+     uint8_t** masks;          // array of maskCount packed bit arrays (nullptr if none)
+     float* maskReach;         // per mask, filled on first use (see DataWin_spriteMaskReach)
++    int32_t* maskBox;         // 4 per mask, filled on first use (see DataWin_spriteMaskBox)
++    uint8_t** maskCells;      // per mask, filled on first use (see DataWin_spriteMaskCells)
+     // Collision mask storage dimensions. Pre-2024.6 these equal the full sprite width/height with zero offset.
+     // GMS 2024.6+ stores masks at bounding-box dimensions, so the mask covers only [maskOffsetX, maskOffsetX+maskWidth).
+     uint32_t maskWidth;
+@@ -948,6 +950,13 @@ void DataWin_free(DataWin* dataWin);
+ // How far from the sprite's origin, in its own pixels, any point that lands on a set pixel of mask frameIdx can be
+ // (a truncated coordinate in (-1, 1) lands on pixel 0); -1 when the mask has no set pixel.
+ float DataWin_spriteMaskReach(Sprite* spr, uint32_t frameIdx);
++// The sprite pixels holding mask frameIdx's set pixels, as first and last column and row inside the sprite; false
++// when it has none.
++bool DataWin_spriteMaskBox(Sprite* spr, uint32_t frameIdx, int32_t box[4]);
++// Mask frameIdx in cells of DATAWIN_MASK_CELL × DATAWIN_MASK_CELL sprite pixels, row by row: nonzero where a cell
++// holds a set pixel. The sprite is ceil(width / DATAWIN_MASK_CELL) cells wide.
++#define DATAWIN_MASK_CELL 8
++const uint8_t* DataWin_spriteMaskCells(Sprite* spr, uint32_t frameIdx);
+ void DataWin_printDebugSummary(DataWin* dataWin);
+ // Lazy room payload management. DataWin_loadRoomPayload is a no-op when the payload is already loaded.
+ void DataWin_loadRoomPayload(DataWin* dw, int32_t roomIndex);
