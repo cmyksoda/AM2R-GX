@@ -1,0 +1,50 @@
+Reason: patch 0068 trusts a miss in the tile index, and its notes say entering a room marks the index stale, but that
+line never made it into the patch. Leaving a non-persistent room frees its tiles and re-entering reads them again,
+possibly at the same address and count; a room that adds and deletes tiles at runtime (rm_a3h04's crumbling sand) can
+then find its old index still looking current, and a lookup of a tile that exists answers "no such tile". Entering a
+room now marks the index stale, so the room's first tile lookup rebuilds it.
+Upstream: Fixes patch 0068 only; retires with it.
+
+--- a/src/vm_builtins.h
++++ b/src/vm_builtins.h
+@@ -277,6 +277,9 @@
+ } BuiltinVarId;
+ 
+ void VMBuiltins_registerAll(VMContext* ctx);
++// Entering a room may hand its tiles back at the same address and count with other contents: the next tile lookup
++// rebuilds the index.
++void VMBuiltins_tileIndexForget(void);
+ int16_t VMBuiltins_resolveBuiltinVarId(const char* name);
+ // Asserts at startup that the internal builtin-var lookup table is strictly sorted by strcmp order (required for bsearch) and has no duplicates.
+ void VMBuiltins_checkIfBuiltinVarTableIsSorted(void);
+--- a/src/vm_builtins.c
++++ b/src/vm_builtins.c
+@@ -14706,6 +14706,10 @@
+     tileIndexStale = false;
+ }
+ 
++void VMBuiltins_tileIndexForget(void) {
++    tileIndexStale = true;
++}
++
+ // tile_add and tile_delete keep an up-to-date index current instead of marking it stale, so the next lookup needs no
+ // rebuild: crumbling sand in rm_a3h04 alternates tile_exists and tile_delete, and rebuilt ~3,000 entries each time.
+ static bool tileIndexCurrent(Room* room) {
+--- a/src/runner.c
++++ b/src/runner.c
+@@ -6,6 +6,7 @@
+ #include "utils.h"
+ #include "json_writer.h"
+ #include "collision.h"
++#include "vm_builtins.h"
+ 
+ #include <stdint.h>
+ #include "stdio_compat.h"
+@@ -1900,6 +1901,7 @@
+ 
+     runner->currentRoom = room;
+     runner->tileOrderVersion++;
++    VMBuiltins_tileIndexForget();
+     runner->currentRoomIndex = roomIndex;
+     runner->viewsEnabled = (room->flags & 1) != 0;
+     // Tile set, runtime layers, and instance list all change when entering a room.
