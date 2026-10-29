@@ -1152,6 +1152,59 @@ static GML_ROUNDING RValue wii_mine_proj_draw(VMContext *ctx)
 	return RValue_makeUndefined();
 }
 
+/* A Robo Mine's death (oRoboMine_Other_11) fires 108 projectiles: 36 directions, each at speed 3, 2 and 1. A full
+ * chain left ~1,160 alive at once, 50 ms frames on a Wii. While all 108 fit under the cap the bytecode runs as is;
+ * past it, the mine fires only the rings that fit, fastest first, in the bytecode's order (Jaxi's choice, B2). */
+#define MINE_PROJ_CAP 350
+#define MINE_PROJ_OBJECT 351
+static int32_t mineDeathCode = -1, enemyDeath2Code = -1, prjVar;
+static BuiltinFunc instanceCreateFn;
+
+static int32_t live_mine_projectiles(Runner *runner)
+{
+	Instance **list = runner->instancesByObject[MINE_PROJ_OBJECT];
+	int32_t i, n = (int32_t)arrlen(list), live = 0;
+
+	for (i = 0; i < n; i++)
+		live += list[i]->active && !list[i]->destroyed;
+	return live;
+}
+
+static GML_ROUNDING RValue wii_mine_death(VMContext *ctx)
+{
+	Instance *self = ctx->currentInstance, *prj;
+	int32_t room, rings, i, ring, id;
+	RValue args[3], r;
+
+	room = self ? MINE_PROJ_CAP - live_mine_projectiles(ctx->runner) : 0;
+	if (!self || room >= 108)
+		return VM_interpretCode(ctx, mineDeathCode);
+	rings = room / 36;
+	r = VM_callCodeIndex(ctx, enemyDeath2Code, NULL, 0);
+	RValue_free(&r);
+	Instance_setSelfVar(self, iVar, RValue_makeInt32(0));
+	for (i = 0; i < 36; i++) {
+		for (ring = 0; ring < rings; ring++) {
+			args[0] = VMBuiltins_getVariable(ctx, self, BUILTIN_VAR_X, "x", -1);
+			args[1] = VMBuiltins_getVariable(ctx, self, BUILTIN_VAR_Y, "y", -1);
+			args[2] = RValue_makeInt32(MINE_PROJ_OBJECT);
+			r = instanceCreateFn(ctx, args, 3);
+			RValue_free(&args[0]);
+			RValue_free(&args[1]);
+			Instance_setSelfVar(self, prjVar, r);
+			id = RValue_toInt32(r);
+			prj = hmget(ctx->runner->instancesById, id);
+			RValue_free(&r);
+			if (!prj)
+				continue;
+			VMBuiltins_setVariable(ctx, prj, BUILTIN_VAR_DIRECTION, "direction", RValue_makeInt32(i * 10), -1);
+			VMBuiltins_setVariable(ctx, prj, BUILTIN_VAR_SPEED, "speed", RValue_makeInt32(3 - ring), -1);
+		}
+		Instance_setSelfVar(self, iVar, RValue_makeInt32(i + 1));
+	}
+	return RValue_makeUndefined();
+}
+
 void Wii_hookAm2rScripts(VMContext *ctx)
 {
 	static const char *const partNames[7] = { "wallU", "wallR", "wallD", "wallL", "color", "special", "corner" };
@@ -1166,6 +1219,8 @@ void Wii_hookAm2rScripts(VMContext *ctx)
 	ptrdiff_t pb = shgeti(ctx->codeIndexByName, "gml_Object_oPBombExpl_Collision_268");
 	ptrdiff_t sl = shgeti(ctx->codeIndexByName, "skorp_get_lure");
 	ptrdiff_t mp = shgeti(ctx->codeIndexByName, "gml_Object_oRoboMineProj_Draw_0");
+	ptrdiff_t md = shgeti(ctx->codeIndexByName, "gml_Object_oRoboMine_Other_11");
+	ptrdiff_t ed = shgeti(ctx->codeIndexByName, "gml_Script_enemy_death2");
 	bool resetMap, mapSurf, water, tiles, bubbles, owater, lava;
 	int k;
 
@@ -1314,5 +1369,14 @@ void Wii_hookAm2rScripts(VMContext *ctx)
 	if (mp >= 0 && setBlendModeFn && drawSelfFn && ctx->dataWin->code.entries[ctx->codeIndexByName[mp].value].length == 52) {
 		mineProjDrawCode = ctx->codeIndexByName[mp].value;
 		VM_setNativeCode(ctx, mineProjDrawCode, wii_mine_proj_draw);
+	}
+	instanceCreateFn = VM_findBuiltin(ctx, "instance_create");
+	prjVar = Wii_varId(ctx->runner, "prj", INSTANCE_SELF);
+	if (md >= 0 && ed >= 0 && instanceCreateFn && iVar >= 0 && prjVar >= 0 &&
+	    ctx->dataWin->code.entries[ctx->codeIndexByName[md].value].length == 400 &&
+	    Wii_objectIndex(ctx->runner, "oRoboMineProj") == MINE_PROJ_OBJECT) {
+		mineDeathCode = ctx->codeIndexByName[md].value;
+		enemyDeath2Code = ctx->codeIndexByName[ed].value;
+		VM_setNativeCode(ctx, mineDeathCode, wii_mine_death);
 	}
 }
