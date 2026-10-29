@@ -210,12 +210,20 @@ static int32_t metroids_here(Runner *runner)
 }
 
 /* Sounds too big for the boot preload that a room's objects play in the middle of action: read during the room's
- * load instead of at their first play (the first Robo Mine to die stalled the chain's frame ~30 ms on a Wii). */
+ * load instead of at their first play (the first Robo Mine to die stalled the chain's frame ~30 ms on a Wii; the
+ * Omega's first roar, breath and flames 19-27 ms each). */
+#define ROOM_SOUNDS_MAX 12
 static const struct {
 	const char *object;
-	const char *sounds[2];
+	const char *sounds[ROOM_SOUNDS_MAX];
 } roomSounds[] = {
 	{ "oRoboMine", { "sndElectricExpl", "sndElectricOverload" } },
+	{ "oMOmega", { "sndMOmegaIntro", "sndMOmegaBreathe", "sndMOmegaAttack", "sndMOmegaFlame", "sndMOmegaDeath",
+		       "sndMOmegaHit", "sndMGammaMorph", "sndMGammaEyes", "sndMZetaJump", "sndMZetaLand",
+		       "sndMZetaFootstep", "sndKnockdown" } },
+	/* the first Omega's entrance: troopers firing, hit and falling */
+	{ "oFirstOmegaTrigger", { "sndMZetaHit", "sndGFTrooperPlasmaShot", "sndGFTrooperGunShot", "sndGFTrooperFall",
+				  "sndGFTrooperHit", "sndArachnusSwipe" } },
 };
 
 static int32_t sound_named(DataWin *dw, const char *name)
@@ -241,7 +249,7 @@ static void wish_sounds(Runner *runner)
 		obj = Wii_objectIndex(runner, roomSounds[k].object);
 		if (obj < 0 || arrlen(runner->instancesByExactObject[obj]) == 0)
 			continue;
-		for (j = 0; j < 2 && roomSounds[k].sounds[j]; j++)
+		for (j = 0; j < ROOM_SOUNDS_MAX && roomSounds[k].sounds[j]; j++)
 			WiiAudio_prefetch(runner->audioSystem, sound_named(runner->dataWin, roomSounds[k].sounds[j]));
 	}
 }
