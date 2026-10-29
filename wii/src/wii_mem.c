@@ -1,6 +1,7 @@
 #include "wii_mem.h"
 
 #include "log.h"
+#include "wii_video.h"
 
 #include <gccore.h>
 #include <malloc.h>
@@ -142,8 +143,11 @@ void *WiiMem_texAlloc(u32 bytes)
 	return p;
 }
 
+/* The GPU may still be drawing the last frame from these texels (see WiiVideo_settle). */
 void WiiMem_texFree(void *p)
 {
+	if (p)
+		WiiVideo_settle();
 	if (p && !region_free(&mem1, p) && !region_free(&mem2, p))
 		free(p);
 }

@@ -18,10 +18,22 @@ static GXRModeObj *rmode;
 static GXRModeObj modes[2]; /* the console's own mode, and its 240p twin */
 static bool low, lowWanted;
 static void *xfb[3];
-static u32 fb;
 static bool fifty;
 static volatile int shownFb, queuedFb = -1;
+/* The XFB a 60 Hz present copied into, until the GPU reaches the end of that frame, the retrace count it was presented
+ * after, and whether the CPU missed a retrace on it. */
+static volatile int copyingFb = -1;
+static volatile u32 copyingAt;
+static volatile bool copyingCpuLate;
 static volatile u32 retraces;
+/* Once the GPU finishes a frame after its retrace, frames done in time are held one retrace more, so a heavy stretch
+ * costs one repeat instead of one per swing. The next frame the CPU itself is late with ends the lag at no cost. */
+static volatile bool lagging;
+static volatile int heldFb = -1;
+static volatile u32 heldUntil;
+/* Retraces that found no new frame to show, and frames replaced before any retrace showed them. */
+static volatile u32 repeats, drops;
+static u64 settleTicks;
 static void *fifo;
 static bool inited;
 static bool first_present = true;
@@ -85,15 +97,73 @@ static void setup_copy(void)
 			((rmode->viHeight == 2 * rmode->xfbHeight) ? GX_ENABLE : GX_DISABLE));
 }
 
+static void queue_fb(int r)
+{
+	if (queuedFb >= 0)
+		drops++;
+	queuedFb = r;
+	VIDEO_SetNextFramebuffer(xfb[r]);
+	if (first_present) {
+		VIDEO_SetBlack(false);
+		first_present = false;
+	}
+	VIDEO_Flush();
+}
+
 /* At 50 Hz the game still steps 60 times a second: the VI shows whichever finished frame is newest at each
- * retrace, so one frame in six is never shown. A third XFB keeps the copy off the buffer being scanned out. */
+ * retrace, so one frame in six is never shown. A third XFB keeps the copy off the buffer being scanned out. At 60 Hz
+ * the third one takes the next frame's copy while the last one waits for its retrace. */
 static void on_retrace(u32 count)
 {
 	retraces = count;
 	if (queuedFb >= 0) {
 		shownFb = queuedFb;
 		queuedFb = -1;
+	} else if (!fifty && !first_present) {
+		repeats++;
 	}
+	if (heldFb >= 0 && count >= heldUntil) {
+		queue_fb(heldFb);
+		heldFb = -1;
+	}
+}
+
+/* The GPU finished a 60 Hz frame and its copy: it is shown at the next retrace, or held one more while lagging. */
+static void on_draw_done(void)
+{
+	bool late;
+
+	if (copyingFb < 0)
+		return;
+	late = retraces != copyingAt;
+	if (late)
+		lagging = true;
+	else if (copyingCpuLate)
+		lagging = false;
+	if (lagging && !late) {
+		heldFb = copyingFb;
+		heldUntil = copyingAt + 1;
+	} else {
+		queue_fb(copyingFb);
+	}
+	copyingFb = -1;
+}
+
+void WiiVideo_settle(void)
+{
+	u64 t;
+
+	if (copyingFb < 0)
+		return;
+	t = gettime();
+	GX_WaitDrawDone();
+	settleTicks += gettime() - t;
+}
+
+void WiiVideo_drawDone(void)
+{
+	WiiVideo_settle();
+	GX_DrawDone();
 }
 
 bool WiiVideo_init(void)
@@ -110,17 +180,15 @@ bool WiiVideo_init(void)
 	wide = (CONF_GetAspectRatio() == CONF_ASPECT_16_9);
 
 	fifty = rmode->viTVMode >> 2 == VI_PAL;
-	fb = 0;
 	xfb[0] = MEM_K0_TO_K1(SYS_AllocateFramebuffer(rmode));
 	xfb[1] = MEM_K0_TO_K1(SYS_AllocateFramebuffer(rmode));
-	xfb[2] = fifty ? MEM_K0_TO_K1(SYS_AllocateFramebuffer(rmode)) : NULL;
-	if (!xfb[0] || !xfb[1] || (fifty && !xfb[2]))
+	xfb[2] = MEM_K0_TO_K1(SYS_AllocateFramebuffer(rmode));
+	if (!xfb[0] || !xfb[1] || !xfb[2])
 		return false;
-	if (fifty)
-		VIDEO_SetPostRetraceCallback(on_retrace);
+	VIDEO_SetPostRetraceCallback(on_retrace);
 
 	VIDEO_Configure(rmode);
-	VIDEO_SetNextFramebuffer(xfb[fb]);
+	VIDEO_SetNextFramebuffer(xfb[0]);
 	VIDEO_SetBlack(true);
 	VIDEO_Flush();
 	VIDEO_WaitVSync();
@@ -132,6 +200,7 @@ bool WiiVideo_init(void)
 		return false;
 	memset(fifo, 0, FIFO_SIZE);
 	GX_Init(fifo, FIFO_SIZE);
+	GX_SetDrawDoneCallback(on_draw_done);
 	GX_SetCopyClear(clear, 0x00ffffff);
 	setup_copy();
 	/* RGB8 EFB has no alpha; gui_surface / oCharacter.surf need draw_clear_alpha. */
@@ -149,11 +218,12 @@ bool WiiVideo_init(void)
 	return true;
 }
 
-/* Whole-frame wall time, present to present: the GML profiler only sees script time. */
-static void frame_stats(u64 t0, u64 t1, u64 t2)
+/* Whole-frame wall time, present to present: the GML profiler only sees script time. misses: retraces since the last
+ * present that showed no new frame, and frames never shown. */
+static void frame_stats(u64 t0, u64 t1, u64 t2, u32 misses)
 {
 	static u64 last, frame, gpu, sync;
-	static u32 n, late;
+	static u32 n, late, seenRepeats, seenDrops;
 
 	if (last) {
 		u32 us = ticks_to_microsecs(t2 - last);
@@ -161,11 +231,14 @@ static void frame_stats(u64 t0, u64 t1, u64 t2)
 		frame += us;
 		gpu += ticks_to_microsecs(t1 - t0);
 		sync += ticks_to_microsecs(t2 - t1);
-		if (us > (fifty ? 20800 : 17500))
+		if (us > (fifty ? 20800 : 17500) || misses)
 			late++;
 		if (++n == 200) {
-			logInfo("FRAME avg %.2f ms (gpu wait %.2f, vsync wait %.2f), %u/200 late\n",
-				frame / 200000.0, gpu / 200000.0, sync / 200000.0, late);
+			logInfo("FRAME avg %.2f ms (gpu wait %.2f, vsync wait %.2f), %u/200 late "
+				"(%u repeated, %u dropped)\n", frame / 200000.0, gpu / 200000.0, sync / 200000.0, late,
+				repeats - seenRepeats, drops - seenDrops);
+			seenRepeats = repeats;
+			seenDrops = drops;
 			frame = gpu = sync = 0;
 			n = late = 0;
 		}
@@ -231,6 +304,7 @@ bool WiiVideo_paceStep(u64 stepNs)
 /* Between frames: the next one is drawn at the new height. */
 static void switch_mode(void)
 {
+	WiiVideo_settle();
 	low = lowWanted;
 	rmode = &modes[low];
 	VIDEO_SetBlack(true);
@@ -256,31 +330,53 @@ uint64_t WiiVideo_gpuWaitNs(void)
 	return ticks_to_nanosecs(gpuWait);
 }
 
+/* 60 Hz: the frame's copy goes into an XFB neither shown nor waiting for its retrace, and the GPU finishes it while the
+ * next step runs (on_draw_done queues it); the CPU only waits for the vsync. */
+static void present_sixty(void)
+{
+	static u32 seenRepeats, seenDrops, lastPresentAt;
+	u64 t1;
+	u32 level, misses;
+	int r;
+
+	WiiVideo_settle();
+	gpuWait = settleTicks;
+	settleTicks = 0;
+	t1 = gettime();
+	_CPU_ISR_Disable(level);
+	for (r = 0; r < 2 && (r == shownFb || r == queuedFb || r == heldFb); r++)
+		;
+	_CPU_ISR_Restore(level);
+	GX_CopyDisp(xfb[r], GX_TRUE);
+	_CPU_ISR_Disable(level);
+	copyingCpuLate = retraces - lastPresentAt > 1;
+	lastPresentAt = copyingAt = retraces;
+	copyingFb = r;
+	_CPU_ISR_Restore(level);
+	GX_SetDrawDone();
+	VIDEO_WaitVSync();
+	misses = (repeats - seenRepeats) + (drops - seenDrops);
+	seenRepeats = repeats;
+	seenDrops = drops;
+	frame_stats(t1 - gpuWait, t1, gettime(), misses);
+	if (lowWanted != low)
+		switch_mode();
+}
+
 void WiiVideo_present(void)
 {
-	u64 t0 = gettime(), t1;
+	u64 t0, t1;
 
+	if (!fifty) {
+		present_sixty();
+		return;
+	}
+	t0 = gettime();
 	GX_DrawDone();
 	t1 = gettime();
 	gpuWait = t1 - t0;
-	if (fifty) {
-		present_fifty();
-		frame_stats(t0, t1, gettime());
-		if (lowWanted != low)
-			switch_mode();
-		return;
-	}
-	GX_CopyDisp(xfb[fb], GX_TRUE);
-	GX_Flush();
-	VIDEO_SetNextFramebuffer(xfb[fb]);
-	if (first_present) {
-		VIDEO_SetBlack(false);
-		first_present = false;
-	}
-	VIDEO_Flush();
-	VIDEO_WaitVSync();
-	fb ^= 1;
-	frame_stats(t0, t1, gettime());
+	present_fifty();
+	frame_stats(t0, t1, gettime(), 0);
 	if (lowWanted != low)
 		switch_mode();
 }
@@ -293,6 +389,7 @@ void WiiVideo_setActiveWidth(int w)
 
 	if (!rmode || w < 640 || w > 720 || w == rmode->viWidth)
 		return;
+	WiiVideo_settle();
 	for (k = 0; k < 2; k++) {
 		modes[k].viWidth = (u16)(w & ~1);
 		modes[k].viXOrigin = (u16)((720 - modes[k].viWidth) / 2);
@@ -329,6 +426,8 @@ bool WiiVideo_console(void)
 	static void *pxfb;
 	GXRModeObj *m;
 
+	if (inited)
+		WiiVideo_settle();
 	VIDEO_Init();
 	m = pick_mode();
 	if (!pxfb)

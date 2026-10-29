@@ -669,6 +669,7 @@ static void emit_quad(float x0, float y0, float x1, float y1, float x2, float y2
 	flat = u0 == u3 && u1 == u2 && v0 == v1 && v3 == v2 && r0 == r1 && r0 == r2 && r0 == r3 &&
 	       g0 == g1 && g0 == g2 && g0 == g3 && b0 == b1 && b0 == b2 && b0 == b3 && a0 == a1 && a0 == a2 && a0 == a3;
 	/* Tiled surfaces are rasterized on the CPU: GX CopyTex of a tiled EFB never wrote texels. */
+	WiiVideo_settle();
 	for (tr = tr0; tr <= tr1; tr++) {
 		for (c = c0; c <= c1; c++) {
 			int ox = c * SURF_TILE_W;
@@ -1332,6 +1333,8 @@ static void gx_tiles_fill(GxSurf *s, u8 r, u8 g, u8 b, u8 a)
 	u32 ar = ((u32)a << 8 | r) * 0x10001u, gb = ((u32)g << 8 | b) * 0x10001u;
 	int i, k;
 
+	WiiVideo_settle();
+
 	for (i = 0; i < s->tilesX * s->tilesY; i++) {
 		GxTile *t = &s->tiles[i];
 		u32 *p, *end;
@@ -1380,7 +1383,7 @@ static void gx_unshare(GxRenderer *gx, GxSurf *s, bool keep)
 	s->objReady = o->objReady = false;
 	if (keep) {
 		/* The CPU can read a buffer whose CopyTex is still in flight. */
-		GX_DrawDone();
+		WiiVideo_drawDone();
 		DCInvalidateRange(shared, surf_bytes(s->texW, s->texH));
 		memcpy(s->texels, shared, surf_bytes(s->texW, s->texH));
 		DCFlushRange(s->texels, surf_bytes(s->texW, s->texH));
@@ -1400,7 +1403,7 @@ static void gx_share(GxRenderer *gx, int32_t srcId, int32_t destId)
 		return;
 	gx_unshare(gx, dest, false);
 	if (src->sharer) {
-		GX_DrawDone();
+		WiiVideo_drawDone();
 		DCInvalidateRange(src->texels, nbytes);
 		memcpy(dest->texels, src->texels, nbytes);
 		DCFlushRange(dest->texels, nbytes);
@@ -1466,7 +1469,7 @@ static void gx_flush_target(GxRenderer *gx)
 
 	/* No cache walk over the texels: CPU writers flush them after writing, CPU readers wait and invalidate first. */
 	GX_Flush();
-	GX_DrawDone();
+	WiiVideo_drawDone();
 	GX_SetTexCopySrc(0, 0, (u16)copyW, (u16)copyH);
 	GX_SetTexCopyDst((u16)texW, (u16)texH, SURF_TEX_FMT, GX_FALSE);
 	GX_CopyTex(texels, GX_FALSE);
@@ -2287,6 +2290,8 @@ static void gxBeginFrame(Renderer *renderer, int32_t gameW, int32_t gameH, int32
 	GxRenderer *gx = (GxRenderer *)renderer;
 	int32_t appId;
 
+	/* The last frame's GPU work ran on through the step; this frame draws over a finished one. */
+	WiiVideo_settle();
 	gx_stat.frameStart = gettime();
 	if (gx_stat.lastEnd)
 		gx_stat.otherUs += ticks_to_microsecs(gx_stat.frameStart - gx_stat.lastEnd);
@@ -4080,7 +4085,7 @@ bool GxRenderer_surfacePixel(int32_t surfaceID, int x, int y, uint8_t rgba[4])
 		/* Still the live target: peek the EFB itself (a 4×4 copy came back empty in Dolphin). */
 		GXColor c;
 
-		GX_DrawDone();
+		WiiVideo_drawDone();
 		GX_PeekARGB((u16)x, (u16)y, &c);
 		rgba[0] = c.r;
 		rgba[1] = c.g;
@@ -4088,7 +4093,7 @@ bool GxRenderer_surfacePixel(int32_t surfaceID, int x, int y, uint8_t rgba[4])
 		rgba[3] = c.a;
 		return true;
 	}
-	GX_DrawDone(); /* the CPU reads the copy made at the last target switch, so wait for it */
+	WiiVideo_drawDone(); /* the CPU reads the copy made at the last target switch, so wait for it */
 	DCInvalidateRange(s->texels, surf_bytes(s->texW, s->texH));
 	gx_rgba8_pget((const u8 *)s->texels, s->texW, x, y, &rgba[0], &rgba[1], &rgba[2], &rgba[3]);
 	return true;
