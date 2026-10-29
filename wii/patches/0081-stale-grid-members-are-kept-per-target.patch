@@ -1,0 +1,228 @@
+Reason: instance_position, collision_point, collision_rectangle and the collision events look up the target's
+instances in the grid cells, then test the target's members whose grid entry is stale (moved since the last sync),
+found by scanning the target's whole list. Crumbling sand in rm_a3h04 asks instance_position about 8 neighbors of a
+block 24 to 96 times a frame, each scanning the ~460 to 750 sand blocks (~17 µs a call on the console). The stale
+members of a target are now kept per target. Each object has a dirty epoch that moves whenever one of its own
+instances' dirty flag changes or the instance joins or leaves the per-object lists (and a shared one for changes to many
+at once); while none moves for the target or its descendants, the kept list is the scan's answer, in the same order, so
+a beam or Samus moving no longer throws away the sand's list.
+Upstream: Speed only, every platform. Retires this patch when merged.
+
+--- a/src/runner.c
++++ b/src/runner.c
+@@ -102,6 +102,7 @@ void Runner_addInstanceToObjectLists(Runner* runner, Instance* inst) {
+     if (inst->objectIndex >= 0 && dataWin->objt.count > (uint32_t) inst->objectIndex) {
+         arrput(runner->instancesByExactObject[inst->objectIndex], inst);
+     }
++    SpatialGrid_touchObject(inst->objectIndex);
+     SpatialGrid_markInstanceAsDirty(runner->spatialGrid, inst);
+ }
+ 
+@@ -121,6 +122,7 @@ static bool removeInstanceFromList(Instance*** listPtr, Instance* inst) {
+ 
+ void Runner_removeInstanceFromObjectLists(Runner* runner, Instance* inst) {
+     SpatialGrid_boxEpoch++;
++    SpatialGrid_touchObject(inst->objectIndex);
+     DataWin* dataWin = runner->dataWin;
+     int32_t currentObj = inst->objectIndex;
+     int32_t depth = 0;
+@@ -136,6 +138,7 @@ void Runner_removeInstanceFromObjectLists(Runner* runner, Instance* inst) {
+ 
+ void Runner_clearAllObjectLists(Runner* runner) {
+     SpatialGrid_boxEpoch++;
++    SpatialGrid_dirtyEpoch++;
+     if (runner->instancesByObject == nullptr) return;
+     uint32_t count = runner->dataWin->objt.count;
+     repeat(count, i) {
+@@ -146,6 +149,66 @@ void Runner_clearAllObjectLists(Runner* runner) {
+     }
+ }
+ 
++// Queries test a target's dirty members directly, and a burst of them (crumbling sand asks about its 8 neighbors) scanned
++// the whole list each time: the list of them is kept per target while the dirty epochs of the objects whose instances
++// the list may hold (the target and every descendant) stay as they were.
++typedef struct {
++    uint64_t epoch, objectSum;
++    Instance** list;
++    int32_t count;
++    Instance** members;
++    int32_t* objects;
++    bool objectsKnown;
++} DirtyMembers;
++
++// The objects whose instances join the target's list: the target and every object with it in its parent chain.
++static void dirtyMembersFindObjects(Runner* runner, DirtyMembers* dm, int32_t targetObjIndex) {
++    DataWin* dataWin = runner->dataWin;
++    repeat(dataWin->objt.count, o) {
++        int32_t currentObj = (int32_t) o, depth = 0;
++        while (currentObj >= 0 && dataWin->objt.count > (uint32_t) currentObj && 32 > depth) {
++            if (currentObj == targetObjIndex) {
++                arrput(dm->objects, (int32_t) o);
++                break;
++            }
++            currentObj = dataWin->objt.objects[currentObj].parentId;
++            depth++;
++        }
++    }
++    dm->objectsKnown = true;
++}
++
++Instance** Runner_dirtyMembersOf(Runner* runner, int32_t targetObjIndex, int32_t* count) {
++    static DirtyMembers* cache = nullptr;
++    static uint32_t cacheCount = 0;
++    if (cacheCount < runner->dataWin->objt.count) {
++        cache = (DirtyMembers*) safeRealloc(cache, (size_t) runner->dataWin->objt.count * sizeof(DirtyMembers));
++        memset(&cache[cacheCount], 0, (size_t) (runner->dataWin->objt.count - cacheCount) * sizeof(DirtyMembers));
++        cacheCount = runner->dataWin->objt.count;
++    }
++    DirtyMembers* dm = &cache[targetObjIndex];
++    if (!dm->objectsKnown) dirtyMembersFindObjects(runner, dm, targetObjIndex);
++    Instance** list = runner->instancesByObject[targetObjIndex];
++    int32_t listCount = (int32_t) arrlen(list);
++    uint64_t objectSum = 0;
++    repeat(arrlen(dm->objects), k) {
++        int32_t o = dm->objects[k];
++        if (SpatialGrid_objectDirtyEpochCount > o) objectSum += SpatialGrid_objectDirtyEpochs[o];
++    }
++    if (dm->epoch != SpatialGrid_dirtyEpoch || dm->objectSum != objectSum || dm->list != list || dm->count != listCount) {
++        arrsetlen(dm->members, 0);
++        repeat(listCount, i) {
++            if (list[i]->spatialGridDirty) arrput(dm->members, list[i]);
++        }
++        dm->epoch = SpatialGrid_dirtyEpoch;
++        dm->objectSum = objectSum;
++        dm->list = list;
++        dm->count = listCount;
++    }
++    *count = (int32_t) arrlen(dm->members);
++    return dm->members;
++}
++
+ int32_t Runner_pushInstancesOfObject(Runner* runner, int32_t targetObjIndex) {
+     int32_t base = (int32_t) arrlen(runner->instanceSnapshots);
+ 
+@@ -2114,6 +2177,7 @@ static Instance** takePersistentInstances(Runner* runner) {
+             // The spatial grid is recreated per room, so any cell coordinates the instance was tracking belong to the old grid and must not be reused.
+             arrsetlen(inst->collisionCells, 0);
+             inst->spatialGridDirty = false;
++            SpatialGrid_dirtyEpoch++;
+             inst->inRoomList = false;
+             Instance_unlistIdHolder(inst);
+ 
+@@ -4173,8 +4237,10 @@ static Instance* firstCollisionHit(Runner* runner, Instance* self, int32_t targe
+             }
+         }
+     }
+-    repeat(bucketCount, bi) {
+-        Instance* other = bucket[bi];
++    int32_t staleCount;
++    Instance** stale = Runner_dirtyMembersOf(runner, targetObjIndex, &staleCount);
++    repeat(staleCount, bi) {
++        Instance* other = stale[bi];
+         if (!other->spatialGridDirty) continue;
+         if ((best == nullptr || 0 > sortInstancesByObjectIndexThenInstanceIdAscending(&other, &best)) && collisionPairHits(runner, self, other, targetObjIndex, bboxSelf, sprSelf, selfDirty))
+             best = other;
+@@ -4634,6 +4700,7 @@ static void persistRoomState(Runner* runner, int32_t roomIndex) {
+             // The next visit builds a new grid: cells and a dirty flag from this one would keep the instance out of it.
+             arrsetlen(inst->collisionCells, 0);
+             inst->spatialGridDirty = false;
++            SpatialGrid_dirtyEpoch++;
+             inst->inRoomList = false;
+             Instance_unlistIdHolder(inst);
+             arrput(state->instances, inst);
+--- a/src/runner.h
++++ b/src/runner.h
+@@ -961,6 +961,8 @@ void Runner_addInstanceToObjectLists(Runner* runner, Instance* inst);
+ void Runner_removeInstanceFromObjectLists(Runner* runner, Instance* inst);
+ // Reset every per-object list to length 0 without releasing the backing arrays.
+ void Runner_clearAllObjectLists(Runner* runner);
++// The members of instancesByObject[targetObjIndex] whose grid entry is stale (spatialGridDirty), in list order.
++Instance** Runner_dirtyMembersOf(Runner* runner, int32_t targetObjIndex, int32_t* count);
+ 
+ // Update The Camera For Basic Views!
+ void Runner_updateCameraViewSimple(GMLCamera* camera);
+--- a/src/spatial_grid.c
++++ b/src/spatial_grid.c
+@@ -6,6 +6,21 @@
+ #include "utils.h"
+ 
+ uint64_t SpatialGrid_boxEpoch = 1;
++uint64_t SpatialGrid_dirtyEpoch = 1;
++uint64_t* SpatialGrid_objectDirtyEpochs;
++int32_t SpatialGrid_objectDirtyEpochCount;
++
++void SpatialGrid_touchObject(int32_t objectIndex) {
++    if (0 > objectIndex) return;
++    if (objectIndex >= SpatialGrid_objectDirtyEpochCount) {
++        int32_t n = objectIndex + 64;
++        SpatialGrid_objectDirtyEpochs = (uint64_t*) safeRealloc(SpatialGrid_objectDirtyEpochs, (size_t) n * sizeof(uint64_t));
++        memset(&SpatialGrid_objectDirtyEpochs[SpatialGrid_objectDirtyEpochCount], 0,
++               (size_t) (n - SpatialGrid_objectDirtyEpochCount) * sizeof(uint64_t));
++        SpatialGrid_objectDirtyEpochCount = n;
++    }
++    SpatialGrid_objectDirtyEpochs[objectIndex]++;
++}
+ 
+ SpatialGrid* SpatialGrid_create(uint32_t roomWidth, uint32_t roomHeight) {
+     SpatialGrid* grid = (SpatialGrid *)safeCalloc(1, sizeof(SpatialGrid));
+@@ -85,6 +100,7 @@ void SpatialGrid_removeInstance(SpatialGrid* grid, Instance* instance) {
+     if (removedAny) {
+         arrsetlen(instance->collisionCells, 0);
+         instance->spatialGridDirty = false;
++        SpatialGrid_touchObject(instance->objectIndex);
+     }
+ }
+ 
+@@ -160,11 +176,13 @@ void SpatialGrid_syncGrid(Runner* runner, SpatialGrid* grid) {
+             continue;
+         // The list is emptied below: an instance left off it must lose the flag too, or markInstanceAsDirty never lists it again.
+         if (!instance->active || instance->destroyed || !instance->spatialGridDirty) {
++            if (instance->spatialGridDirty) SpatialGrid_touchObject(instance->objectIndex);
+             instance->spatialGridDirty = false;
+             continue;
+         }
+ 
+         instance->spatialGridDirty = false;
++        SpatialGrid_touchObject(instance->objectIndex);
+         SyncMover m = { .inst = instance, .oldCount = 0, .box = Collision_computeBBox(runner, instance) };
+         repeat(arrlen(instance->collisionCells), c) {
+             uint32_t g = instance->collisionCells[c];
+@@ -243,6 +261,7 @@ void SpatialGrid_markInstanceAsDirty(SpatialGrid* grid, Instance* dirtyInstance)
+         return;
+ 
+     dirtyInstance->spatialGridDirty = true;
++    SpatialGrid_touchObject(dirtyInstance->objectIndex);
+ 
+     // You may be thinking "why don't we store the Instance pointer?"
+     // Well, it is because the Instance* may not be valid when SpatialGrid_syncGrid is ran
+--- a/src/spatial_grid.h
++++ b/src/spatial_grid.h
+@@ -84,6 +84,13 @@ SpatialGrid* SpatialGrid_create(uint32_t gridWidth, uint32_t gridHeight);
+ // Moves whenever an instance may have a new box (every dirty mark) or leaves the per-object lists, in any room: a box
+ // saved while it stood still is still the box.
+ extern uint64_t SpatialGrid_boxEpoch;
++// An object's entry moves whenever one of its own instances' dirty flag changes or joins or leaves the per-object lists,
++// and SpatialGrid_dirtyEpoch when many change at once: while neither moves for any object whose instances a list may
++// hold, the list's dirty members found earlier are still its dirty members.
++extern uint64_t SpatialGrid_dirtyEpoch;
++extern uint64_t* SpatialGrid_objectDirtyEpochs;
++extern int32_t SpatialGrid_objectDirtyEpochCount;
++void SpatialGrid_touchObject(int32_t objectIndex);
+ void SpatialGrid_free(SpatialGrid* grid);
+ void SpatialGrid_removeInstance(SpatialGrid* grid, Instance* instance);
+ 
+--- a/src/vm_builtins.c
++++ b/src/vm_builtins.c
+@@ -13173,8 +13173,10 @@ static bool gridFirstHit(VMContext* ctx, int32_t target, const GMLReal* box, int
+             }
+         }
+     }
+-    repeat(bucketCount, bi) {
+-        Instance* inst = bucket[bi];
++    int32_t staleCount = bucketCount;
++    Instance** stale = target == INSTANCE_ALL ? bucket : Runner_dirtyMembersOf(runner, target, &staleCount);
++    repeat(staleCount, bi) {
++        Instance* inst = stale[bi];
+         if (!inst->spatialGridDirty || !inst->active || (notme && inst == self)) continue;
+         if (test(ctx, inst, box, prec)) arrput(hits, inst);
+     }
