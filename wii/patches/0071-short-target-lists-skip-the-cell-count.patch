@@ -1,0 +1,43 @@
+Reason: firstCollisionHit chose between the grid cells under self and the target's own instance list by counting the
+cells' entries first. For a target list of a few instances (Samus, as the target of every mine projectile) scanning
+the list is cheaper than that count, so lists of four or fewer are scanned directly. Both ways give the same answer:
+the instance first in the walk's order among those self hits.
+Upstream: Speed only, every platform. Retires this patch when merged.
+
+--- a/src/runner.c
++++ b/src/runner.c
+@@ -3775,6 +3775,8 @@
+     InstanceBBox* boxes;
+ } TargetBoxes;
+ 
++#define SMALL_TARGET_LIST 4
++
+ // The first instance in the sorted walk's order that self hits, from the grid cells under self or from the target's
+ // bucket, whichever holds fewer; *walkAll when self's box is unusable. The grid is not synced (that would reorder cells
+ // for later queries), so dirty bucket members are tested directly.
+@@ -3790,14 +3792,19 @@
+         return nullptr;
+     }
+     SpatialGrid* grid = runner->spatialGrid;
+-    SpatialGridRange range = SpatialGrid_computeCellRange(grid, box.left, box.top, box.right, box.bottom);
+-    int32_t cellTotal = 0;
+-    for (int32_t gx = range.minGridX; range.maxGridX >= gx; gx++)
+-        for (int32_t gy = range.minGridY; range.maxGridY >= gy; gy++)
+-            cellTotal += (int32_t) arrlen(grid->grid[SpatialGrid_cellIndex(grid, gx, gy)]);
++    // A list of a few (Samus is one) is scanned faster than the cells under self can even be counted.
++    bool crowded = SMALL_TARGET_LIST >= bucketCount;
++    if (!crowded) {
++        SpatialGridRange range = SpatialGrid_computeCellRange(grid, box.left, box.top, box.right, box.bottom);
++        int32_t cellTotal = 0;
++        for (int32_t gx = range.minGridX; range.maxGridX >= gx; gx++)
++            for (int32_t gy = range.minGridY; range.maxGridY >= gy; gy++)
++                cellTotal += (int32_t) arrlen(grid->grid[SpatialGrid_cellIndex(grid, gx, gy)]);
++        crowded = cellTotal >= bucketCount;
++    }
+     // Cells crowded with movers (a mine's 108 projectiles share them) hold more than the target's own list: look for the
+     // first hit in that list instead, unsorted. The sorted walk then starts at it, or is skipped when nothing hits.
+-    if (cellTotal >= bucketCount) {
++    if (crowded) {
+         // The list's boxes are worked out once per box epoch and shared by every self that asks; only members whose box
+         // meets self's go through the pair's full tests.
+         static TargetBoxes* targetBoxes = nullptr;
