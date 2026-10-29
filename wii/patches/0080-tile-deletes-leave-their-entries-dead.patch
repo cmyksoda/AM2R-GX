@@ -1,0 +1,430 @@
+Reason: patches 0077 and 0078 follow tile_delete by rewriting the whole tile run (every later array index moves down
+one) and every cell of the tile-skip grid: on the console that was ~300 µs a delete, and crumbling sand in rm_a3h04
+deletes 10 to 16 tiles a frame (1.5 to 3.3 ms of those frames). A delete now leaves its entry in the run, marked dead:
+entries hold a pseudo index (the tile's array index when the run was built; adds take the next ones), and the deleted
+pseudo indices are kept in order, so a tile's array index is its pseudo index less the deleted ones below it. The next
+merge writes the live tiles with their array indices, as before, and the rank of every pseudo index; the grid's cells
+hold pseudo indices and the query turns them into ranks, so a delete only moves the runs' bounds. After 1,024 deletes
+the run and grid are built again. The draw list and the tiles drawn are the same.
+Upstream: Speed only, every platform. Retires this patch when merged.
+
+--- a/src/runner.c
++++ b/src/runner.c
+@@ -843,9 +843,40 @@ static RoomTile* tileRunTiles;
+ static uint32_t tileRunCount, tileRunVersion;
+ static bool tileRunKnown;
+ 
++// A delete leaves its entry in the run, marked dead. Entries hold a pseudo index: the tile's array index when the run was
++// built, or the next free one for a later add. A tile's array index is its pseudo index less the deleted ones below it
++// (tileRunGone, in order); a merge writes the live tiles with their array indices. Crumbling sand deletes 10 to 16
++// tiles a frame, and each delete used to rewrite the whole run and grid.
++static uint8_t* tileRunDead;
++static int32_t* tileRunGone;
++static int32_t* tileRunRankOf;
++static int32_t tileRunNextPseudo;
++static uint32_t tileRunEpoch;
++#define TILE_RUN_MAX_GONE 1024
++
+ static bool tileRunCurrent(Runner* runner, Room* room) {
+     return tileRunKnown && tileRunRoom == room && tileRunTiles == room->tiles && tileRunCount == room->tileCount &&
+-           tileRunVersion == runner->tileOrderVersion && (int32_t) arrlen(drawableTileRun) == (int32_t) room->tileCount;
++           tileRunVersion == runner->tileOrderVersion && arrlen(tileRunDead) == arrlen(drawableTileRun) &&
++           (int32_t) arrlen(drawableTileRun) - (int32_t) arrlen(tileRunGone) == (int32_t) room->tileCount;
++}
++
++// The run was just built from array indices: they are its pseudo indices.
++static void tileRunResetPseudo(void) {
++    int32_t n = (int32_t) arrlen(drawableTileRun);
++    arrsetlen(tileRunDead, n);
++    if (n > 0) memset(tileRunDead, 0, (size_t) n);
++    arrsetlen(tileRunGone, 0);
++    tileRunNextPseudo = n;
++    tileRunEpoch++;
++}
++
++static int32_t tileRunPseudoOf(int32_t index) {
++    int32_t pseudo = index;
++    repeat(arrlen(tileRunGone), k) {
++        if (tileRunGone[k] > pseudo) break;
++        pseudo++;
++    }
++    return pseudo;
+ }
+ 
+ static void tileRunRecord(Runner* runner, Room* room) {
+@@ -861,9 +892,9 @@ static void tileRunRecord(Runner* runner, Room* room) {
+ 
+ // The tile-skip grid (further down) follows the same edits.
+ static bool tileSkipCurrent(Runner* runner, Room* room);
+-static void tileSkipAdded(Runner* runner, Room* room, int32_t rank, int32_t index);
+-static void tileSkipDeleted(Runner* runner, Room* room, int32_t rank, int32_t depth);
+-static void tileSkipRescaled(Runner* runner, Room* room, int32_t rank, int32_t index);
++static void tileSkipAdded(Runner* runner, Room* room, int32_t pseudo, int32_t index);
++static void tileSkipDeleted(Runner* runner, Room* room, int32_t depth);
++static void tileSkipRescaled(Runner* runner, Room* room, int32_t pseudo, int32_t index);
+ 
+ uint32_t Runner_tileEditBegin(Runner* runner, Room* room) {
+     return (tileRunCurrent(runner, room) ? TILE_EDIT_RUN : 0) | (tileSkipCurrent(runner, room) ? TILE_EDIT_GRID : 0);
+@@ -884,38 +915,41 @@ void Runner_tileAdded(Runner* runner, Room* room, uint32_t held) {
+     ZERO_STRUCT(d);
+     d.type = DRAWABLE_TILE;
+     d.depth = depth;
+-    d.tileIndex = index;
++    d.tileIndex = tileRunNextPseudo++;
+     arrins(drawableTileRun, lo, d);
++    arrins(tileRunDead, lo, 0);
+     tileRunRecord(runner, room);
+-    if (held & TILE_EDIT_GRID) tileSkipAdded(runner, room, lo, index);
++    if (held & TILE_EDIT_GRID) tileSkipAdded(runner, room, d.tileIndex, index);
+ }
+ 
+-// The place in the run of the tile at that depth and array index, or -1.
++// The place in the run of the live tile at that depth and array index, or -1.
+ static int32_t tileRunFind(int32_t depth, int32_t index) {
+-    int32_t n = (int32_t) arrlen(drawableTileRun), lo = 0, hi = n;
++    int32_t pseudo = tileRunPseudoOf(index), n = (int32_t) arrlen(drawableTileRun), lo = 0, hi = n;
+     while (hi > lo) {
+         int32_t mid = lo + (hi - lo) / 2;
+         Drawable* m = &drawableTileRun[mid];
+-        if (m->depth > depth || (m->depth == depth && index > m->tileIndex)) lo = mid + 1;
++        if (m->depth > depth || (m->depth == depth && pseudo > m->tileIndex)) lo = mid + 1;
+         else hi = mid;
+     }
+-    return n > lo && drawableTileRun[lo].depth == depth && drawableTileRun[lo].tileIndex == index ? lo : -1;
++    if (n > lo && drawableTileRun[lo].depth == depth && drawableTileRun[lo].tileIndex == pseudo && !tileRunDead[lo]) return lo;
++    return -1;
+ }
+ 
+-// tile_delete moved every later tile of the array one place down.
++// tile_delete moved every later tile of the array one place down: the entry turns dead, and its pseudo index joins the
++// gone ones, which moves every later array index down by one the same way.
+ void Runner_tileDeleted(Runner* runner, Room* room, uint32_t held, int32_t index, const RoomTile* removed) {
+     if (!(held & TILE_EDIT_RUN)) return;
+-    int32_t at = tileRunFind(removed->tileDepth, index), n = (int32_t) arrlen(drawableTileRun);
+-    if (0 > at) {
++    int32_t at = tileRunFind(removed->tileDepth, index);
++    if (0 > at || arrlen(tileRunGone) >= TILE_RUN_MAX_GONE) {
+         tileRunKnown = false;
+         return;
+     }
+-    arrdel(drawableTileRun, at);
+-    repeat(n - 1, k) {
+-        if (drawableTileRun[k].tileIndex > index) drawableTileRun[k].tileIndex--;
+-    }
++    int32_t pseudo = drawableTileRun[at].tileIndex, place = (int32_t) arrlen(tileRunGone);
++    while (place > 0 && tileRunGone[place - 1] > pseudo) place--;
++    arrins(tileRunGone, place, pseudo);
++    tileRunDead[at] = 1;
+     tileRunRecord(runner, room);
+-    if (held & TILE_EDIT_GRID) tileSkipDeleted(runner, room, at, removed->tileDepth);
++    if (held & TILE_EDIT_GRID) tileSkipDeleted(runner, room, removed->tileDepth);
+ }
+ 
+ // A new scale leaves the draw order as it was and moves the tile in the grid only.
+@@ -927,7 +961,7 @@ void Runner_tileRescaled(Runner* runner, Room* room, uint32_t held, int32_t inde
+         return;
+     }
+     tileRunRecord(runner, room);
+-    if (held & TILE_EDIT_GRID) tileSkipRescaled(runner, room, at, index);
++    if (held & TILE_EDIT_GRID) tileSkipRescaled(runner, room, drawableTileRun[at].tileIndex, index);
+ }
+ 
+ // Tiles sort by depth, higher first, then by place in the room's array: a bucket per depth, filled in array order, is
+@@ -980,6 +1014,36 @@ static bool sortTilesByDepth(Room* room, Drawable* out, int32_t tileCount) {
+     return true;
+ }
+ 
++// Writes run entries [from, to) to out: live tiles only, with array indices, and each pseudo index's rank among the live
++// tiles into tileRunRankOf (-1 for dead ones). Pseudo indices rise within a depth, so the gone pointer restarts at each.
++typedef struct {
++    int32_t rank, goneAt, depth;
++    bool started;
++} TileRunEmit;
++
++static int32_t tileRunEmit(Drawable* out, int32_t from, int32_t to, TileRunEmit* state) {
++    int32_t written = 0, gone = (int32_t) arrlen(tileRunGone);
++    for (int32_t k = from; to > k; k++) {
++        Drawable* d = &drawableTileRun[k];
++        int32_t pseudo = d->tileIndex;
++        if (!state->started || d->depth != state->depth) {
++            state->started = true;
++            state->depth = d->depth;
++            state->goneAt = 0;
++        }
++        if (tileRunDead[k]) {
++            tileRunRankOf[pseudo] = -1;
++            continue;
++        }
++        while (gone > state->goneAt && pseudo > tileRunGone[state->goneAt]) state->goneAt++;
++        out[written] = *d;
++        out[written].tileIndex = pseudo - state->goneAt;
++        written++;
++        tileRunRankOf[pseudo] = state->rank++;
++    }
++    return written;
++}
++
+ static void mergeTilesIntoDrawables(Runner* runner, Room* room, bool tilesKept) {
+     static Drawable* rest = nullptr;
+     Drawable* oldTiles;
+@@ -1007,7 +1071,12 @@ static void mergeTilesIntoDrawables(Runner* runner, Room* room, bool tilesKept)
+             if (tileCount > 1) qsort(oldTiles, (size_t) tileCount, sizeof(Drawable), compareDrawables);
+         }
+     }
++    if (!tilesKept) tileRunResetPseudo();
+     tileRunRecord(runner, room);
++    int32_t runLength = (int32_t) arrlen(drawableTileRun);
++    arrsetlen(tileRunRankOf, tileRunNextPseudo);
++    TileRunEmit emit;
++    memset(&emit, 0, sizeof emit);
+ 
+     int32_t restCount = (int32_t) arrlen(runner->cachedDrawables);
+     arrsetlen(rest, 0);
+@@ -1023,18 +1092,17 @@ static void mergeTilesIntoDrawables(Runner* runner, Room* room, bool tilesKept)
+     Drawable* merged = runner->cachedDrawables;
+     int32_t b = 0, out = 0;
+     repeat(restCount, a) {
+-        int32_t lo = b, hi = tileCount;
++        int32_t lo = b, hi = runLength;
+         while (hi > lo) {
+             int32_t mid = lo + (hi - lo) / 2;
+             if (compareDrawables(&oldTiles[mid], &rest[a]) < 0) lo = mid + 1;
+             else hi = mid;
+         }
+-        if (lo > b) memcpy(&merged[out], &oldTiles[b], (size_t) (lo - b) * sizeof(Drawable));
+-        out += lo - b;
++        out += tileRunEmit(&merged[out], b, lo, &emit);
+         b = lo;
+         merged[out++] = rest[a];
+     }
+-    if (tileCount > b) memcpy(&merged[out], &oldTiles[b], (size_t) (tileCount - b) * sizeof(Drawable));
++    out += tileRunEmit(&merged[out], b, runLength, &emit);
+ }
+ 
+ // Rebuilds runner->cachedDrawables when invalidated. Two-tier strategy:
+@@ -1170,8 +1238,9 @@ static void drawRoomTile(Runner* runner, Room* room, Drawable* d, bool* tileLaye
+ 
+ // The tiles a run of the draw list would actually show. Tiles keep their rank (order among the list's tiles) while
+ // the tile-order version holds, so each run of one depth gets a grid of ranks by box; the list's positions are mapped
+-// to ranks again whenever the list changes. A tile whose box isn't finite is always visited. Cells count ranks from
+-// their run's start, so tile_add, tile_delete and tile_set_scale edit one run in place (Runner_tileAdded and the rest).
++// to ranks again whenever the list changes. A tile whose box isn't finite is always visited. Cells hold the tile run's
++// pseudo indices, turned into ranks through tileRunRankOf, so tile_add and tile_set_scale edit one run in place and
++// tile_delete only moves the runs' bounds (Runner_tileAdded and the rest).
+ #define TILE_SKIP_CELL 128.0
+ // A run gets a full grid again once this many of its tiles are always visited (tiles added outside its grid).
+ #define TILE_SKIP_MAX_ALWAYS 256
+@@ -1185,7 +1254,7 @@ static struct {
+     bool gridBuilt, mapBuilt;
+     Room* room;
+     RoomTile* tiles;
+-    uint32_t count, version, listVersion;
++    uint32_t count, version, listVersion, epoch;
+     int32_t listCount;
+     TileSkipRun* runs;
+     int32_t* rankAt;
+@@ -1238,7 +1307,7 @@ static void tileSkipFreeRuns(void) {
+ 
+ static bool tileSkipCurrent(Runner* runner, Room* room) {
+     return tileSkip.gridBuilt && tileSkip.room == room && tileSkip.tiles == room->tiles && tileSkip.count == room->tileCount &&
+-           tileSkip.version == runner->tileOrderVersion;
++           tileSkip.version == runner->tileOrderVersion && tileSkip.epoch == tileRunEpoch;
+ }
+ 
+ static void tileSkipRecord(Runner* runner, Room* room) {
+@@ -1248,12 +1317,14 @@ static void tileSkipRecord(Runner* runner, Room* room) {
+     tileSkip.version = runner->tileOrderVersion;
+ }
+ 
+-// Ranks (in list order) and tile boxes; false when the list holds anything the grid can't describe.
++// Ranks (in list order), the tile run's pseudo indices and tile boxes; false when the list holds anything the grid can't
++// describe, or isn't the tile run the last merge wrote.
+ static bool tileSkipBuildGrid(Runner* runner, Room* room) {
+     tileSkipFreeRuns();
+     tileSkip.gridBuilt = false;
+-    static int32_t* rankTile = nullptr;
++    static int32_t *rankTile = nullptr, *rankPseudo = nullptr;
+     arrsetlen(rankTile, 0);
++    arrsetlen(rankPseudo, 0);
+     repeat(arrlen(runner->cachedDrawables), i) {
+         Drawable* d = &runner->cachedDrawables[i];
+         if (d->type != DRAWABLE_TILE) continue;
+@@ -1261,6 +1332,16 @@ static bool tileSkipBuildGrid(Runner* runner, Room* room) {
+         arrput(rankTile, d->tileIndex);
+     }
+     int32_t ranks = (int32_t) arrlen(rankTile);
++    if (tileRunRoom != room || arrlen(tileRunDead) != arrlen(drawableTileRun)) return false;
++    repeat(arrlen(drawableTileRun), k) {
++        if (tileRunDead[k]) continue;
++        int32_t pseudo = drawableTileRun[k].tileIndex, rank = (int32_t) arrlen(rankPseudo);
++        if (rank >= ranks || 0 > pseudo || pseudo >= (int32_t) arrlen(tileRunRankOf) || tileRunRankOf[pseudo] != rank ||
++            drawableTileRun[k].depth != room->tiles[rankTile[rank]].tileDepth)
++            return false;
++        arrput(rankPseudo, pseudo);
++    }
++    if ((int32_t) arrlen(rankPseudo) != ranks) return false;
+     for (int32_t r0 = 0; ranks > r0;) {
+         int32_t depth = room->tiles[rankTile[r0]].tileDepth;
+         int32_t r1 = r0;
+@@ -1295,7 +1376,7 @@ static bool tileSkipBuildGrid(Runner* runner, Room* room) {
+         }
+         for (int32_t r = r0; r1 > r; r++) {
+             if (run.cells == nullptr || !tileSkipBox(&room->tiles[rankTile[r]], box)) {
+-                arrput(run.always, r - r0);
++                arrput(run.always, rankPseudo[r]);
+                 continue;
+             }
+             int32_t span[4];
+@@ -1303,7 +1384,7 @@ static bool tileSkipBuildGrid(Runner* runner, Room* room) {
+             tileSkipClamp(&run, span);
+             for (int32_t cy = span[2]; span[3] >= cy; cy++)
+                 for (int32_t cx = span[0]; span[1] >= cx; cx++)
+-                    arrput(run.cells[cy * run.cellsX + cx], r - r0);
++                    arrput(run.cells[cy * run.cellsX + cx], rankPseudo[r]);
+         }
+         arrput(tileSkip.runs, run);
+         r0 = r1;
+@@ -1312,13 +1393,14 @@ static bool tileSkipBuildGrid(Runner* runner, Room* room) {
+     repeat(ranks, r) tileSkip.seen[r] = 0;
+     tileSkip.stamp = 0;
+     tileSkipRecord(runner, room);
++    tileSkip.epoch = tileRunEpoch;
+     tileSkip.gridBuilt = true;
+     return true;
+ }
+ 
+ // Puts a tile into the cells its box covers, or among the always visited when it has no finite box or its cells leave
+ // the grid: a query clamped to the grid's edge would miss it there.
+-static void tileSkipPlace(TileSkipRun* run, const RoomTile* tile, int32_t rel) {
++static void tileSkipPlace(TileSkipRun* run, const RoomTile* tile, int32_t pseudo) {
+     double box[4];
+     int32_t span[4];
+     if (run->cells != nullptr && tileSkipBox(tile, box)) {
+@@ -1326,36 +1408,33 @@ static void tileSkipPlace(TileSkipRun* run, const RoomTile* tile, int32_t rel) {
+         if (span[0] >= 0 && span[2] >= 0 && run->cellsX > span[1] && run->cellsY > span[3]) {
+             for (int32_t cy = span[2]; span[3] >= cy; cy++)
+                 for (int32_t cx = span[0]; span[1] >= cx; cx++)
+-                    arrput(run->cells[cy * run->cellsX + cx], rel);
++                    arrput(run->cells[cy * run->cellsX + cx], pseudo);
+             return;
+         }
+     }
+-    arrput(run->always, rel);
++    arrput(run->always, pseudo);
+     if (arrlen(run->always) > TILE_SKIP_MAX_ALWAYS) tileSkip.gridBuilt = false;
+ }
+ 
+-// Takes a rank out of one cell (or the always list); with shift, the ranks after it move down one.
+-static void tileSkipDropFrom(int32_t* list, int32_t rel, bool shift) {
++// Takes a pseudo index out of one cell (or the always list).
++static void tileSkipDropFrom(int32_t* list, int32_t pseudo) {
+     int32_t n = (int32_t) arrlen(list), kept = 0;
+     repeat(n, k) {
+-        if (list[k] != rel) list[kept++] = shift && list[k] > rel ? list[k] - 1 : list[k];
++        if (list[k] != pseudo) list[kept++] = list[k];
+     }
+     if (n > kept) arrsetlen(list, kept);
+ }
+ 
+-static void tileSkipDrop(TileSkipRun* run, int32_t rel, bool shift) {
+-    tileSkipDropFrom(run->always, rel, shift);
+-    if (run->cells != nullptr) repeat(run->cellsX * run->cellsY, c) tileSkipDropFrom(run->cells[c], rel, shift);
++static void tileSkipDrop(TileSkipRun* run, int32_t pseudo) {
++    tileSkipDropFrom(run->always, pseudo);
++    if (run->cells != nullptr) repeat(run->cellsX * run->cellsY, c) tileSkipDropFrom(run->cells[c], pseudo);
+ }
+ 
+-// The run holding that rank, when it is the run of that depth; else the grid is built again at its next query.
+-static TileSkipRun* tileSkipRunAt(int32_t rank, int32_t depth) {
++// The run of that depth, holding at least one tile; else the grid is built again at its next query.
++static TileSkipRun* tileSkipRunOf(int32_t depth) {
+     repeat(arrlen(tileSkip.runs), r) {
+         TileSkipRun* run = &tileSkip.runs[r];
+-        if (rank >= run->rankStart && run->rankEnd > rank) {
+-            if (run->depth == depth) return run;
+-            break;
+-        }
++        if (run->depth == depth && run->rankEnd > run->rankStart) return run;
+     }
+     tileSkip.gridBuilt = false;
+     return nullptr;
+@@ -1370,19 +1449,11 @@ static void tileSkipShiftAfter(TileSkipRun* run, int32_t by) {
+ 
+ // A new tile takes the rank after every tile of its depth (it is last in the array): the end of its depth's run, or a
+ // new run without cells when the depth had no tiles.
+-static void tileSkipAdded(Runner* runner, Room* room, int32_t rank, int32_t index) {
++static void tileSkipAdded(Runner* runner, Room* room, int32_t pseudo, int32_t index) {
+     int32_t depth = room->tiles[index].tileDepth, count = (int32_t) arrlen(tileSkip.runs), at = 0;
+     while (count > at && tileSkip.runs[at].depth > depth) at++;
+-    if (count > at && tileSkip.runs[at].depth == depth) {
+-        if (tileSkip.runs[at].rankEnd != rank) {
+-            tileSkip.gridBuilt = false;
+-            return;
+-        }
+-    } else {
+-        if ((count > at ? tileSkip.runs[at].rankStart : (int32_t) arrlen(tileSkip.seen)) != rank) {
+-            tileSkip.gridBuilt = false;
+-            return;
+-        }
++    if (!(count > at && tileSkip.runs[at].depth == depth)) {
++        int32_t rank = count > at ? tileSkip.runs[at].rankStart : (int32_t) arrlen(tileSkip.seen);
+         TileSkipRun run;
+         memset(&run, 0, sizeof run);
+         run.depth = depth;
+@@ -1392,28 +1463,28 @@ static void tileSkipAdded(Runner* runner, Room* room, int32_t rank, int32_t inde
+         arrins(tileSkip.runs, at, run);
+     }
+     TileSkipRun* run = &tileSkip.runs[at];
+-    tileSkipPlace(run, &room->tiles[index], run->rankEnd - run->rankStart);
++    tileSkipPlace(run, &room->tiles[index], pseudo);
+     run->rankEnd++;
+     tileSkipShiftAfter(run, 1);
+     arrput(tileSkip.seen, 0);
+     tileSkipRecord(runner, room);
+ }
+ 
+-static void tileSkipDeleted(Runner* runner, Room* room, int32_t rank, int32_t depth) {
+-    TileSkipRun* run = tileSkipRunAt(rank, depth);
++// The deleted tile's entries stay in its cells: its pseudo index has no rank any more after the next merge.
++static void tileSkipDeleted(Runner* runner, Room* room, int32_t depth) {
++    TileSkipRun* run = tileSkipRunOf(depth);
+     if (run == nullptr) return;
+-    tileSkipDrop(run, rank - run->rankStart, true);
+     run->rankEnd--;
+     tileSkipShiftAfter(run, -1);
+     arrsetlen(tileSkip.seen, arrlen(tileSkip.seen) - 1);
+     tileSkipRecord(runner, room);
+ }
+ 
+-static void tileSkipRescaled(Runner* runner, Room* room, int32_t rank, int32_t index) {
+-    TileSkipRun* run = tileSkipRunAt(rank, room->tiles[index].tileDepth);
++static void tileSkipRescaled(Runner* runner, Room* room, int32_t pseudo, int32_t index) {
++    TileSkipRun* run = tileSkipRunOf(room->tiles[index].tileDepth);
+     if (run == nullptr) return;
+-    tileSkipDrop(run, rank - run->rankStart, false);
+-    tileSkipPlace(run, &room->tiles[index], rank - run->rankStart);
++    tileSkipDrop(run, pseudo);
++    tileSkipPlace(run, &room->tiles[index], pseudo);
+     tileSkipRecord(runner, room);
+ }
+ 
+@@ -1463,8 +1534,9 @@ static int32_t tileSkipVisibleRun(Runner* runner, Room* room, int32_t pos, float
+         if (layerIdx >= 0 && !runner->tileLayerMap[layerIdx].value.visible) continue;
+         double offX = layerIdx >= 0 ? runner->tileLayerMap[layerIdx].value.offsetX : 0.0;
+         double offY = layerIdx >= 0 ? runner->tileLayerMap[layerIdx].value.offsetY : 0.0;
++        int32_t pseudos = (int32_t) arrlen(tileRunRankOf);
+         repeat(arrlen(run->always), k) {
+-            int32_t r = run->rankStart + run->always[k];
++            int32_t pseudo = run->always[k], r = (uint32_t) pseudos > (uint32_t) pseudo ? tileRunRankOf[pseudo] : -1;
+             if (r >= lo && hi > r && tileSkip.seen[r] != tileSkip.stamp) {
+                 tileSkip.seen[r] = tileSkip.stamp;
+                 arrput(tileSkipPicked, pos + (r - r0));
+@@ -1479,7 +1551,7 @@ static int32_t tileSkipVisibleRun(Runner* runner, Room* room, int32_t pos, float
+             for (int32_t cx = span[0]; span[1] >= cx; cx++) {
+                 int32_t* cell = run->cells[cy * run->cellsX + cx];
+                 repeat(arrlen(cell), k) {
+-                    int32_t r = run->rankStart + cell[k];
++                    int32_t pseudo = cell[k], r = (uint32_t) pseudos > (uint32_t) pseudo ? tileRunRankOf[pseudo] : -1;
+                     if (r >= lo && hi > r && tileSkip.seen[r] != tileSkip.stamp) {
+                         tileSkip.seen[r] = tileSkip.stamp;
+                         arrput(tileSkipPicked, pos + (r - r0));
