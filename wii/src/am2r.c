@@ -1133,6 +1133,25 @@ static RValue wii_skorp_get_lure(VMContext *ctx, RValue *args, int32_t argCount)
 	return r;
 }
 
+/* A mine's death leaves up to ~1,800 oRoboMineProj drawing at once: draw_set_blend_mode(1); draw_self();
+ * draw_set_blend_mode(0), the same three calls without the interpreter. */
+static int32_t mineProjDrawCode = -1;
+static BuiltinFunc setBlendModeFn, drawSelfFn;
+
+static GML_ROUNDING RValue wii_mine_proj_draw(VMContext *ctx)
+{
+	RValue arg = RValue_makeInt32(1), r;
+
+	r = setBlendModeFn(ctx, &arg, 1);
+	RValue_free(&r);
+	r = drawSelfFn(ctx, NULL, 0);
+	RValue_free(&r);
+	arg = RValue_makeInt32(0);
+	r = setBlendModeFn(ctx, &arg, 1);
+	RValue_free(&r);
+	return RValue_makeUndefined();
+}
+
 void Wii_hookAm2rScripts(VMContext *ctx)
 {
 	static const char *const partNames[7] = { "wallU", "wallR", "wallD", "wallL", "color", "special", "corner" };
@@ -1146,6 +1165,7 @@ void Wii_hookAm2rScripts(VMContext *ctx)
 	ptrdiff_t ls = shgeti(ctx->codeIndexByName, "gml_Object_oLavaSurface_Draw_0");
 	ptrdiff_t pb = shgeti(ctx->codeIndexByName, "gml_Object_oPBombExpl_Collision_268");
 	ptrdiff_t sl = shgeti(ctx->codeIndexByName, "skorp_get_lure");
+	ptrdiff_t mp = shgeti(ctx->codeIndexByName, "gml_Object_oRoboMineProj_Draw_0");
 	bool resetMap, mapSurf, water, tiles, bubbles, owater, lava;
 	int k;
 
@@ -1288,5 +1308,11 @@ void Wii_hookAm2rScripts(VMContext *ctx)
 	if (pb >= 0 && ctx->dataWin->code.entries[ctx->codeIndexByName[pb].value].length == 180) {
 		pbombSolidCode = ctx->codeIndexByName[pb].value;
 		VM_setNativeCode(ctx, pbombSolidCode, wii_pbomb_solid);
+	}
+	setBlendModeFn = VM_findBuiltin(ctx, "draw_set_blend_mode");
+	drawSelfFn = VM_findBuiltin(ctx, "draw_self");
+	if (mp >= 0 && setBlendModeFn && drawSelfFn && ctx->dataWin->code.entries[ctx->codeIndexByName[mp].value].length == 52) {
+		mineProjDrawCode = ctx->codeIndexByName[mp].value;
+		VM_setNativeCode(ctx, mineProjDrawCode, wii_mine_proj_draw);
 	}
 }
