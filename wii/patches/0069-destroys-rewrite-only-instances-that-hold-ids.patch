@@ -1,0 +1,143 @@
+Reason: every destroy rewrites stale copies of the dead instance's id, and patches 0025 and 0061 already limit that to
+instances flagged as holding id-like numbers and to their listed variables, but finding those instances still walked
+all of runner->instances, reading each one's flags: about one cache miss per instance. In the mine room (rm_a5c22) a
+chain of Robo Mines keeps 1,100 to 1,800 instances alive and destroys a dozen or more a frame, so on the real Wii each
+destroy cost ~230 µs and the rewrites 1.3 to 4.8 ms a frame. The instances in runner->instances that were given an
+id-like number are now kept in a list (an instance knows whether it is in runner->instances and its place in the
+list, both kept where it joins or leaves the room's list or is freed), and a high id's rewrite walks only that list,
+with the same per-instance tests and the same per-instance work, so the same slots are rewritten (~5 µs a destroy).
+Upstream: Speed only, every platform. Retires this patch when merged.
+
+--- a/src/instance.h
++++ b/src/instance.h
+@@ -43,6 +43,10 @@
+     bool mayHoldIds;
+     // The self variables that were given such a number (varIDs, each once), so a destroy looks only at them.
+     int32_t* idVarKeys;
++    // In runner->instances (set where an instance joins it, cleared where it leaves), and its place in Instance_idHolders
++    // (-1: not listed).
++    bool inRoomList;
++    int32_t idHolderSlot;
+     // Increases along runner->instances (set as it joins the list), so an index can hand back room order.
+     uint32_t listOrdinal;
+     // instance_activate_region's index: the build that holds this instance (0: none) and its one live entry there.
+@@ -132,6 +136,12 @@
+     }
+ }
+ 
++// The instances in runner->instances that were given an id-like number while there, in no order: a destroy's id rewrite
++// looks only at these instead of at every instance in the room.
++extern Instance** Instance_idHolders;
++void Instance_listIdHolder(Instance* inst);
++void Instance_unlistIdHolder(Instance* inst);
++
+ // Set a self variable by varID. Frees the old value if present (decRefs owned arrays).
+ // Always takes an independent reference with RValue_makeIndependent.
+ // The caller retains ownership of their original `val` and remains responsible for freeing it (via RValue_free) when done.
+@@ -144,6 +154,7 @@
+     *pointerToSlot = independentVal;
+     if (RValue_isIdLike(independentVal)) {
+         inst->mayHoldIds = true;
++        if (inst->idHolderSlot < 0 && inst->inRoomList) Instance_listIdHolder(inst);
+         repeat(arrlen(inst->idVarKeys), i) if (inst->idVarKeys[i] == varID) return;
+         arrput(inst->idVarKeys, varID);
+     }
+--- a/src/instance.c
++++ b/src/instance.c
+@@ -9,8 +9,28 @@
+ #include "utils.h"
+ #include "int_rvalue_hashmap.h"
+ 
++Instance** Instance_idHolders = nullptr;
++
++void Instance_listIdHolder(Instance* inst) {
++    if (inst->idHolderSlot >= 0) return;
++    inst->idHolderSlot = (int32_t) arrlen(Instance_idHolders);
++    arrput(Instance_idHolders, inst);
++}
++
++void Instance_unlistIdHolder(Instance* inst) {
++    int32_t slot = inst->idHolderSlot;
++    if (0 > slot || slot >= (int32_t) arrlen(Instance_idHolders) || Instance_idHolders[slot] != inst) return;
++    Instance* last = arrpop(Instance_idHolders);
++    if (last != inst) {
++        Instance_idHolders[slot] = last;
++        last->idHolderSlot = slot;
++    }
++    inst->idHolderSlot = -1;
++}
++
+ Instance* Instance_create(uint32_t instanceId, int32_t objectIndex, GMLReal x, GMLReal y) {
+     Instance* inst = (Instance *)safeCalloc(1, sizeof(Instance));
++    inst->idHolderSlot = -1;
+     inst->instanceId = instanceId;
+     inst->objectIndex = objectIndex;
+     inst->refCount = 0;
+@@ -96,6 +116,7 @@
+ 
+ void Instance_free(Instance* instance) {
+     if (instance == nullptr) return;
++    Instance_unlistIdHolder(instance);
+ 
+     Instance_freeContents(instance);
+     free(instance);
+--- a/src/runner.c
++++ b/src/runner.c
+@@ -1757,6 +1757,7 @@
+     hmput(runner->instancesById, instanceId, inst);
+     arrput(runner->instances, inst);
+     inst->listOrdinal = ++runner->nextListOrdinal;
++    inst->inRoomList = true;
+     Runner_addInstanceToObjectLists(runner, inst);
+     runner->drawableListStructureDirty = true;
+ 
+@@ -1789,6 +1790,8 @@
+             // The spatial grid is recreated per room, so any cell coordinates the instance was tracking belong to the old grid and must not be reused.
+             arrsetlen(inst->collisionCells, 0);
+             inst->spatialGridDirty = false;
++            inst->inRoomList = false;
++            Instance_unlistIdHolder(inst);
+ 
+             arrput(carriedPersistent, inst);
+         } else {
+@@ -1827,6 +1830,8 @@
+     repeat(arrlen(carriedPersistent), i) {
+         arrput(runner->instances, carriedPersistent[i]);
+         carriedPersistent[i]->listOrdinal = ++runner->nextListOrdinal;
++        carriedPersistent[i]->inRoomList = true;
++        if (carriedPersistent[i]->mayHoldIds) Instance_listIdHolder(carriedPersistent[i]);
+         Runner_addInstanceToObjectLists(runner, carriedPersistent[i]);
+     }
+     arrfree(carriedPersistent);
+@@ -1943,6 +1948,8 @@
+         repeat(savedCount, i) {
+             arrput(runner->instances, savedState->instances[i]);
+             savedState->instances[i]->listOrdinal = ++runner->nextListOrdinal;
++            savedState->instances[i]->inRoomList = true;
++            if (savedState->instances[i]->mayHoldIds) Instance_listIdHolder(savedState->instances[i]);
+             Runner_addInstanceToObjectLists(runner, savedState->instances[i]);
+         }
+         runner->activationVersion++;
+@@ -2950,9 +2957,11 @@
+ 
+     int32_t destroyedInstanceId = destroyedInst->instanceId;
+     bool filtered = destroyedInstanceId >= INSTANCE_ID_BASE;
+-    int32_t count = (int32_t) arrlen(runner->instances);
++    // A high id can only be held by a listed instance; each one's rewrite touches only its own variables.
++    Instance** walk = filtered ? Instance_idHolders : runner->instances;
++    int32_t count = (int32_t) arrlen(walk);
+     for (int32_t i = 0; i < count; i++) {
+-        Instance* inst = runner->instances[i];
++        Instance* inst = walk[i];
+         if (inst == nullptr || !inst->active || inst->destroyed || inst->objectIndex < 0) continue;
+         if (filtered && !inst->mayHoldIds) continue;
+         if (filtered) {
+@@ -4286,6 +4295,8 @@
+             // The next visit builds a new grid: cells and a dirty flag from this one would keep the instance out of it.
+             arrsetlen(inst->collisionCells, 0);
+             inst->spatialGridDirty = false;
++            inst->inRoomList = false;
++            Instance_unlistIdHolder(inst);
+             arrput(state->instances, inst);
+         }
+     }
