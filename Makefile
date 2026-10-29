@@ -119,6 +119,7 @@ wii: $(BUTTER)/CMakeLists.txt
 	cd $(BUTTER) && git apply ../../wii/patches/0075-tile-deletes-leave-later-entries-to-be-found.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0076-tiles-sort-by-depth-in-buckets.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0077-tile-adds-and-deletes-keep-the-tile-run-sorted.patch
+	cd $(BUTTER) && git apply ../../wii/patches/0078-tile-edits-keep-the-tile-skip-grid.patch
 	if [ "$(HOOKS)" != 0 ] && [ -f wii/test/patches/0099-debug-collision-trace.patch ]; then cd $(BUTTER) && git apply ../../wii/test/patches/0099-debug-collision-trace.patch; fi
 	cmake -B $(WII_BUILD) -S $(BUTTER) $(WII_CMAKE_FLAGS)
 	cmake --build $(WII_BUILD) -j$(JOBS)

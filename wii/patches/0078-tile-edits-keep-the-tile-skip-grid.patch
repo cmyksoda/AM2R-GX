@@ -1,0 +1,380 @@
+Reason: the tile-skip grid (patch 0065) was built again over every tile of the room whenever the tile-order version
+moved: ~10.5 ms on the real Wii for rm_a3h04's ~4,800 tiles, on two of every three frames while its sand crumbles.
+Its cells now count ranks from their depth's run, so tile_add, tile_delete and tile_set_scale edit the grid in place
+when it and the tile run (patch 0077) were current before the edit: a new tile takes the next rank of its depth's run
+(a new depth gets a run without cells) and goes into the cells its box covers, or among the always visited when those
+cells leave the grid; a deleted tile leaves every cell and the later ranks of its run move down one; a rescaled tile
+moves to its new cells. A run with more than 256 always visited tiles, and any other tile edit, gets a full grid again.
+Every tile the renderer would draw is still visited, in draw order.
+Upstream: Speed only, every platform. Retires this patch when merged.
+
+--- a/src/runner.c
++++ b/src/runner.c
+@@ -857,9 +857,16 @@ static void tileRunRecord(Runner* runner, Room* room) {
+ }
+ 
+ #define TILE_EDIT_RUN 1u
++#define TILE_EDIT_GRID 2u
++
++// The tile-skip grid (further down) follows the same edits.
++static bool tileSkipCurrent(Runner* runner, Room* room);
++static void tileSkipAdded(Runner* runner, Room* room, int32_t rank, int32_t index);
++static void tileSkipDeleted(Runner* runner, Room* room, int32_t rank, int32_t depth);
++static void tileSkipRescaled(Runner* runner, Room* room, int32_t rank, int32_t index);
+ 
+ uint32_t Runner_tileEditBegin(Runner* runner, Room* room) {
+-    return tileRunCurrent(runner, room) ? TILE_EDIT_RUN : 0;
++    return (tileRunCurrent(runner, room) ? TILE_EDIT_RUN : 0) | (tileSkipCurrent(runner, room) ? TILE_EDIT_GRID : 0);
+ }
+ 
+ // The run is in draw order (depth, higher first, then array index) and tile_add puts the new tile last in the array,
+@@ -880,6 +887,7 @@ void Runner_tileAdded(Runner* runner, Room* room, uint32_t held) {
+     d.tileIndex = index;
+     arrins(drawableTileRun, lo, d);
+     tileRunRecord(runner, room);
++    if (held & TILE_EDIT_GRID) tileSkipAdded(runner, room, lo, index);
+ }
+ 
+ // The place in the run of the tile at that depth and array index, or -1.
+@@ -907,6 +915,19 @@ void Runner_tileDeleted(Runner* runner, Room* room, uint32_t held, int32_t index
+         if (drawableTileRun[k].tileIndex > index) drawableTileRun[k].tileIndex--;
+     }
+     tileRunRecord(runner, room);
++    if (held & TILE_EDIT_GRID) tileSkipDeleted(runner, room, at, removed->tileDepth);
++}
++
++// A new scale leaves the draw order as it was and moves the tile in the grid only.
++void Runner_tileRescaled(Runner* runner, Room* room, uint32_t held, int32_t index) {
++    if (!(held & TILE_EDIT_RUN)) return;
++    int32_t at = tileRunFind(room->tiles[index].tileDepth, index);
++    if (0 > at) {
++        tileRunKnown = false;
++        return;
++    }
++    tileRunRecord(runner, room);
++    if (held & TILE_EDIT_GRID) tileSkipRescaled(runner, room, at, index);
+ }
+ 
+ // Tiles sort by depth, higher first, then by place in the room's array: a bucket per depth, filled in array order, is
+@@ -1149,8 +1170,11 @@ static void drawRoomTile(Runner* runner, Room* room, Drawable* d, bool* tileLaye
+ 
+ // The tiles a run of the draw list would actually show. Tiles keep their rank (order among the list's tiles) while
+ // the tile-order version holds, so each run of one depth gets a grid of ranks by box; the list's positions are mapped
+-// to ranks again whenever the list changes. A tile whose box isn't finite is always visited.
++// to ranks again whenever the list changes. A tile whose box isn't finite is always visited. Cells count ranks from
++// their run's start, so tile_add, tile_delete and tile_set_scale edit one run in place (Runner_tileAdded and the rest).
+ #define TILE_SKIP_CELL 128.0
++// A run gets a full grid again once this many of its tiles are always visited (tiles added outside its grid).
++#define TILE_SKIP_MAX_ALWAYS 256
+ typedef struct {
+     int32_t depth, rankStart, rankEnd, cellsX, cellsY;
+     double originX, originY, cellSize;
+@@ -1175,6 +1199,33 @@ static double tileSkipMargin(double v) {
+     return 4.0 + 1e-3 * fabs(v);
+ }
+ 
++// A tile's box as left, right, top, bottom; false when it isn't finite.
++static bool tileSkipBox(const RoomTile* t, double box[4]) {
++    double x0 = t->x, x1 = x0 + (double) t->width * (double) t->scaleX;
++    double y0 = t->y, y1 = y0 + (double) t->height * (double) t->scaleY;
++    if (!(isfinite(x1) && isfinite(y1) && 1e7 > fabs(x0) && 1e7 > fabs(x1) && 1e7 > fabs(y0) && 1e7 > fabs(y1))) return false;
++    box[0] = fmin(x0, x1);
++    box[1] = fmax(x0, x1);
++    box[2] = fmin(y0, y1);
++    box[3] = fmax(y0, y1);
++    return true;
++}
++
++// The cells (first and last column, first and last row) a box covers with its margin, not yet clamped to the grid.
++static void tileSkipSpan(const TileSkipRun* run, const double box[4], int32_t span[4]) {
++    span[0] = (int32_t) floor((box[0] - tileSkipMargin(box[0]) - run->originX) / run->cellSize);
++    span[1] = (int32_t) floor((box[1] + tileSkipMargin(box[1]) - run->originX) / run->cellSize);
++    span[2] = (int32_t) floor((box[2] - tileSkipMargin(box[2]) - run->originY) / run->cellSize);
++    span[3] = (int32_t) floor((box[3] + tileSkipMargin(box[3]) - run->originY) / run->cellSize);
++}
++
++static void tileSkipClamp(const TileSkipRun* run, int32_t span[4]) {
++    if (0 > span[0]) span[0] = 0;
++    if (0 > span[2]) span[2] = 0;
++    if (span[1] >= run->cellsX) span[1] = run->cellsX - 1;
++    if (span[3] >= run->cellsY) span[3] = run->cellsY - 1;
++}
++
+ static void tileSkipFreeRuns(void) {
+     repeat(arrlen(tileSkip.runs), r) {
+         TileSkipRun* run = &tileSkip.runs[r];
+@@ -1185,6 +1236,18 @@ static void tileSkipFreeRuns(void) {
+     arrsetlen(tileSkip.runs, 0);
+ }
+ 
++static bool tileSkipCurrent(Runner* runner, Room* room) {
++    return tileSkip.gridBuilt && tileSkip.room == room && tileSkip.tiles == room->tiles && tileSkip.count == room->tileCount &&
++           tileSkip.version == runner->tileOrderVersion;
++}
++
++static void tileSkipRecord(Runner* runner, Room* room) {
++    tileSkip.room = room;
++    tileSkip.tiles = room->tiles;
++    tileSkip.count = room->tileCount;
++    tileSkip.version = runner->tileOrderVersion;
++}
++
+ // Ranks (in list order) and tile boxes; false when the list holds anything the grid can't describe.
+ static bool tileSkipBuildGrid(Runner* runner, Room* room) {
+     tileSkipFreeRuns();
+@@ -1201,20 +1264,16 @@ static bool tileSkipBuildGrid(Runner* runner, Room* room) {
+     for (int32_t r0 = 0; ranks > r0;) {
+         int32_t depth = room->tiles[rankTile[r0]].tileDepth;
+         int32_t r1 = r0;
+-        double minX = 0, minY = 0, maxX = 0, maxY = 0;
++        double minX = 0, minY = 0, maxX = 0, maxY = 0, box[4];
+         bool any = false;
+         TileSkipRun run;
+         memset(&run, 0, sizeof run);
+         while (ranks > r1 && room->tiles[rankTile[r1]].tileDepth == depth) {
+-            RoomTile* t = &room->tiles[rankTile[r1]];
+-            double x0 = t->x, x1 = x0 + (double) t->width * (double) t->scaleX;
+-            double y0 = t->y, y1 = y0 + (double) t->height * (double) t->scaleY;
+-            if (isfinite(x1) && isfinite(y1) && 1e7 > fabs(x0) && 1e7 > fabs(x1) && 1e7 > fabs(y0) && 1e7 > fabs(y1)) {
+-                double lx = fmin(x0, x1), hx = fmax(x0, x1), ly = fmin(y0, y1), hy = fmax(y0, y1);
+-                if (!any || minX > lx) minX = lx;
+-                if (!any || hx > maxX) maxX = hx;
+-                if (!any || minY > ly) minY = ly;
+-                if (!any || hy > maxY) maxY = hy;
++            if (tileSkipBox(&room->tiles[rankTile[r1]], box)) {
++                if (!any || minX > box[0]) minX = box[0];
++                if (!any || box[1] > maxX) maxX = box[1];
++                if (!any || minY > box[2]) minY = box[2];
++                if (!any || box[3] > maxY) maxY = box[3];
+                 any = true;
+             }
+             r1++;
+@@ -1235,25 +1294,16 @@ static bool tileSkipBuildGrid(Runner* runner, Room* room) {
+             run.cells = (int32_t**) calloc((size_t) run.cellsX * run.cellsY, sizeof(int32_t*));
+         }
+         for (int32_t r = r0; r1 > r; r++) {
+-            RoomTile* t = &room->tiles[rankTile[r]];
+-            double x0 = t->x, x1 = x0 + (double) t->width * (double) t->scaleX;
+-            double y0 = t->y, y1 = y0 + (double) t->height * (double) t->scaleY;
+-            if (!(isfinite(x1) && isfinite(y1) && 1e7 > fabs(x0) && 1e7 > fabs(x1) && 1e7 > fabs(y0) && 1e7 > fabs(y1)) || run.cells == nullptr) {
+-                arrput(run.always, r);
++            if (run.cells == nullptr || !tileSkipBox(&room->tiles[rankTile[r]], box)) {
++                arrput(run.always, r - r0);
+                 continue;
+             }
+-            double lx = fmin(x0, x1), hx = fmax(x0, x1), ly = fmin(y0, y1), hy = fmax(y0, y1);
+-            int32_t cx0 = (int32_t) floor((lx - tileSkipMargin(lx) - run.originX) / run.cellSize);
+-            int32_t cx1 = (int32_t) floor((hx + tileSkipMargin(hx) - run.originX) / run.cellSize);
+-            int32_t cy0 = (int32_t) floor((ly - tileSkipMargin(ly) - run.originY) / run.cellSize);
+-            int32_t cy1 = (int32_t) floor((hy + tileSkipMargin(hy) - run.originY) / run.cellSize);
+-            if (0 > cx0) cx0 = 0;
+-            if (0 > cy0) cy0 = 0;
+-            if (cx1 >= run.cellsX) cx1 = run.cellsX - 1;
+-            if (cy1 >= run.cellsY) cy1 = run.cellsY - 1;
+-            for (int32_t cy = cy0; cy1 >= cy; cy++)
+-                for (int32_t cx = cx0; cx1 >= cx; cx++)
+-                    arrput(run.cells[cy * run.cellsX + cx], r);
++            int32_t span[4];
++            tileSkipSpan(&run, box, span);
++            tileSkipClamp(&run, span);
++            for (int32_t cy = span[2]; span[3] >= cy; cy++)
++                for (int32_t cx = span[0]; span[1] >= cx; cx++)
++                    arrput(run.cells[cy * run.cellsX + cx], r - r0);
+         }
+         arrput(tileSkip.runs, run);
+         r0 = r1;
+@@ -1261,14 +1311,112 @@ static bool tileSkipBuildGrid(Runner* runner, Room* room) {
+     arrsetlen(tileSkip.seen, ranks);
+     repeat(ranks, r) tileSkip.seen[r] = 0;
+     tileSkip.stamp = 0;
+-    tileSkip.room = room;
+-    tileSkip.tiles = room->tiles;
+-    tileSkip.count = room->tileCount;
+-    tileSkip.version = runner->tileOrderVersion;
++    tileSkipRecord(runner, room);
+     tileSkip.gridBuilt = true;
+     return true;
+ }
+ 
++// Puts a tile into the cells its box covers, or among the always visited when it has no finite box or its cells leave
++// the grid: a query clamped to the grid's edge would miss it there.
++static void tileSkipPlace(TileSkipRun* run, const RoomTile* tile, int32_t rel) {
++    double box[4];
++    int32_t span[4];
++    if (run->cells != nullptr && tileSkipBox(tile, box)) {
++        tileSkipSpan(run, box, span);
++        if (span[0] >= 0 && span[2] >= 0 && run->cellsX > span[1] && run->cellsY > span[3]) {
++            for (int32_t cy = span[2]; span[3] >= cy; cy++)
++                for (int32_t cx = span[0]; span[1] >= cx; cx++)
++                    arrput(run->cells[cy * run->cellsX + cx], rel);
++            return;
++        }
++    }
++    arrput(run->always, rel);
++    if (arrlen(run->always) > TILE_SKIP_MAX_ALWAYS) tileSkip.gridBuilt = false;
++}
++
++// Takes a rank out of one cell (or the always list); with shift, the ranks after it move down one.
++static void tileSkipDropFrom(int32_t* list, int32_t rel, bool shift) {
++    int32_t n = (int32_t) arrlen(list), kept = 0;
++    repeat(n, k) {
++        if (list[k] != rel) list[kept++] = shift && list[k] > rel ? list[k] - 1 : list[k];
++    }
++    if (n > kept) arrsetlen(list, kept);
++}
++
++static void tileSkipDrop(TileSkipRun* run, int32_t rel, bool shift) {
++    tileSkipDropFrom(run->always, rel, shift);
++    if (run->cells != nullptr) repeat(run->cellsX * run->cellsY, c) tileSkipDropFrom(run->cells[c], rel, shift);
++}
++
++// The run holding that rank, when it is the run of that depth; else the grid is built again at its next query.
++static TileSkipRun* tileSkipRunAt(int32_t rank, int32_t depth) {
++    repeat(arrlen(tileSkip.runs), r) {
++        TileSkipRun* run = &tileSkip.runs[r];
++        if (rank >= run->rankStart && run->rankEnd > rank) {
++            if (run->depth == depth) return run;
++            break;
++        }
++    }
++    tileSkip.gridBuilt = false;
++    return nullptr;
++}
++
++static void tileSkipShiftAfter(TileSkipRun* run, int32_t by) {
++    for (TileSkipRun* later = run + 1; &tileSkip.runs[arrlen(tileSkip.runs)] > later; later++) {
++        later->rankStart += by;
++        later->rankEnd += by;
++    }
++}
++
++// A new tile takes the rank after every tile of its depth (it is last in the array): the end of its depth's run, or a
++// new run without cells when the depth had no tiles.
++static void tileSkipAdded(Runner* runner, Room* room, int32_t rank, int32_t index) {
++    int32_t depth = room->tiles[index].tileDepth, count = (int32_t) arrlen(tileSkip.runs), at = 0;
++    while (count > at && tileSkip.runs[at].depth > depth) at++;
++    if (count > at && tileSkip.runs[at].depth == depth) {
++        if (tileSkip.runs[at].rankEnd != rank) {
++            tileSkip.gridBuilt = false;
++            return;
++        }
++    } else {
++        if ((count > at ? tileSkip.runs[at].rankStart : (int32_t) arrlen(tileSkip.seen)) != rank) {
++            tileSkip.gridBuilt = false;
++            return;
++        }
++        TileSkipRun run;
++        memset(&run, 0, sizeof run);
++        run.depth = depth;
++        run.rankStart = rank;
++        run.rankEnd = rank;
++        run.cellSize = TILE_SKIP_CELL;
++        arrins(tileSkip.runs, at, run);
++    }
++    TileSkipRun* run = &tileSkip.runs[at];
++    tileSkipPlace(run, &room->tiles[index], run->rankEnd - run->rankStart);
++    run->rankEnd++;
++    tileSkipShiftAfter(run, 1);
++    arrput(tileSkip.seen, 0);
++    tileSkipRecord(runner, room);
++}
++
++static void tileSkipDeleted(Runner* runner, Room* room, int32_t rank, int32_t depth) {
++    TileSkipRun* run = tileSkipRunAt(rank, depth);
++    if (run == nullptr) return;
++    tileSkipDrop(run, rank - run->rankStart, true);
++    run->rankEnd--;
++    tileSkipShiftAfter(run, -1);
++    arrsetlen(tileSkip.seen, arrlen(tileSkip.seen) - 1);
++    tileSkipRecord(runner, room);
++}
++
++static void tileSkipRescaled(Runner* runner, Room* room, int32_t rank, int32_t index) {
++    TileSkipRun* run = tileSkipRunAt(rank, room->tiles[index].tileDepth);
++    if (run == nullptr) return;
++    tileSkipDrop(run, rank - run->rankStart, false);
++    tileSkipPlace(run, &room->tiles[index], rank - run->rankStart);
++    tileSkipRecord(runner, room);
++}
++
+ static void tileSkipBuildMap(Runner* runner) {
+     int32_t n = (int32_t) arrlen(runner->cachedDrawables);
+     arrsetlen(tileSkip.rankAt, n);
+@@ -1292,8 +1440,7 @@ static void tileSkipBuildMap(Runner* runner) {
+ // may be visible in the rectangle; returns that end, or 0 when the grid can't answer.
+ static int32_t tileSkipVisibleRun(Runner* runner, Room* room, int32_t pos, float visL, float visT, float visR, float visB) {
+     if (!(isfinite(visL) && isfinite(visT) && isfinite(visR) && isfinite(visB))) return 0;
+-    if (!tileSkip.gridBuilt || tileSkip.room != room || tileSkip.tiles != room->tiles || tileSkip.count != room->tileCount ||
+-        tileSkip.version != runner->tileOrderVersion) {
++    if (!tileSkipCurrent(runner, room)) {
+         if (!tileSkipBuildGrid(runner, room)) return 0;
+         tileSkip.mapBuilt = false;
+     }
+@@ -1317,27 +1464,22 @@ static int32_t tileSkipVisibleRun(Runner* runner, Room* room, int32_t pos, float
+         double offX = layerIdx >= 0 ? runner->tileLayerMap[layerIdx].value.offsetX : 0.0;
+         double offY = layerIdx >= 0 ? runner->tileLayerMap[layerIdx].value.offsetY : 0.0;
+         repeat(arrlen(run->always), k) {
+-            int32_t r = run->always[k];
++            int32_t r = run->rankStart + run->always[k];
+             if (r >= lo && hi > r && tileSkip.seen[r] != tileSkip.stamp) {
+                 tileSkip.seen[r] = tileSkip.stamp;
+                 arrput(tileSkipPicked, pos + (r - r0));
+             }
+         }
+         if (run->cells == nullptr) continue;
+-        double qL = visL - offX, qR = visR - offX, qT = visT - offY, qB = visB - offY;
+-        int32_t cx0 = (int32_t) floor((qL - tileSkipMargin(qL) - run->originX) / run->cellSize);
+-        int32_t cx1 = (int32_t) floor((qR + tileSkipMargin(qR) - run->originX) / run->cellSize);
+-        int32_t cy0 = (int32_t) floor((qT - tileSkipMargin(qT) - run->originY) / run->cellSize);
+-        int32_t cy1 = (int32_t) floor((qB + tileSkipMargin(qB) - run->originY) / run->cellSize);
+-        if (0 > cx0) cx0 = 0;
+-        if (0 > cy0) cy0 = 0;
+-        if (cx1 >= run->cellsX) cx1 = run->cellsX - 1;
+-        if (cy1 >= run->cellsY) cy1 = run->cellsY - 1;
+-        for (int32_t cy = cy0; cy1 >= cy; cy++) {
+-            for (int32_t cx = cx0; cx1 >= cx; cx++) {
++        double query[4] = { visL - offX, visR - offX, visT - offY, visB - offY };
++        int32_t span[4];
++        tileSkipSpan(run, query, span);
++        tileSkipClamp(run, span);
++        for (int32_t cy = span[2]; span[3] >= cy; cy++) {
++            for (int32_t cx = span[0]; span[1] >= cx; cx++) {
+                 int32_t* cell = run->cells[cy * run->cellsX + cx];
+                 repeat(arrlen(cell), k) {
+-                    int32_t r = cell[k];
++                    int32_t r = run->rankStart + cell[k];
+                     if (r >= lo && hi > r && tileSkip.seen[r] != tileSkip.stamp) {
+                         tileSkip.seen[r] = tileSkip.stamp;
+                         arrput(tileSkipPicked, pos + (r - r0));
+--- a/src/runner.h
++++ b/src/runner.h
+@@ -939,11 +939,13 @@ GMLCamera* Runner_getCameraById(Runner* runner, int32_t id);
+ GMLCamera* Runner_getCameraForView(Runner* runner, int32_t viewIndex);
+ void Runner_scrollBackgrounds(Runner* runner);
+ void Runner_drawTileLayer(Runner* runner, RoomLayerTilesData* data, float layerOffsetX, float layerOffsetY);
+-// tile_add and tile_delete keep the draw list's sorted tile run current rather than leave it to be sorted again:
+-// Runner_tileEditBegin before the edit, then the matching call once the room's tiles are updated.
++// tile_add, tile_delete and tile_set_scale keep the draw list's sorted tile run and the tile-skip grid current rather
++// than leave them to be built again: Runner_tileEditBegin before the edit, then the matching call once the room's
++// tiles are updated.
+ uint32_t Runner_tileEditBegin(Runner* runner, Room* room);
+ void Runner_tileAdded(Runner* runner, Room* room, uint32_t held);
+ void Runner_tileDeleted(Runner* runner, Room* room, uint32_t held, int32_t index, const RoomTile* removed);
++void Runner_tileRescaled(Runner* runner, Room* room, uint32_t held, int32_t index);
+ // Allocates a fresh GML struct and registers it in instancesById and structInstances.
+ // refCount starts at 1 (the registry's implicit ref); callers that retain a reference must Instance_structIncRef.
+ Instance* Runner_createStruct(Runner* runner);
+--- a/src/vm_builtins.c
++++ b/src/vm_builtins.c
+@@ -14972,9 +14972,11 @@ static RValue builtin_tile_set_scale(VMContext* ctx, RValue* args, MAYBE_UNUSED
+     uint32_t id = (uint32_t) RValue_toInt32(args[0]);
+     int32_t i = findTileIndex(room, id);
+     if (i >= 0) {
++        uint32_t held = Runner_tileEditBegin(runner, room);
+         room->tiles[i].scaleX = (float) RValue_toReal(args[1]);
+         room->tiles[i].scaleY = (float) RValue_toReal(args[2]);
+         runner->tileOrderVersion++;
++        Runner_tileRescaled(runner, room, held, i);
+         return RValue_makeUndefined();
+     }
+     logWarn("VM: tile_set_scale: tile does not exist (%u)\n", id);
