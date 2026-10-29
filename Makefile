@@ -114,6 +114,7 @@ wii: $(BUTTER)/CMakeLists.txt
 	cd $(BUTTER) && git apply ../../wii/patches/0070-a-hit-is-not-tested-twice.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0071-short-target-lists-skip-the-cell-count.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0072-grid-sync-moves-all-movers-in-one-pass.patch
+	cd $(BUTTER) && git apply ../../wii/patches/0073-pixel-scans-skip-overlaps-a-mask-cannot-reach.patch
 	if [ "$(HOOKS)" != 0 ] && [ -f wii/test/patches/0099-debug-collision-trace.patch ]; then cd $(BUTTER) && git apply ../../wii/test/patches/0099-debug-collision-trace.patch; fi
 	cmake -B $(WII_BUILD) -S $(BUTTER) $(WII_CMAKE_FLAGS)
 	cmake --build $(WII_BUILD) -j$(JOBS)

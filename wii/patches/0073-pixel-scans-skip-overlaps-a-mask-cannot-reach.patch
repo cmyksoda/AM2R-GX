@@ -1,0 +1,117 @@
+Reason: a precise collision test scans every sample of the two boxes' overlap until one lands on a set pixel of both
+masks. A power bomb's blast is a growing circle whose box covers dozens of walls, and the walls in the box's corners
+lie outside the circle: each got a full scan that could not hit (in the mine room, with the chain running, the power
+bomb's collision with the walls took up to ~5 ms a frame on the Wii). Each mask frame now records how far from the
+sprite's origin a sample landing on one of its set pixels can be (computed once, on first use); when the overlap's
+closest sample is farther from the instance than that, scaled by the larger of its scale factors, plus a margin, no
+sample can hit and the scan is skipped. Rotation keeps distances, so it needs no special case.
+Upstream: Speed only, every platform. Retires this patch when merged.
+
+--- a/src/data_win.h
++++ b/src/data_win.h
+@@ -239,6 +239,7 @@
+     int32_t* tpagIndices;    // resolved TPAG indices (one per frame); -1 for unresolved
+     uint32_t maskCount;       // number of collision masks (one per frame, or 0)
+     uint8_t** masks;          // array of maskCount packed bit arrays (nullptr if none)
++    float* maskReach;         // per mask, filled on first use (see DataWin_spriteMaskReach)
+     // Collision mask storage dimensions. Pre-2024.6 these equal the full sprite width/height with zero offset.
+     // GMS 2024.6+ stores masks at bounding-box dimensions, so the mask covers only [maskOffsetX, maskOffsetX+maskWidth).
+     uint32_t maskWidth;
+@@ -944,6 +945,9 @@
+ 
+ DataWin* DataWin_parse(const char* filePath, DataWinParserOptions options);
+ void DataWin_free(DataWin* dataWin);
++// How far from the sprite's origin, in its own pixels, any point that lands on a set pixel of mask frameIdx can be
++// (a truncated coordinate in (-1, 1) lands on pixel 0); -1 when the mask has no set pixel.
++float DataWin_spriteMaskReach(Sprite* spr, uint32_t frameIdx);
+ void DataWin_printDebugSummary(DataWin* dataWin);
+ // Lazy room payload management. DataWin_loadRoomPayload is a no-op when the payload is already loaded.
+ void DataWin_loadRoomPayload(DataWin* dw, int32_t roomIndex);
+--- a/src/data_win.c
++++ b/src/data_win.c
+@@ -3069,6 +3069,40 @@
+ 
+ // ===[ FREE ]===
+ 
++static double reachAlong(int32_t pixel, int32_t origin) {
++    double low = (double) (pixel == 0 ? -1 : pixel) - (double) origin, high = (double) (pixel + 1) - (double) origin;
++    return fmax(fabs(low), fabs(high));
++}
++
++float DataWin_spriteMaskReach(Sprite* spr, uint32_t frameIdx) {
++    if (spr->maskReach == nullptr) {
++        spr->maskReach = (float*) safeMalloc(spr->maskCount * sizeof(float));
++        repeat(spr->maskCount, i) spr->maskReach[i] = -2.0f;
++    }
++    if (spr->maskReach[frameIdx] > -1.5f) return spr->maskReach[frameIdx];
++    uint8_t* mask = spr->masks[frameIdx];
++    uint32_t bytesPerRow = (spr->maskWidth + 7) / 8;
++    double far = -1.0;
++    repeat(spr->maskHeight, my) {
++        uint8_t* row = mask + my * bytesPerRow;
++        int32_t first = -1, last = -1;
++        repeat(spr->maskWidth, mx) {
++            if (row[mx >> 3] & (1 << (7 - (mx & 7)))) {
++                if (0 > first) first = (int32_t) mx;
++                last = (int32_t) mx;
++            }
++        }
++        if (0 > first) continue;
++        // Across a row the distance is largest at one of its two ends.
++        double dy = reachAlong((int32_t) my + spr->maskOffsetY, spr->originY);
++        double dx = fmax(reachAlong(first + spr->maskOffsetX, spr->originX), reachAlong(last + spr->maskOffsetX, spr->originX));
++        double d = sqrt(dx * dx + dy * dy);
++        if (d > far) far = d;
++    }
++    spr->maskReach[frameIdx] = (float) (far >= 0.0 ? far + 0.01 : -1.0);
++    return spr->maskReach[frameIdx];
++}
++
+ void DataWin_free(DataWin* dw) {
+     if (!dw) return;
+ 
+@@ -3125,6 +3159,7 @@
+                 }
+                 free(dw->sprt.sprites[i].masks);
+             }
++            free(dw->sprt.sprites[i].maskReach);
+             // Runtime-allocated sprites (indices >= parsedCount) own their synthesized name
+             if (i >= dw->sprt.parsedCount) free((char*) dw->sprt.sprites[i].name);
+         }
+--- a/src/collision.h
++++ b/src/collision.h
+@@ -520,6 +520,23 @@
+ //      pixel via Collision_pointInInstance. Both sides get inverse-transformed
+ //      regardless of whether they're individually precise, so a rotated
+ //      non-precise sprite collides as an OBB as long as its partner is precise.
++// Whether a pixel scan over these samples can land on a set pixel of the instance's mask at all: rotation keeps a
++// sample's distance from the instance, and scale stretches it at most by its larger factor. A power bomb's round
++// blast leaves the solids in its box's corners with no reachable sample; they skip the scan.
++static inline bool Collision_scanCanReach(Sprite* spr, Instance* inst, int32_t startX, int32_t endX, int32_t startY, int32_t endY, GMLReal sampleOffset, bool compatMode) {
++    if (!Collision_hasFrameMasks(spr)) return true;
++    float reach = DataWin_spriteMaskReach(spr, ((uint32_t) inst->imageIndex) % spr->maskCount);
++    if (0.0f > reach) return false;
++    double scale = fmax(fabs((double) inst->imageXscale), fabs((double) inst->imageYscale));
++    double limit = (double) reach * scale + 2.0;
++    double lastX = (double) (compatMode ? endX : endX - 1) + (double) sampleOffset;
++    double lastY = (double) (compatMode ? endY : endY - 1) + (double) sampleOffset;
++    double nearX = fmax((double) startX + (double) sampleOffset, fmin((double) inst->x, lastX));
++    double nearY = fmax((double) startY + (double) sampleOffset, fmin((double) inst->y, lastY));
++    double dx = nearX - (double) inst->x, dy = nearY - (double) inst->y;
++    return limit * limit >= dx * dx + dy * dy;
++}
++
+ static inline bool Collision_instancesOverlapPrecise(Runner* runner, Instance* a, Instance* b, InstanceBBox bboxA, InstanceBBox bboxB) {
+     bool compatMode = runner->collisionCompatibilityMode;
+     DataWin* dataWin = runner->dataWin;
+@@ -603,6 +620,10 @@
+         sampleOffset = 0.5;
+     }
+ 
++    if (!Collision_scanCanReach(sprA, a, startX, endX, startY, endY, sampleOffset, compatMode) ||
++        !Collision_scanCanReach(sprB, b, startX, endX, startY, endY, sampleOffset, compatMode))
++        return false;
++
+     CollisionTurn turnA = Collision_turn(a), turnB = Collision_turn(b);
+     for (int32_t py = startY; (compatMode ? py <= endY : py < endY); py++) {
+         for (int32_t px = startX; (compatMode ? px <= endX : px < endX); px++) {
