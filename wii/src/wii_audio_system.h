@@ -10,4 +10,7 @@ AudioSystem* WiiAudioSystem_create(DataWin* dataWin);
 /* Backs the audio_is_paused builtin (patch 0010). */
 bool WiiAudio_isPaused(AudioSystem* audio, int32_t idOrSound);
 
+/* Reads and converts an embedded sound now, so its first play doesn't wait on the card. */
+void WiiAudio_prefetch(AudioSystem* audio, int32_t soundIndex);
+
 #endif

@@ -1,5 +1,6 @@
 #include "am2r.h"
 #include "gx_renderer.h"
+#include "wii_audio_system.h"
 
 #include "gml_array.h"
 #include "instance.h"
@@ -208,6 +209,43 @@ static int32_t metroids_here(Runner *runner)
 	return mask;
 }
 
+/* Sounds too big for the boot preload that a room's objects play in the middle of action: read during the room's
+ * load instead of at their first play (the first Robo Mine to die stalled the chain's frame ~30 ms on a Wii). */
+static const struct {
+	const char *object;
+	const char *sounds[2];
+} roomSounds[] = {
+	{ "oRoboMine", { "sndElectricExpl", "sndElectricOverload" } },
+};
+
+static int32_t sound_named(DataWin *dw, const char *name)
+{
+	uint32_t i;
+
+	for (i = 0; i < dw->sond.count; i++)
+		if (dw->sond.sounds[i].name && strcmp(dw->sond.sounds[i].name, name) == 0)
+			return (int32_t)i;
+	return -1;
+}
+
+static void wish_sounds(Runner *runner)
+{
+	static int32_t lastRoom = -1;
+	size_t k, j;
+	int32_t obj;
+
+	if (runner->currentRoomIndex == lastRoom || !runner->audioSystem || !runner->instancesByExactObject)
+		return;
+	lastRoom = runner->currentRoomIndex;
+	for (k = 0; k < sizeof roomSounds / sizeof roomSounds[0]; k++) {
+		obj = Wii_objectIndex(runner, roomSounds[k].object);
+		if (obj < 0 || arrlen(runner->instancesByExactObject[obj]) == 0)
+			continue;
+		for (j = 0; j < 2 && roomSounds[k].sounds[j]; j++)
+			WiiAudio_prefetch(runner->audioSystem, sound_named(runner->dataWin, roomSounds[k].sounds[j]));
+	}
+}
+
 /* What the next seconds will draw, for the loader to fetch while idle (a page pulled mid-play stalls a Wii ~140 ms):
  * the title's first frame, the file select, the intro's art, the credits' ship and score screen, and in play Samus's
  * suit and muzzle flash, the HUD, the pause screen and the metroid the room holds. */
@@ -224,6 +262,7 @@ void Wii_wishPages(Runner *runner)
 
 	if (!runner || !runner->vmContext || !(g = runner->vmContext->globalScopeInstance))
 		return;
+	wish_sounds(runner);
 	dw = runner->dataWin;
 	if (ingame == -2) {
 		ingame = Wii_varId(runner, "ingame", INSTANCE_GLOBAL);
