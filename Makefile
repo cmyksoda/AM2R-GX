@@ -117,6 +117,7 @@ wii: $(BUTTER)/CMakeLists.txt
 	cd $(BUTTER) && git apply ../../wii/patches/0073-pixel-scans-skip-overlaps-a-mask-cannot-reach.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0074-entering-a-room-forgets-the-tile-index.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0075-tile-deletes-leave-later-entries-to-be-found.patch
+	cd $(BUTTER) && git apply ../../wii/patches/0076-tiles-sort-by-depth-in-buckets.patch
 	if [ "$(HOOKS)" != 0 ] && [ -f wii/test/patches/0099-debug-collision-trace.patch ]; then cd $(BUTTER) && git apply ../../wii/test/patches/0099-debug-collision-trace.patch; fi
 	cmake -B $(WII_BUILD) -S $(BUTTER) $(WII_CMAKE_FLAGS)
 	cmake --build $(WII_BUILD) -j$(JOBS)

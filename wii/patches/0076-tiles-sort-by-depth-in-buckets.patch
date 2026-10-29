@@ -1,0 +1,96 @@
+Reason: whenever a tile comes or goes the GMS1 draw list's tile run (patch 0064) is rebuilt, and it was sorted with
+qsort and the general drawable comparison: ~58,000 comparisons for rm_a3h04's ~4,800 tiles, on most frames while its
+sand crumbles. Tiles sort by depth, higher first, then by their place in the room's array, so a bucket per depth,
+filled in array order, gives exactly that order without comparing two tiles. A room with more than 64 tile depths
+keeps qsort.
+Upstream: Speed only, every platform. Retires this patch when merged.
+
+--- a/src/runner.c
++++ b/src/runner.c
+@@ -848,6 +848,56 @@
+            tileRunVersion == runner->tileOrderVersion && (int32_t) arrlen(drawableTileRun) == (int32_t) room->tileCount;
+ }
+ 
++// Tiles sort by depth, higher first, then by place in the room's array: a bucket per depth, filled in array order, is
++// that order without comparing any two tiles. Crumbling sand adds or deletes a tile most frames, and sorting ~4,800
++// tiles each time took ~10 ms of the Wii's frame. False (nothing written) when the room has more depths than buckets.
++#define TILE_SORT_DEPTHS 64
++static bool sortTilesByDepth(Room* room, Drawable* out, int32_t tileCount) {
++    int32_t depths[TILE_SORT_DEPTHS], starts[TILE_SORT_DEPTHS], depthCount = 0, last = 0;
++    repeat(tileCount, i) {
++        int32_t depth = room->tiles[i].tileDepth, k = last;
++        if (depthCount == 0 || depths[k] != depth) {
++            for (k = 0; depthCount > k && depths[k] != depth; k++) {}
++            if (k == depthCount) {
++                if (k == TILE_SORT_DEPTHS) return false;
++                depths[depthCount] = depth;
++                starts[depthCount++] = 0;
++            }
++            last = k;
++        }
++        starts[k]++;
++    }
++    // Higher depth first; the depths are few, so insertion sort, carrying each depth's count along.
++    for (int32_t a = 1; depthCount > a; a++) {
++        int32_t depth = depths[a], count = starts[a], b = a;
++        for (; b > 0 && depth > depths[b - 1]; b--) {
++            depths[b] = depths[b - 1];
++            starts[b] = starts[b - 1];
++        }
++        depths[b] = depth;
++        starts[b] = count;
++    }
++    for (int32_t k = 0, at = 0; depthCount > k; k++) {
++        int32_t count = starts[k];
++        starts[k] = at;
++        at += count;
++    }
++    last = 0;
++    repeat(tileCount, i) {
++        int32_t depth = room->tiles[i].tileDepth, k = last;
++        if (depths[k] != depth)
++            for (k = 0; depths[k] != depth; k++) {}
++        last = k;
++        Drawable d;
++        ZERO_STRUCT(d);
++        d.type = DRAWABLE_TILE;
++        d.depth = depth;
++        d.tileIndex = (int32_t) i;
++        out[starts[k]++] = d;
++    }
++    return true;
++}
++
+ static void mergeTilesIntoDrawables(Runner* runner, Room* room, bool tilesKept) {
+     static Drawable* rest = nullptr;
+     Drawable* oldTiles;
+@@ -861,17 +911,19 @@
+     }
+     if (reuse && !tilesKept) reuse = isDrawableArraySorted(oldTiles, tileCount);
+     if (!reuse) {
+-        arrsetlen(drawableTileRun, 0);
+-        repeat(tileCount, i) {
+-            Drawable d;
+-            ZERO_STRUCT(d);
+-            d.type = DRAWABLE_TILE;
+-            d.depth = room->tiles[i].tileDepth;
+-            d.tileIndex = (int32_t) i;
+-            arrput(drawableTileRun, d);
+-        }
++        arrsetlen(drawableTileRun, (size_t) tileCount);
+         oldTiles = drawableTileRun;
+-        if (tileCount > 1) qsort(oldTiles, (size_t) tileCount, sizeof(Drawable), compareDrawables);
++        if (!sortTilesByDepth(room, oldTiles, tileCount)) {
++            repeat(tileCount, i) {
++                Drawable d;
++                ZERO_STRUCT(d);
++                d.type = DRAWABLE_TILE;
++                d.depth = room->tiles[i].tileDepth;
++                d.tileIndex = (int32_t) i;
++                oldTiles[i] = d;
++            }
++            if (tileCount > 1) qsort(oldTiles, (size_t) tileCount, sizeof(Drawable), compareDrawables);
++        }
+     }
+     tileRunRoom = room;
+     tileRunTiles = room->tiles;
