@@ -425,10 +425,17 @@ bool WiiVideo_console(void)
 {
 	static void *pxfb;
 	GXRModeObj *m;
+	u32 level;
 
 	if (inited)
 		WiiVideo_settle();
 	VIDEO_Init();
+	/* VIDEO_Init drops the retrace callback the 60 Hz present counts on after the patcher; no queued or held frame may
+	 * take the screen from the console. */
+	_CPU_ISR_Disable(level);
+	queuedFb = heldFb = -1;
+	_CPU_ISR_Restore(level);
+	VIDEO_SetPostRetraceCallback(on_retrace);
 	m = pick_mode();
 	if (!pxfb)
 		pxfb = MEM_K0_TO_K1(SYS_AllocateFramebuffer(m));
