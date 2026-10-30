@@ -1252,6 +1252,280 @@ static GML_ROUNDING RValue wii_mine_death(VMContext *ctx)
 	return RValue_makeUndefined();
 }
 
+/* Crumbling sand (oBlockSand): a crumbling block wakes its neighbors, which redo their edges and tiles. A power bomb in
+ * rm_a3h04 runs these dozens of times a frame; here they make the bytecode's calls in its order with its values, and
+ * store literals as reals, as the VM does. */
+#define SAND_OBJECT 36
+#define SAND_SMOKE_OBJECT 378
+enum {
+	SV_TILE, SV_TILE_C0, SV_TILE_C1, SV_TILE_C2, SV_TILE_C3,
+	SV_U, SV_R, SV_D, SV_L, SV_UR, SV_UL, SV_DR, SV_DL,
+	SV_C0, SV_C1, SV_C2, SV_C3, SV_SMOKE, SV_COUNT
+};
+static const char *const sandVarNames[SV_COUNT] = {
+	"tileid", "tilesandcrn0", "tilesandcrn1", "tilesandcrn2", "tilesandcrn3",
+	"sandu", "sandr", "sandd", "sandl", "sandur", "sandul", "sanddr", "sanddl",
+	"sandcrn0", "sandcrn1", "sandcrn2", "sandcrn3", "smk"
+};
+static int32_t sandVars[SV_COUNT], smokeAdditiveVar;
+static int32_t sandCrumbleCode = -1, sandEdgesCode = -1, sandDestroyCode = -1, sandTilesCode = -1, sfxStopCode = -1,
+	       sfxPlayCode = -1;
+static BuiltinFunc tileExistsFn, tileDeleteFn, activateRegionFn, instancePositionFn, tileAddFn, randomFn,
+	instanceDestroyFn;
+
+static GMLReal sand_builtin_real(VMContext *ctx, Instance *inst, int16_t var, const char *name)
+{
+	RValue r = VMBuiltins_getVariable(ctx, inst, var, name, -1);
+	GMLReal v = RValue_toReal(r);
+
+	RValue_free(&r);
+	return v;
+}
+
+static void sand_free_call(BuiltinFunc fn, VMContext *ctx, RValue *args, int32_t argc)
+{
+	RValue r = fn(ctx, args, argc);
+
+	RValue_free(&r);
+}
+
+/* if (tile_exists(t)) { tile_delete(t); t = -1; } for the block's tile and its four corner tiles */
+static void sand_drop_tiles(VMContext *ctx, Instance *self)
+{
+	int k;
+
+	for (k = SV_TILE; k <= SV_TILE_C3; k++) {
+		RValue id = Instance_getSelfVar(self, sandVars[k]), r = tileExistsFn(ctx, &id, 1);
+		bool exists = RValue_toBool(r);
+
+		RValue_free(&r);
+		if (!exists)
+			continue;
+		sand_free_call(tileDeleteFn, ctx, &id, 1);
+		Instance_setSelfVar(self, sandVars[k], RValue_makeReal(-1));
+	}
+}
+
+static GML_ROUNDING void sand_wake_area(VMContext *ctx, GMLReal x, GMLReal y)
+{
+	RValue args[5] = { RValue_makeReal(x - 32), RValue_makeReal(y - 32), RValue_makeInt32(64), RValue_makeInt32(64),
+			   RValue_makeInt32(1) };
+
+	sand_free_call(activateRegionFn, ctx, args, 5);
+}
+
+/* instance_position(x, y, oBlockSand) */
+static RValue sand_at(VMContext *ctx, GMLReal x, GMLReal y)
+{
+	RValue args[3] = { RValue_makeReal(x), RValue_makeReal(y), RValue_makeInt32(SAND_OBJECT) };
+
+	return instancePositionFn(ctx, args, 3);
+}
+
+static GMLReal sand_random(VMContext *ctx, RValue limit)
+{
+	RValue r = randomFn(ctx, &limit, 1);
+	GMLReal v = RValue_toReal(r);
+
+	RValue_free(&r);
+	return v;
+}
+
+static void sand_script(VMContext *ctx, int32_t code, int32_t arg)
+{
+	RValue a = RValue_makeInt32(arg), r = VM_callCodeIndex(ctx, code, &a, 1);
+
+	RValue_free(&r);
+}
+
+/* Other_11: the block's tiles go, the area around it wakes, and its eight neighbors set its edge frame and corners */
+static GML_ROUNDING RValue wii_sand_edges(VMContext *ctx)
+{
+	static const signed char at[8][2] = { { 0, -16 }, { 16, 0 }, { 0, 16 }, { -16, 0 },
+					      { 16, -16 }, { -16, -16 }, { 16, 16 }, { -16, 16 } };
+	/* image_index by sandu, sandr, sandd, sandl as bits 3 to 0 */
+	static const unsigned char frameOf[16] = { 15, 13, 12, 5, 11, 9, 8, 1, 14, 6, 10, 2, 7, 3, 4, 0 };
+	Instance *self = ctx->currentInstance;
+	bool n[8];
+	GMLReal x, y;
+	int k;
+
+	if (!self)
+		return VM_interpretCode(ctx, sandEdgesCode);
+	sand_drop_tiles(ctx, self);
+	x = sand_builtin_real(ctx, self, BUILTIN_VAR_X, "x");
+	y = sand_builtin_real(ctx, self, BUILTIN_VAR_Y, "y");
+	sand_wake_area(ctx, x, y);
+	for (k = 0; k < 8; k++) {
+		RValue r = sand_at(ctx, x + at[k][0], y + at[k][1]);
+
+		n[k] = RValue_toBool(r);
+		RValue_free(&r);
+		Instance_setSelfVar(self, sandVars[SV_U + k], RValue_makeReal(n[k]));
+	}
+	Instance_setSelfVar(self, sandVars[SV_C2], RValue_makeReal(n[0] && n[1] && !n[4]));
+	Instance_setSelfVar(self, sandVars[SV_C3], RValue_makeReal(n[0] && n[3] && !n[5]));
+	Instance_setSelfVar(self, sandVars[SV_C0], RValue_makeReal(n[2] && n[1] && !n[6]));
+	Instance_setSelfVar(self, sandVars[SV_C1], RValue_makeReal(n[2] && n[3] && !n[7]));
+	VMBuiltins_setVariable(ctx, self, BUILTIN_VAR_IMAGE_INDEX, "image_index",
+			       RValue_makeReal(frameOf[n[0] << 3 | n[1] << 2 | n[2] << 1 | n[3]]), -1);
+	VMBuiltins_setVariable(ctx, self, BUILTIN_VAR_ALARM, "alarm", RValue_makeReal(1), 1);
+	return RValue_makeUndefined();
+}
+
+/* Destroy_0: the area wakes, and every neighboring block gets alarm[0] = 1 (with (instance_position(...))) */
+static GML_ROUNDING RValue wii_sand_destroy(VMContext *ctx)
+{
+	static const signed char at[8][2] = { { 0, -16 }, { 16, 0 }, { 0, 16 }, { -16, 0 },
+					      { 16, -16 }, { 16, 16 }, { -16, 16 }, { -16, -16 } };
+	Instance *self = ctx->currentInstance, *n;
+	GMLReal x, y;
+	int k;
+
+	if (!self)
+		return VM_interpretCode(ctx, sandDestroyCode);
+	x = sand_builtin_real(ctx, self, BUILTIN_VAR_X, "x");
+	y = sand_builtin_real(ctx, self, BUILTIN_VAR_Y, "y");
+	sand_wake_area(ctx, x, y);
+	for (k = 0; k < 8; k++) {
+		RValue r = sand_at(ctx, x + at[k][0], y + at[k][1]);
+		int32_t id = RValue_toInt32(r);
+
+		RValue_free(&r);
+		n = id >= INSTANCE_ID_BASE ? hmget(ctx->runner->instancesById, id) : NULL;
+		if (n && n->active && !n->destroyed)
+			VMBuiltins_setVariable(ctx, n, BUILTIN_VAR_ALARM, "alarm", RValue_makeReal(1), 0);
+	}
+	return RValue_makeUndefined();
+}
+
+/* Other_10: two puffs of smoke, the block's tiles go, then the crumble sound and the block itself */
+static GML_ROUNDING RValue wii_sand_crumble(VMContext *ctx)
+{
+	Instance *self = ctx->currentInstance, *smoke;
+	GMLReal x, y, ry, rx, v;
+	RValue args[3], r;
+	int32_t id;
+	int i;
+
+	if (!self)
+		return VM_interpretCode(ctx, sandCrumbleCode);
+	for (i = 0; i < 2; i++) {
+		x = sand_builtin_real(ctx, self, BUILTIN_VAR_X, "x");
+		y = sand_builtin_real(ctx, self, BUILTIN_VAR_Y, "y");
+		/* the bytecode pushes the last argument first: y's random is drawn before x's */
+		ry = sand_random(ctx, RValue_makeInt32(10));
+		rx = sand_random(ctx, RValue_makeInt32(10));
+		args[0] = RValue_makeReal((x + 2) + rx);
+		args[1] = RValue_makeReal((y + 2) + ry);
+		args[2] = RValue_makeInt32(SAND_SMOKE_OBJECT);
+		r = instanceCreateFn(ctx, args, 3);
+		Instance_setSelfVar(self, sandVars[SV_SMOKE], r);
+		id = RValue_toInt32(r);
+		smoke = hmget(ctx->runner->instancesById, id);
+		RValue_free(&r);
+		if (!smoke)
+			continue;
+		v = 0.6 + sand_random(ctx, RValue_makeReal(0.7));
+		VMBuiltins_setVariable(ctx, smoke, BUILTIN_VAR_IMAGE_SPEED, "image_speed", RValue_makeReal(v), -1);
+		Instance_setSelfVar(smoke, smokeAdditiveVar, RValue_makeReal(0));
+		VMBuiltins_setVariable(ctx, smoke, BUILTIN_VAR_SPRITE_INDEX, "sprite_index", RValue_makeReal(100), -1);
+		VMBuiltins_setVariable(ctx, smoke, BUILTIN_VAR_IMAGE_ALPHA, "image_alpha", RValue_makeReal(0.4), -1);
+		v = 250 + sand_random(ctx, RValue_makeInt32(40));
+		VMBuiltins_setVariable(ctx, smoke, BUILTIN_VAR_DIRECTION, "direction", RValue_makeReal(v), -1);
+		v = sand_random(ctx, RValue_makeInt32(1));
+		VMBuiltins_setVariable(ctx, smoke, BUILTIN_VAR_SPEED, "speed", RValue_makeReal(v), -1);
+		VMBuiltins_setVariable(ctx, smoke, BUILTIN_VAR_DEPTH, "depth", RValue_makeReal(-101), -1);
+	}
+	sand_drop_tiles(ctx, self);
+	VMBuiltins_setVariable(ctx, self, BUILTIN_VAR_ALARM, "alarm", RValue_makeReal(1), 0);
+	sand_script(ctx, sfxStopCode, 209);
+	sand_script(ctx, sfxPlayCode, 209);
+	sand_free_call(instanceDestroyFn, ctx, NULL, 0);
+	return RValue_makeUndefined();
+}
+
+/* tile_add(background, left, top, w, h, x, y, depth) */
+static RValue sand_tile_add(VMContext *ctx, int32_t bg, RValue left, GMLReal x, GMLReal y, int32_t depth)
+{
+	RValue args[8] = { RValue_makeInt32(bg), left, RValue_makeInt32(0), RValue_makeInt32(16), RValue_makeInt32(16),
+			   RValue_makeReal(x), RValue_makeReal(y), RValue_makeInt32(depth) };
+
+	return tileAddFn(ctx, args, 8);
+}
+
+/* Alarm_1: the edge tile for image_index, then each corner tile the block has */
+static GML_ROUNDING RValue wii_sand_tiles(VMContext *ctx)
+{
+	Instance *self = ctx->currentInstance;
+	GMLReal x, y, frame;
+	RValue r;
+	int k;
+
+	if (!self)
+		return VM_interpretCode(ctx, sandTilesCode);
+	x = sand_builtin_real(ctx, self, BUILTIN_VAR_X, "x");
+	y = sand_builtin_real(ctx, self, BUILTIN_VAR_Y, "y");
+	frame = sand_builtin_real(ctx, self, BUILTIN_VAR_IMAGE_INDEX, "image_index");
+	r = sand_tile_add(ctx, 320, RValue_makeReal(frame * 16), x, y, -100);
+	Instance_setSelfVar(self, sandVars[SV_TILE], r);
+	RValue_free(&r);
+	for (k = 0; k < 4; k++) {
+		if (!RValue_toBool(Instance_getSelfVar(self, sandVars[SV_C0 + k])))
+			continue;
+		r = sand_tile_add(ctx, 321, RValue_makeInt32(k * 16), x, y, -101);
+		Instance_setSelfVar(self, sandVars[SV_TILE_C0 + k], r);
+		RValue_free(&r);
+	}
+	return RValue_makeUndefined();
+}
+
+static int32_t code_of_length(VMContext *ctx, const char *name, uint32_t length)
+{
+	ptrdiff_t i = shgeti(ctx->codeIndexByName, name);
+
+	if (i < 0 || ctx->dataWin->code.entries[ctx->codeIndexByName[i].value].length != length)
+		return -1;
+	return ctx->codeIndexByName[i].value;
+}
+
+static void hook_sand(VMContext *ctx)
+{
+	bool ok;
+	int k;
+
+	sandCrumbleCode = code_of_length(ctx, "gml_Object_oBlockSand_Other_10", 744);
+	sandEdgesCode = code_of_length(ctx, "gml_Object_oBlockSand_Other_11", 2832);
+	sandDestroyCode = code_of_length(ctx, "gml_Object_oBlockSand_Destroy_0", 676);
+	sandTilesCode = code_of_length(ctx, "gml_Object_oBlockSand_Alarm_1", 472);
+	k = (int)shgeti(ctx->codeIndexByName, "sfx_stop");
+	sfxStopCode = k >= 0 ? ctx->codeIndexByName[k].value : -1;
+	k = (int)shgeti(ctx->codeIndexByName, "sfx_play");
+	sfxPlayCode = k >= 0 ? ctx->codeIndexByName[k].value : -1;
+	tileExistsFn = VM_findBuiltin(ctx, "tile_exists");
+	tileDeleteFn = VM_findBuiltin(ctx, "tile_delete");
+	activateRegionFn = VM_findBuiltin(ctx, "instance_activate_region");
+	instancePositionFn = VM_findBuiltin(ctx, "instance_position");
+	tileAddFn = VM_findBuiltin(ctx, "tile_add");
+	randomFn = VM_findBuiltin(ctx, "random");
+	instanceDestroyFn = VM_findBuiltin(ctx, "instance_destroy");
+	smokeAdditiveVar = Wii_varId(ctx->runner, "additive", INSTANCE_SELF);
+	ok = sandCrumbleCode >= 0 && sandEdgesCode >= 0 && sandDestroyCode >= 0 && sandTilesCode >= 0 &&
+	     sfxStopCode >= 0 && sfxPlayCode >= 0 && tileExistsFn && tileDeleteFn && activateRegionFn &&
+	     instancePositionFn && tileAddFn && randomFn && instanceDestroyFn && instanceCreateFn && smokeAdditiveVar >= 0 &&
+	     Wii_objectIndex(ctx->runner, "oBlockSand") == SAND_OBJECT;
+	for (k = 0; k < SV_COUNT; k++) {
+		sandVars[k] = Wii_varId(ctx->runner, sandVarNames[k], INSTANCE_SELF);
+		ok = ok && sandVars[k] >= 0;
+	}
+	if (!ok)
+		return;
+	VM_setNativeCode(ctx, sandCrumbleCode, wii_sand_crumble);
+	VM_setNativeCode(ctx, sandEdgesCode, wii_sand_edges);
+	VM_setNativeCode(ctx, sandDestroyCode, wii_sand_destroy);
+	VM_setNativeCode(ctx, sandTilesCode, wii_sand_tiles);
+}
+
 void Wii_hookAm2rScripts(VMContext *ctx)
 {
 	static const char *const partNames[7] = { "wallU", "wallR", "wallD", "wallL", "color", "special", "corner" };
@@ -1426,4 +1700,5 @@ void Wii_hookAm2rScripts(VMContext *ctx)
 		enemyDeath2Code = ctx->codeIndexByName[ed].value;
 		VM_setNativeCode(ctx, mineDeathCode, wii_mine_death);
 	}
+	hook_sand(ctx);
 }
