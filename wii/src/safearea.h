@@ -12,6 +12,7 @@ int32_t WiiSafe_guiSurface(struct Runner *runner);
 int32_t WiiSafe_screenSurface(struct Runner *runner);
 bool WiiSafe_ingame(struct Runner *runner);
 bool WiiSafe_paused(struct Runner *runner);
+int32_t WiiSafe_hudSplit(struct Runner *runner, int32_t width);
 float WiiSafe_lift(struct Runner *runner);
 float WiiSafe_shift(struct Runner *runner);
 void WiiSafe_frame(struct Runner *runner);

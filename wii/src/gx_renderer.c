@@ -3671,15 +3671,20 @@ static void gxDrawSurfaceColor(Renderer *renderer, int32_t surfaceID, int32_t sr
 		srcWidth = s->w;
 	if (srcHeight <= 0)
 		srcHeight = s->h;
-	/* The HUD's two corner groups slide in from the sides as two halves: its middle is empty. */
+	/* The HUD's two corner groups slide in from the sides, split where its right group starts: with every weapon its
+	 * left group runs past the middle, and a split there cut the power bomb icon in two. */
 	if (surfaceID == gx->guiSurf && !gx_hud_half && Overscan_marginH() > 0 && angleDeg == 0.0f) {
-		int32_t half = srcWidth / 2, mh = Overscan_marginH();
+		int32_t split = WiiSafe_hudSplit(renderer->runner, srcLeft + srcWidth) - srcLeft, mh = Overscan_marginH();
 
+		if (split < 0)
+			split = 0;
 		gx_hud_half = true;
-		gxDrawSurfaceColor(renderer, surfaceID, srcLeft, srcTop, half, srcHeight, x + (float)mh * xscale, y,
-				   xscale, yscale, 0.0f, c1, c2, c3, c4, alpha);
-		gxDrawSurfaceColor(renderer, surfaceID, srcLeft + half, srcTop, srcWidth - half, srcHeight,
-				   x + (float)(half - mh) * xscale, y, xscale, yscale, 0.0f, c1, c2, c3, c4, alpha);
+		if (split > 0)
+			gxDrawSurfaceColor(renderer, surfaceID, srcLeft, srcTop, split, srcHeight, x + (float)mh * xscale, y,
+					   xscale, yscale, 0.0f, c1, c2, c3, c4, alpha);
+		if (split < srcWidth)
+			gxDrawSurfaceColor(renderer, surfaceID, srcLeft + split, srcTop, srcWidth - split, srcHeight,
+					   x + (float)(split - mh) * xscale, y, xscale, yscale, 0.0f, c1, c2, c3, c4, alpha);
 		gx_hud_half = false;
 		return;
 	}

@@ -103,6 +103,29 @@ bool WiiSafe_paused(Runner *runner)
 	return subscreen >= 0 && runner->currentRoomIndex == subscreen;
 }
 
+static bool global_on(Runner *runner, const char *name, int32_t *var)
+{
+	if (*var == -2)
+		*var = Wii_varId(runner, name, INSTANCE_GLOBAL);
+	return *var >= 0 && RValue_toReal(Instance_getSelfVar(runner->vmContext->globalScopeInstance, *var)) != 0;
+}
+
+/* Where the HUD layer's right group (the map and the Metroid count) starts, or the layer's width when it shows neither:
+ * draw_gui puts it at 250 + widescreen_space, past where its left group can reach. */
+int32_t WiiSafe_hudSplit(Runner *runner, int32_t width)
+{
+	static int32_t map = -2, count = -2, space = -2;
+	int32_t x;
+
+	if (!runner || !runner->vmContext)
+		return width;
+	if (!global_on(runner, "ophudshowmap", &map) && !global_on(runner, "ophudshowmetrcount", &count))
+		return width;
+	x = control_surface(runner, "widescreen_space", &space);
+	x = 250 + (x > 0 ? x : 0);
+	return x < width ? x : width;
+}
+
 /* How far up to draw what the current instance draws. The notification box lifts as it slides in, so a box that is
  * slid out stays below the screen. */
 float WiiSafe_lift(Runner *runner)
