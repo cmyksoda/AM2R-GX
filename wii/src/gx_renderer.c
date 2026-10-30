@@ -143,7 +143,7 @@ typedef struct {
 
 /* shPaletteSwap: the GLSL searches the palette's first column for the source color and takes the
  * same row from column palette_index. TEV can't search, so each swapped sprite is recolored once
- * on the CPU (exact match on the 16-bit texel, as both are quantised alike) and cached. */
+ * on the CPU (exact match on the 16-bit texel, as both are quantized alike) and cached. */
 #define SWAP_MAX 256
 #define SWAP_BYTES_MAX (2u << 20)
 typedef struct {
