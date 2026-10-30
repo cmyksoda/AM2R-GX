@@ -964,12 +964,38 @@ static void gx_page_ready(GxRenderer *gx, uint32_t pageId, u16 *texels, int w, i
 
 static bool gx_prefetch_collect(GxRenderer *gx, bool wait);
 
+/* A page's PNG for one decode. Late in a long session the heap can be too fragmented for one block this size (a 358 KB
+ * page ended a 3-hour run), so the texture arena takes it then, and a page that finds no room retries later. */
+static u8 *gx_page_blob(GxRenderer *gx, DataWin *dw, const Texture *txtr)
+{
+	u8 *blob;
+	long seek;
+	bool read;
+
+	if (!txtr->blobOffset || !txtr->blobSize || !dw->lazyLoadFile)
+		return NULL;
+	blob = malloc(txtr->blobSize);
+	while (!blob && !(blob = WiiMem_texAlloc(txtr->blobSize)) && gx_evict_page(gx))
+		;
+	if (!blob)
+		return NULL;
+	seek = ftell(dw->lazyLoadFile);
+	read = fseek(dw->lazyLoadFile, (long)txtr->blobOffset, SEEK_SET) == 0 &&
+	       fread(blob, 1, txtr->blobSize, dw->lazyLoadFile) == txtr->blobSize;
+	fseek(dw->lazyLoadFile, seek, SEEK_SET);
+	if (!read) {
+		WiiMem_texFree(blob);
+		return NULL;
+	}
+	return blob;
+}
+
 static bool gx_load_page(GxRenderer *gx, uint32_t pageId)
 {
 	DataWin *dw = gx->base.dataWin;
 	GxPage *page;
 	Texture *txtr;
-	u8 *pixels = NULL;
+	u8 *pixels = NULL, *blob = NULL;
 	u16 *texels = NULL;
 	int w, h, tw, th;
 	bool streamed;
@@ -988,13 +1014,13 @@ static bool gx_load_page(GxRenderer *gx, uint32_t pageId)
 	t0 = gettime();
 	page->failed = false;
 	gx_make_room(gx, PAGE_LOAD_NEED);
-	DataWin_loadTxtrIfNeeded(dw, pageId);
 	txtr = &dw->txtr.textures[pageId];
-	if (!txtr->blobData)
+	blob = txtr->blobData ? txtr->blobData : gx_page_blob(gx, dw, txtr);
+	if (!blob)
 		goto fail;
-	streamed = WiiPng_size(txtr->blobData, (size_t)txtr->blobSize, &w, &h);
+	streamed = WiiPng_size(blob, (size_t)txtr->blobSize, &w, &h);
 	if (!streamed) {
-		pixels = ImageDecoder_decodeToRgba(txtr->blobData, (size_t)txtr->blobSize,
+		pixels = ImageDecoder_decodeToRgba(blob, (size_t)txtr->blobSize,
 		                                   DataWin_isVersionAtLeast(dw, 2022, 5, 0, 0), &w, &h);
 		if (!pixels)
 			goto fail;
@@ -1021,14 +1047,16 @@ static bool gx_load_page(GxRenderer *gx, uint32_t pageId)
 
 		if (w != tw || h != th)
 			memset(texels, 0, tex_bytes(tw, th));
-		if (!WiiPng_decodeRows(txtr->blobData, (size_t)txtr->blobSize, gx_page_row, &pr))
+		if (!WiiPng_decodeRows(blob, (size_t)txtr->blobSize, gx_page_row, &pr))
 			goto fail;
 	} else {
 		swizzle_rgb5a3(texels, pixels, w, h, tw);
 		free(pixels);
 		pixels = NULL;
 	}
-	if (!txtr->mapped) {
+	if (blob != txtr->blobData)
+		WiiMem_texFree(blob);
+	else if (!txtr->mapped) {
 		free(txtr->blobData);
 		txtr->blobData = NULL;
 	}
@@ -1039,6 +1067,8 @@ fail:
 	logWarn("GX: TXTR %u load failed, retry in %d frames\n", pageId, PAGE_RETRY_FRAMES);
 	free(pixels);
 	WiiMem_texFree(texels);
+	if (blob && blob != txtr->blobData)
+		WiiMem_texFree(blob);
 	if (txtr->blobData && !txtr->mapped) {
 		free(txtr->blobData);
 		txtr->blobData = NULL;
