@@ -489,7 +489,8 @@ static bool pad_locked(Runner *runner)
 		locked = false;
 	if (locked != was)
 		logInfo("controller %s: %s\n", locked ? "locked for play" : "free again at the title",
-			pad_in_use == WII_PAD_CLASSIC ? "Classic" : pad_in_use == WII_PAD_GAMECUBE ? "GameCube" : "Nunchuk");
+			pad_in_use == WII_PAD_CLASSIC ? "Classic" :
+			pad_in_use == WII_PAD_GAMECUBE ? "GameCube" : "Nunchuk");
 	return locked;
 }
 
@@ -625,7 +626,8 @@ void WiiInput_poll(Runner *runner)
 	/* Only the controller in use is read, its own pause button included. */
 	classic = pad_in_use == WII_PAD_CLASSIC && exp.type == WPAD_EXP_CLASSIC;
 	pause = pad_in_use == WII_PAD_NUNCHUK && (wheld & WPAD_BUTTON_1);
-	start = classic ? wheld & WPAD_CLASSIC_BUTTON_PLUS : pad_in_use == WII_PAD_GAMECUBE && (gcheld & PAD_BUTTON_START);
+	start = classic ? wheld & WPAD_CLASSIC_BUTTON_PLUS :
+			pad_in_use == WII_PAD_GAMECUBE && (gcheld & PAD_BUTTON_START);
 	if (neutral)
 		;
 	else if (classic)

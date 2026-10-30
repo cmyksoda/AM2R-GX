@@ -571,7 +571,8 @@ static GML_ROUNDING RValue wii_water_draw(VMContext *ctx)
 	if (!exists)
 		return RValue_makeUndefined();
 
-	/* wave_height = max(round(lerp(wave_height, floor((60 - (fps - 1)) ^ 1.5), 0.1)) - 1, 1), ^ being xor on int64s */
+	/* wave_height = max(round(lerp(wave_height, floor((60 - (fps - 1)) ^ 1.5), 0.1)) - 1, 1),
+	 * ^ being xor on int64s */
 	x = RValue_makeInt32(RValue_toInt32(RValue_makeInt64(RValue_toInt64(RValue_makeReal(60 - (fps - 1))))) ^
 			     RValue_toInt32(RValue_makeInt64((int64_t)1.5)));
 	args[0] = RValue_makeReal(wave);
@@ -762,17 +763,20 @@ static GMLReal num_val(GmlNum n)
 
 static GML_ROUNDING GmlNum num_add(GmlNum a, GmlNum b)
 {
-	return a.isInt && b.isInt ? num_int((int32_t)((uint32_t)a.i + (uint32_t)b.i)) : num_real(num_val(a) + num_val(b));
+	return a.isInt && b.isInt ? num_int((int32_t)((uint32_t)a.i + (uint32_t)b.i))
+				  : num_real(num_val(a) + num_val(b));
 }
 
 static GML_ROUNDING GmlNum num_sub(GmlNum a, GmlNum b)
 {
-	return a.isInt && b.isInt ? num_int((int32_t)((uint32_t)a.i - (uint32_t)b.i)) : num_real(num_val(a) - num_val(b));
+	return a.isInt && b.isInt ? num_int((int32_t)((uint32_t)a.i - (uint32_t)b.i))
+				  : num_real(num_val(a) - num_val(b));
 }
 
 static GML_ROUNDING GmlNum num_mul(GmlNum a, GmlNum b)
 {
-	return a.isInt && b.isInt ? num_int((int32_t)((uint32_t)a.i * (uint32_t)b.i)) : num_real(num_val(a) * num_val(b));
+	return a.isInt && b.isInt ? num_int((int32_t)((uint32_t)a.i * (uint32_t)b.i))
+				  : num_real(num_val(a) * num_val(b));
 }
 
 static RValue num_rvalue(GmlNum n)
@@ -1156,7 +1160,8 @@ static RValue wii_skorp_get_lure(VMContext *ctx, RValue *args, int32_t argCount)
 		b = charAtFn(ctx, call, 2);
 		sa = RValue_toString(a, ctx->dataWin);
 		sb = RValue_toString(b, ctx->dataWin);
-		suffix = !strcmp(sa, "6") && !strcmp(sb, "a") ? "A6" : !strcmp(sa, "6") && !strcmp(sb, "b") ? "A6b" : NULL;
+		suffix = !strcmp(sa, "6") && !strcmp(sb, "a") ? "A6" :
+			 !strcmp(sa, "6") && !strcmp(sb, "b") ? "A6b" : NULL;
 		free(sa);
 		free(sb);
 		RValue_free(&a);
@@ -1244,7 +1249,8 @@ static GML_ROUNDING RValue wii_mine_death(VMContext *ctx)
 			RValue_free(&r);
 			if (!prj)
 				continue;
-			VMBuiltins_setVariable(ctx, prj, BUILTIN_VAR_DIRECTION, "direction", RValue_makeInt32(i * 10), -1);
+			VMBuiltins_setVariable(ctx, prj, BUILTIN_VAR_DIRECTION, "direction",
+					       RValue_makeInt32(i * 10), -1);
 			VMBuiltins_setVariable(ctx, prj, BUILTIN_VAR_SPEED, "speed", RValue_makeInt32(3 - ring), -1);
 		}
 		Instance_setSelfVar(self, iVar, RValue_makeInt32(i + 1));
@@ -1512,8 +1518,8 @@ static void hook_sand(VMContext *ctx)
 	smokeAdditiveVar = Wii_varId(ctx->runner, "additive", INSTANCE_SELF);
 	ok = sandCrumbleCode >= 0 && sandEdgesCode >= 0 && sandDestroyCode >= 0 && sandTilesCode >= 0 &&
 	     sfxStopCode >= 0 && sfxPlayCode >= 0 && tileExistsFn && tileDeleteFn && activateRegionFn &&
-	     instancePositionFn && tileAddFn && randomFn && instanceDestroyFn && instanceCreateFn && smokeAdditiveVar >= 0 &&
-	     Wii_objectIndex(ctx->runner, "oBlockSand") == SAND_OBJECT;
+	     instancePositionFn && tileAddFn && randomFn && instanceDestroyFn && instanceCreateFn &&
+	     smokeAdditiveVar >= 0 && Wii_objectIndex(ctx->runner, "oBlockSand") == SAND_OBJECT;
 	for (k = 0; k < SV_COUNT; k++) {
 		sandVars[k] = Wii_varId(ctx->runner, sandVarNames[k], INSTANCE_SELF);
 		ok = ok && sandVars[k] >= 0;
@@ -1687,7 +1693,8 @@ void Wii_hookAm2rScripts(VMContext *ctx)
 	}
 	setBlendModeFn = VM_findBuiltin(ctx, "draw_set_blend_mode");
 	drawSelfFn = VM_findBuiltin(ctx, "draw_self");
-	if (mp >= 0 && setBlendModeFn && drawSelfFn && ctx->dataWin->code.entries[ctx->codeIndexByName[mp].value].length == 52) {
+	if (mp >= 0 && setBlendModeFn && drawSelfFn &&
+	    ctx->dataWin->code.entries[ctx->codeIndexByName[mp].value].length == 52) {
 		mineProjDrawCode = ctx->codeIndexByName[mp].value;
 		VM_setNativeCode(ctx, mineProjDrawCode, wii_mine_proj_draw);
 	}

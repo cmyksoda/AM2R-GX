@@ -474,7 +474,8 @@ OverscanPage WiiControls_displayRow(Runner *runner)
 	Instance *menu;
 
 	if (!runner || !runner->vmContext || (curropt = var_id(runner, "curropt", INSTANCE_GLOBAL)) < 0 ||
-	    !(menu = first_instance(runner, "oOptionsDisplay")) || var_num(runner, menu, "active", INSTANCE_SELF, 0) == 0)
+	    !(menu = first_instance(runner, "oOptionsDisplay")) ||
+	    var_num(runner, menu, "active", INSTANCE_SELF, 0) == 0)
 		return OVERSCAN_OFF;
 	row = RValue_toInt32(Instance_getSelfVar(runner->vmContext->globalScopeInstance, curropt));
 	if (row == (int32_t)var_num(runner, menu, "opFullscreen", INSTANCE_SELF, -1))

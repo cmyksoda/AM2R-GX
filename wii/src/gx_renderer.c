@@ -1468,8 +1468,8 @@ static void gx_flush_target(GxRenderer *gx)
 		return;
 	u64 tc = gettime();
 
-	/* No CPU wait or cache walk: the GPU copies after everything queued before it, CPU writers flush the texels after
-	 * writing, CPU readers wait and invalidate first, and freeing memory the GPU may still read waits too. */
+	/* No CPU wait or cache walk: the GPU copies after everything queued before it, CPU writers flush the texels
+	 * after writing, CPU readers wait and invalidate first, and freeing memory the GPU may still read waits too. */
 	GX_Flush();
 	GX_SetTexCopySrc(0, 0, (u16)copyW, (u16)copyH);
 	GX_SetTexCopyDst((u16)texW, (u16)texH, SURF_TEX_FMT, GX_FALSE);
@@ -2547,7 +2547,8 @@ static void gxEndFrameEnd(Renderer *renderer)
 	if (++gx_stat.n == 200) {
 		logInfo("GXSTAT draw %.2f ms/frame: emit %.2f ms in %u quads (%u tiles, %u sprites, %u skipped, %u culled), "
 			"%u copies %.2f ms, %u binds, %u targets; between draws %.2f ms; fill %.2f Mpx\n",
-			gx_stat.drawUs / 200000.0, ticks_to_microsecs(gx_stat.emitTicks) / 200000.0, gx_stat.quads / 200, gx_stat.tiles / 200,
+			gx_stat.drawUs / 200000.0, ticks_to_microsecs(gx_stat.emitTicks) / 200000.0,
+			gx_stat.quads / 200, gx_stat.tiles / 200,
 			gx_stat.sprites / 200, gx_stat.skipped / 200, gx_stat.culled / 200,
 			gx_stat.copies / 200, gx_stat.copyUs / 200000.0, gx_stat.binds / 200, gx_stat.targets / 200,
 			gx_stat.otherUs / 200000.0, gx_stat.area / 200e6);
@@ -3671,20 +3672,22 @@ static void gxDrawSurfaceColor(Renderer *renderer, int32_t surfaceID, int32_t sr
 		srcWidth = s->w;
 	if (srcHeight <= 0)
 		srcHeight = s->h;
-	/* The HUD's two corner groups slide in from the sides, split where its right group starts: with every weapon its
-	 * left group runs past the middle, and a split there cut the power bomb icon in two. */
+	/* The HUD's two corner groups slide in from the sides, split where its right group starts: with every weapon
+	 * its left group runs past the middle, and a split there cut the power bomb icon in two. */
 	if (surfaceID == gx->guiSurf && !gx_hud_half && Overscan_marginH() > 0 && angleDeg == 0.0f) {
-		int32_t split = WiiSafe_hudSplit(renderer->runner, srcLeft + srcWidth) - srcLeft, mh = Overscan_marginH();
+		int32_t split = WiiSafe_hudSplit(renderer->runner, srcLeft + srcWidth) - srcLeft,
+			mh = Overscan_marginH();
 
 		if (split < 0)
 			split = 0;
 		gx_hud_half = true;
 		if (split > 0)
-			gxDrawSurfaceColor(renderer, surfaceID, srcLeft, srcTop, split, srcHeight, x + (float)mh * xscale, y,
-					   xscale, yscale, 0.0f, c1, c2, c3, c4, alpha);
+			gxDrawSurfaceColor(renderer, surfaceID, srcLeft, srcTop, split, srcHeight,
+					   x + (float)mh * xscale, y, xscale, yscale, 0.0f, c1, c2, c3, c4, alpha);
 		if (split < srcWidth)
 			gxDrawSurfaceColor(renderer, surfaceID, srcLeft + split, srcTop, srcWidth - split, srcHeight,
-					   x + (float)(split - mh) * xscale, y, xscale, yscale, 0.0f, c1, c2, c3, c4, alpha);
+					   x + (float)(split - mh) * xscale, y, xscale, yscale, 0.0f, c1, c2, c3, c4,
+					   alpha);
 		gx_hud_half = false;
 		return;
 	}
@@ -3816,7 +3819,8 @@ static bool gx_draw_preview(GxRenderer *gx, float LW, float LH, float sx, float 
 static float gx_view_width(GxRenderer *gx)
 {
 	Runner *runner = gx->base.runner;
-	GMLCamera *cam = runner && runner->viewsEnabled ? Runner_getCameraById(runner, runner->views[0].cameraId) : NULL;
+	GMLCamera *cam = runner && runner->viewsEnabled ? Runner_getCameraById(runner, runner->views[0].cameraId)
+							: NULL;
 
 	if (gx->guiSurf >= 0 && (uint32_t)gx->guiSurf < gx->surfCount && gx->surfs[gx->guiSurf].exists)
 		return (float)gx->surfs[gx->guiSurf].w;

@@ -85,7 +85,8 @@ static void Overscan_save(void)
 		else
 			fprintf(f, "%d %d\n", g_h, g_v);
 		fclose(f);
-		logInfo("Overscan saved: h=%d v=%d vi=%d y=%d x=%d margins %d/%d\n", g_h, g_v, g_vi, g_y, g_x, g_mh, g_mv);
+		logInfo("Overscan saved: h=%d v=%d vi=%d y=%d x=%d margins %d/%d\n", g_h, g_v, g_vi, g_y, g_x, g_mh,
+			g_mv);
 	}
 }
 

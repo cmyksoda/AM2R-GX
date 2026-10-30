@@ -228,7 +228,8 @@ static RValue wii_get_text(VMContext *ctx, RValue *args, int32_t argCount)
 	    args[1].string && strcmp(args[0].string, "ExtrasMenu") == 0 && strcmp(args[1].string, "GBFilter_Tip") == 0)
 		return without_pc_key(cached_text(ctx, args, argCount));
 	if (argCount >= 2 && args[0].type == RVALUE_STRING && args[1].type == RVALUE_STRING && args[0].string &&
-	    args[1].string && strcmp(args[0].string, "Title") == 0 && strcmp(args[1].string, "ControllerRecommended") == 0)
+	    args[1].string && strcmp(args[0].string, "Title") == 0 &&
+	    strcmp(args[1].string, "ControllerRecommended") == 0)
 		return classic_line(cached_text(ctx, args, argCount));
 	/* The Display menu's VSync row is the 240p switch here (wii_ini_read_real keeps it under its own key). */
 	if (argCount >= 2 && args[0].type == RVALUE_STRING && args[1].type == RVALUE_STRING && args[0].string &&

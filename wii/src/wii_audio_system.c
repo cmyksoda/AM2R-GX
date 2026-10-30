@@ -828,7 +828,8 @@ void WiiAudio_prefetch(AudioSystem* audio, int32_t soundIndex) {
     bool embedded = (sound->flags & AUDIO_ENTRY_FLAG_IS_EMBEDDED) != 0
                  || (sound->flags & AUDIO_ENTRY_FLAG_IS_COMPRESSED) != 0
                  || (sound->flags & AUDIO_ENTRY_FLAG_REGULAR) != AUDIO_ENTRY_FLAG_REGULAR;
-    if (!embedded || sound->audioGroup != 0 || sound->audioFile < 0 || (uint32_t) sound->audioFile >= dw->audo.count) return;
+    if (!embedded || sound->audioGroup != 0 || sound->audioFile < 0 ||
+        (uint32_t) sound->audioFile >= dw->audo.count) return;
     sfxLoad(a, (uint32_t) sound->audioFile);
 }
 
