@@ -881,6 +881,7 @@ static bool gx_evict_page(GxRenderer *gx)
 
 	if (victim == UINT32_MAX)
 		return false;
+	WiiVideo_drawDone(); /* queued draws may still read the page */
 	WiiMem_texFree(gx->pages[victim].texels);
 	gx->pages[victim].texels = NULL;
 	gx->pages[victim].loaded = false;
@@ -1467,9 +1468,9 @@ static void gx_flush_target(GxRenderer *gx)
 		return;
 	u64 tc = gettime();
 
-	/* No cache walk over the texels: CPU writers flush them after writing, CPU readers wait and invalidate first. */
+	/* No CPU wait or cache walk: the GPU copies after everything queued before it, CPU writers flush the texels after
+	 * writing, CPU readers wait and invalidate first, and freeing memory the GPU may still read waits too. */
 	GX_Flush();
-	WiiVideo_drawDone();
 	GX_SetTexCopySrc(0, 0, (u16)copyW, (u16)copyH);
 	GX_SetTexCopyDst((u16)texW, (u16)texH, SURF_TEX_FMT, GX_FALSE);
 	GX_CopyTex(texels, GX_FALSE);
@@ -1618,6 +1619,8 @@ static bool gx_bind_surface(GxRenderer *gx, int32_t id, bool restore)
 	 * has to cover the whole surface, because the culls and the tiled-sprite spans read it. */
 	if (restore && !s->tiles && !live)
 		gx_restore_surface(gx, id);
+	if (s->tiles && !live)
+		WiiVideo_drawDone(); /* the CPU rasterizes into its tiles; queued draws may still sample them */
 	return true;
 }
 
@@ -1626,6 +1629,7 @@ static void gx_surf_release(GxRenderer *gx, GxSurf *s)
 {
 	int i, n;
 
+	WiiVideo_drawDone(); /* queued draws may still read these texels, or a copy still be writing them */
 	gx_unshare(gx, s, false);
 	if (s->tiles) {
 		n = s->tilesX * s->tilesY;
@@ -1823,6 +1827,7 @@ static uint32_t gx_usageCount; /* items the bitmap covers; sprite_add can append
 
 static void gx_swap_free(GxSwap *sw)
 {
+	WiiVideo_drawDone(); /* queued draws may still read it */
 	gx_swapBytes -= tex_bytes(sw->texW, sw->texH);
 	WiiMem_texFree(sw->texels);
 	memset(sw, 0, sizeof *sw);
@@ -2075,6 +2080,7 @@ static void gxDestroy(Renderer *renderer)
 	free(gx_ahead2);
 	gx_ahead = gx_ahead2 = NULL;
 	gx_aheadCount = 0;
+	WiiVideo_drawDone(); /* queued draws may still read the pages */
 	for (i = 0; i < gx->pageCount; i++)
 		WiiMem_texFree(gx->pages[i].texels);
 	for (i = 0; i < gx->surfCount; i++)
