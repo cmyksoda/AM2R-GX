@@ -1,0 +1,85 @@
+Reason: tile_layer_find(depth, x, y) walked every tile of the room backwards for each call. Speed blocks look up their
+tile with it as they break: in rm_a6b02 a speed run made 126 calls in one frame, ~15 µs each on the console (1.9 ms).
+The tile-skip grid (patches 0078 and 0080) already holds every live tile of a depth in the cells its box covers (or
+among the always visited), so the call now tests only the tiles in the point's cell and keeps the one with the highest
+array index, the one the backwards walk found first. A deleted tile's pseudo index is among the deleted ones, and a
+live one's array index is its pseudo index less the deleted ones below it. When the grid or the tile run isn't current,
+the walk runs as before.
+Upstream: Speed only, every platform. Retires this patch when merged.
+
+--- a/src/runner.c
++++ b/src/runner.c
+@@ -1514,6 +1514,49 @@ static TileSkipRun* tileSkipRunOf(int32_t depth) {
+     return nullptr;
+ }
+ 
++// A tile's array index from its pseudo index, or -1 when it was deleted: the deleted pseudo indices are kept in order.
++static int32_t tileRunIndexOfPseudo(int32_t pseudo) {
++    int32_t lo = 0, hi = (int32_t) arrlen(tileRunGone);
++    while (hi > lo) {
++        int32_t mid = lo + (hi - lo) / 2;
++        if (pseudo > tileRunGone[mid]) lo = mid + 1;
++        else hi = mid;
++    }
++    if ((int32_t) arrlen(tileRunGone) > lo && tileRunGone[lo] == pseudo) return -1;
++    return pseudo - lo;
++}
++
++// Speed blocks look up their tile with tile_layer_find, which walked every tile of the room: 126 calls in one frame
++// took ~1.9 ms on the vWii in rm_a6b02. The grid holds every live tile of a depth in the cells its box covers.
++bool Runner_tileLayerFind(Runner* runner, Room* room, int32_t depth, GMLReal qx, GMLReal qy, int32_t* index) {
++    if (!tileSkipCurrent(runner, room) || !tileRunCurrent(runner, room) || !(isfinite(qx) && isfinite(qy))) return false;
++    *index = -1;
++    TileSkipRun* run = nullptr;
++    repeat(arrlen(tileSkip.runs), r) {
++        if (tileSkip.runs[r].depth == depth) run = &tileSkip.runs[r];
++    }
++    if (run == nullptr) return true;
++    int32_t* cell = nullptr;
++    if (run->cells != nullptr) {
++        double cx = floor((qx - run->originX) / run->cellSize), cy = floor((qy - run->originY) / run->cellSize);
++        if (cx >= 0 && cy >= 0 && run->cellsX > cx && run->cellsY > cy) cell = run->cells[(int32_t) cy * run->cellsX + (int32_t) cx];
++    }
++    for (int32_t pass = 0; 2 > pass; pass++) {
++        int32_t* list = pass == 0 ? run->always : cell;
++        repeat(arrlen(list), k) {
++            int32_t at = tileRunIndexOfPseudo(list[k]);
++            if (*index >= at || at >= (int32_t) room->tileCount) continue;
++            RoomTile* tile = &room->tiles[at];
++            if (tile->tileDepth != depth) continue;
++            GMLReal w = (GMLReal) tile->width * (GMLReal) tile->scaleX;
++            GMLReal h = (GMLReal) tile->height * (GMLReal) tile->scaleY;
++            if (qx >= (GMLReal) tile->x && qx < (GMLReal) tile->x + w && qy >= (GMLReal) tile->y && qy < (GMLReal) tile->y + h)
++                *index = at;
++        }
++    }
++    return true;
++}
++
+ static void tileSkipShiftAfter(TileSkipRun* run, int32_t by) {
+     for (TileSkipRun* later = run + 1; &tileSkip.runs[arrlen(tileSkip.runs)] > later; later++) {
+         later->rankStart += by;
+--- a/src/runner.h
++++ b/src/runner.h
+@@ -946,6 +946,9 @@ uint32_t Runner_tileEditBegin(Runner* runner, Room* room);
+ void Runner_tileAdded(Runner* runner, Room* room, uint32_t held);
+ void Runner_tileDeleted(Runner* runner, Room* room, uint32_t held, int32_t index, const RoomTile* removed);
+ void Runner_tileRescaled(Runner* runner, Room* room, uint32_t held, int32_t index);
++// tile_layer_find through the tile-skip grid: the array index of the last tile of that depth whose box holds the point,
++// or -1; false when the grid can't answer.
++bool Runner_tileLayerFind(Runner* runner, Room* room, int32_t depth, GMLReal qx, GMLReal qy, int32_t* index);
+ // Allocates a fresh GML struct and registers it in instancesById and structInstances.
+ // refCount starts at 1 (the registry's implicit ref); callers that retain a reference must Instance_structIncRef.
+ Instance* Runner_createStruct(Runner* runner);
+--- a/src/vm_builtins.c
++++ b/src/vm_builtins.c
+@@ -14822,6 +14822,9 @@ static RValue builtin_tile_layer_find(VMContext* ctx, RValue* args, MAYBE_UNUSED
+     int32_t depth = RValue_toInt32(args[0]);
+     GMLReal qx = RValue_toReal(args[1]);
+     GMLReal qy = RValue_toReal(args[2]);
++    int32_t found;
++    if (Runner_tileLayerFind(runner, room, depth, qx, qy, &found))
++        return RValue_makeReal(0 > found ? -1.0 : (GMLReal) room->tiles[found].instanceID);
+     // Walk in reverse so the most recently added tile (drawn on top) wins.
+     for (int32_t i = (int32_t) room->tileCount - 1; i >= 0; i--) {
+         RoomTile* tile = &room->tiles[i];
