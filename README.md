@@ -1,6 +1,6 @@
 # AM2R GX
 
-*AM2R (Another Metroid 2 Remake) 1.5.5 on the Wii!*
+***AM2R (Another Metroid 2 Remake) 1.5.5 on the Wii!***
 
 ![AM2R's title screen on a TV, with the Wii standing beside it](images/title-screen.jpg)
 
@@ -30,12 +30,12 @@ By default, missiles work in **Hold** style: hold Arm Weapon to use the selected
 | Action | Classic Controller | GameCube Controller | Wii Remote + Nunchuk |
 |---|---|---|---|
 | Move | stick or d-pad | stick or d-pad | Nunchuk stick |
-| Jump | B | A | A |
-| Fire (hold to charge; bombs in ball) | Y | B | B trigger |
+| Jump | B | A | B trigger |
+| Fire (hold to charge; bombs in ball) | Y | B | A |
 | Morph | A | X | C |
-| Weapon Select | X or − | Y | − |
+| Weapon Select | X | Y | − |
 | Aim Diagonal (hold) | L | L | d-pad ↑ / ↓ (up / down diagonal) |
-| Arm Weapon (hold) | R or ZR | R | Z |
+| Arm Weapon (hold) | R | R | Z |
 | Aim Lock | ZL | Z | d-pad ← or → |
 | Map / pause | + | Start | + |
 
