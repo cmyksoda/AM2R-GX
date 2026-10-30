@@ -1321,7 +1321,6 @@ static GML_ROUNDING void sand_wake_area(VMContext *ctx, GMLReal x, GMLReal y)
 	sand_free_call(activateRegionFn, ctx, args, 5);
 }
 
-/* instance_position(x, y, oBlockSand) */
 static RValue sand_at(VMContext *ctx, GMLReal x, GMLReal y)
 {
 	RValue args[3] = { RValue_makeReal(x), RValue_makeReal(y), RValue_makeInt32(SAND_OBJECT) };

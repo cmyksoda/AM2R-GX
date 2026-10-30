@@ -9,7 +9,7 @@
 
 bool WiiVideo_init(void);
 void WiiVideo_present(void);
-uint64_t WiiVideo_gpuWaitNs(void); /* how long the last frame waited for the GPU */
+uint64_t WiiVideo_gpuWaitNs(void);
 /* At 60 Hz a present leaves the GPU drawing and copying the frame while the next step runs. Anything that reads or
  * frees what the GPU may still be using, or waits for it with GX_DrawDone, settles that frame first. */
 void WiiVideo_settle(void);
