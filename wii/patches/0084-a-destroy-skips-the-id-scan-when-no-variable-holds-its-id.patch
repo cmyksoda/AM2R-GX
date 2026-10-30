@@ -1,0 +1,116 @@
+Reason: every instance destroy walked every instance that had ever held an id-like number, looking for variables that
+still hold the dying instance's id. Tile ids count as id-like (10,000,000 and up), so in rm_a3h04 all ~515 sand
+blocks are on that list for their tile variables, and a power bomb's crumbles and smoke destroy 5 to 25 instances a
+frame: 0.7 to 1.6 ms a frame of these walks on the vWii, about 500 instances each. Now every variable that takes an
+id-like number counts it in a table by the instance id it would match, and counts it back down when it loses it (to
+another value, the rewrite or the instance's free). A destroy whose id nobody holds skips the walk. Only
+Instance_setSelfVar stores a number in a variable, so a count is never below the real number of holders; an array
+written over a held number only leaves it high, which costs a walk, not a missed rewrite.
+Upstream: Speed only, every platform. Retires this patch when merged.
+
+--- a/src/instance.c
++++ b/src/instance.c
+@@ -17,6 +17,47 @@ void Instance_listIdHolder(Instance* inst) {
+     arrput(Instance_idHolders, inst);
+ }
+ 
++static struct { int32_t key; int32_t value; }* idHolds = nullptr;
++
++// The instance id a number would match by the destroy scan's own comparisons, if any.
++static bool heldIdOf(RValue val, int32_t* id) {
++    switch (val.type) {
++        case RVALUE_INT32: *id = val.int32; return true;
++#ifndef NO_RVALUE_INT64
++        case RVALUE_INT64:
++            if (val.int64 < INT32_MIN || val.int64 > INT32_MAX) return false;
++            *id = (int32_t) val.int64;
++            return true;
++#endif
++        case RVALUE_REAL:
++            if (!(val.real >= (GMLReal) INT32_MIN && val.real <= (GMLReal) INT32_MAX)) return false;
++            *id = (int32_t) val.real;
++            return (GMLReal) *id == val.real;
++        default: return false;
++    }
++}
++
++void Instance_holdId(RValue val) {
++    int32_t id;
++    if (!heldIdOf(val, &id)) return;
++    ptrdiff_t i = hmgeti(idHolds, id);
++    if (0 > i) hmput(idHolds, id, 1);
++    else idHolds[i].value++;
++}
++
++void Instance_releaseId(RValue val) {
++    int32_t id;
++    if (!heldIdOf(val, &id)) return;
++    ptrdiff_t i = hmgeti(idHolds, id);
++    if (0 > i) return;
++    if (--idHolds[i].value == 0) hmdel(idHolds, id);
++}
++
++int32_t Instance_idHoldCount(int32_t id) {
++    ptrdiff_t i = hmgeti(idHolds, id);
++    return 0 > i ? 0 : idHolds[i].value;
++}
++
+ void Instance_unlistIdHolder(Instance* inst) {
+     int32_t slot = inst->idHolderSlot;
+     if (0 > slot || slot >= (int32_t) arrlen(Instance_idHolders) || Instance_idHolders[slot] != inst) return;
+@@ -106,6 +147,10 @@ uint32_t Instance_getInstanceId(Instance* inst) {
+ void Instance_freeContents(Instance* instance) {
+     if (instance == nullptr) return;
+ 
++    repeat(instance->selfVars.capacity, i) {
++        IntRValueEntry* entry = &instance->selfVars.entries[i];
++        if (entry->key != INT_RVALUE_HASHMAP_EMPTY_KEY && RValue_isIdLike(entry->value)) Instance_releaseId(entry->value);
++    }
+     // Free owned strings and decRef owned arrays in selfVars hashmap, then release the entries buffer.
+     IntRValueHashMap_freeAllValues(&instance->selfVars);
+     arrfree(instance->collisionCells);
+--- a/src/instance.h
++++ b/src/instance.h
+@@ -142,6 +142,12 @@ extern Instance** Instance_idHolders;
+ void Instance_listIdHolder(Instance* inst);
+ void Instance_unlistIdHolder(Instance* inst);
+ 
++// How many variables hold each id-like number: only Instance_setSelfVar stores one, and a variable losing one counts it
++// back down (an array written over it leaves the count high). A destroy whose id nobody holds has nothing to rewrite.
++void Instance_holdId(RValue val);
++void Instance_releaseId(RValue val);
++int32_t Instance_idHoldCount(int32_t id);
++
+ // Set a self variable by varID. Frees the old value if present (decRefs owned arrays).
+ // Always takes an independent reference with RValue_makeIndependent.
+ // The caller retains ownership of their original `val` and remains responsible for freeing it (via RValue_free) when done.
+@@ -150,9 +156,11 @@ static inline void Instance_setSelfVar(Instance* inst, int32_t varID, RValue val
+     // One lookup: returns the existing slot, or inserts UNDEFINED and returns the new slot.
+     RValue* pointerToSlot = IntRValueHashMap_getOrInsertUndefined(&inst->selfVars, varID);
+     RValue independentVal = RValue_makeIndependent(val);
++    if (RValue_isIdLike(*pointerToSlot)) Instance_releaseId(*pointerToSlot);
+     RValue_free(pointerToSlot);
+     *pointerToSlot = independentVal;
+     if (RValue_isIdLike(independentVal)) {
++        Instance_holdId(independentVal);
+         inst->mayHoldIds = true;
+         if (inst->idHolderSlot < 0 && inst->inRoomList) Instance_listIdHolder(inst);
+         repeat(arrlen(inst->idVarKeys), i) if (inst->idVarKeys[i] == varID) return;
+--- a/src/runner.c
++++ b/src/runner.c
+@@ -3415,6 +3415,7 @@ static void Runner_clearStaleInstanceReferencesToInstance(Runner* runner, Instan
+ 
+     int32_t destroyedInstanceId = destroyedInst->instanceId;
+     bool filtered = destroyedInstanceId >= INSTANCE_ID_BASE;
++    if (filtered && Instance_idHoldCount(destroyedInstanceId) == 0) return;
+     // A high id can only be held by a listed instance; each one's rewrite touches only its own variables.
+     Instance** walk = filtered ? Instance_idHolders : runner->instances;
+     int32_t count = (int32_t) arrlen(walk);
+@@ -3438,6 +3439,7 @@ static void Runner_clearStaleInstanceReferencesToInstance(Runner* runner, Instan
+ #endif
+                     (vtype == RVALUE_REAL && value->real == (GMLReal) destroyedInstanceId)
+                 ) {
++                    Instance_releaseId(*value);
+                     *value = RValue_makeInt32(INSTANCE_NOONE);
+                 } else if (RValue_isIdLike(*value)) {
+                     inst->idVarKeys[kept++] = key;
