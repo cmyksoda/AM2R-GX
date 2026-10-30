@@ -2,8 +2,8 @@
 <app version="1">
   <name>AM2R GX</name>
   <coder>cmyksoda</coder>
-  <version>1.0.0-rc1</version>
-  <release_date>20260930</release_date>
+  <version>1.0.0</version>
+  <release_date>20261030</release_date>
   <short_description>AM2R 1.5.5 on Wii!</short_description>
   <long_description>
 AM2R GX — AM2R 1.5.5 (Community Update) on the Wii, built on the Butterscotch engine with native GX. Bring your own AM2R 1.1 zip; the first boot builds 1.5.5 from it. Hold HOME, or X + B + Start on a GameCube controller, to quit.
