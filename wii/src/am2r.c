@@ -1263,6 +1263,7 @@ static GML_ROUNDING RValue wii_mine_death(VMContext *ctx)
  * store literals as reals, as the VM does. */
 #define SAND_OBJECT 36
 #define SAND_SMOKE_OBJECT 378
+#define SAND_CRUMBLE_SOUND 209
 enum {
 	SV_TILE, SV_TILE_C0, SV_TILE_C1, SV_TILE_C2, SV_TILE_C3,
 	SV_U, SV_R, SV_D, SV_L, SV_UR, SV_UL, SV_DR, SV_DL,
@@ -1445,8 +1446,8 @@ static GML_ROUNDING RValue wii_sand_crumble(VMContext *ctx)
 	}
 	sand_drop_tiles(ctx, self);
 	VMBuiltins_setVariable(ctx, self, BUILTIN_VAR_ALARM, "alarm", RValue_makeReal(1), 0);
-	sand_script(ctx, sfxStopCode, 209);
-	sand_script(ctx, sfxPlayCode, 209);
+	sand_script(ctx, sfxStopCode, SAND_CRUMBLE_SOUND);
+	sand_script(ctx, sfxPlayCode, SAND_CRUMBLE_SOUND);
 	sand_free_call(instanceDestroyFn, ctx, NULL, 0);
 	return RValue_makeUndefined();
 }
