@@ -1,0 +1,87 @@
+name: Bug report
+description: Something went wrong in AM2R GX; tell us what happened.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting! The game keeps a log of each boot in `/apps/am2r/` on your SD card or USB drive, and those two files are the most useful part of a report.
+
+  - type: input
+    id: version
+    attributes:
+      label: AM2R GX version
+      description: The Homebrew Channel shows it under the app's name.
+      placeholder: 1.0.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: console
+    attributes:
+      label: Console
+      options:
+        - Wii
+        - Wii U (Wii mode)
+        - Wii mini
+        - Dolphin
+    validations:
+      required: true
+
+  - type: dropdown
+    id: storage
+    attributes:
+      label: Where is AM2R GX installed?
+      options:
+        - SD card
+        - USB drive
+    validations:
+      required: true
+
+  - type: dropdown
+    id: controller
+    attributes:
+      label: Controller
+      options:
+        - Classic Controller
+        - GameCube controller
+        - Wii Remote + Nunchuk
+    validations:
+      required: true
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you saw, and what you expected instead.
+    validations:
+      required: true
+
+  - type: input
+    id: where
+    attributes:
+      label: Where in the game?
+      description: The area and what you were doing, or the menu you were in.
+      placeholder: Area 3, fighting a Gamma Metroid
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Can you make it happen again?
+      description: If it happens every time, the steps that get there.
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Drag `profile.txt` and `profile-previous.txt` from `/apps/am2r/` into this box. If the game froze and you restarted it, the log of the boot that froze is `profile-previous.txt`.
+    validations:
+      required: true
+
+  - type: textarea
+    id: pictures
+    attributes:
+      label: Photos or video
+      description: A photo of the TV or a short clip, if the problem is something you can see.
