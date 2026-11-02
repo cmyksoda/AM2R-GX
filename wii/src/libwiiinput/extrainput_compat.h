@@ -1,21 +1,14 @@
+/* SPDX-FileCopyrightText: 2026 quatric */
+/* SPDX-License-Identifier: GPL-3.0-or-later */
 #ifndef _EXTRAINPUT_COMPAT_H_
 #define _EXTRAINPUT_COMPAT_H_
 
 /*
- * Passed to every file with -include (see the Makefile): makes the app's own WPAD_* and PAD_* calls
- * see the controllers in extrainput.h as well. Wii Remote channel 0's WPAD_ButtonsDown/Held/Up and
- * WPAD_Data() carry the extra devices' buttons, WPAD_IR() / WPAD_Data()->ir give a USB mouse, tablet or
- * uDraw as the pointer while it is in use, and PAD_* carry the GameCube adapter's ports. Nothing in
- * the app's own input code changes.
+ * Passed to every file with -include (see the Makefile): makes the app's own PAD_* calls see the
+ * GameCube adapter's ports as well. Nothing in the app's own input code changes.
  */
 
 #ifdef HW_RVL
-
-// libwiiinput's uDraw driver writes wiiuse's wiimote_t, which is read-only unless this is defined before wpad.h is first included
-#ifndef WIIUSE_INTERNAL_H_INCLUDED
-#define WIIUSE_INTERNAL_H_INCLUDED
-#endif
-
 
 #include <stdlib.h>
 #include <string.h>
@@ -23,11 +16,10 @@
 #include <wiiuse/wpad.h>
 #include "extrainput.h"
 
-static inline s32 ExtraInput_WPADInit(void)
+static inline void ExtraInput_PADInit(void)
 {
-	s32 r = WPAD_Init();
-	ExtraInput_Init(640, 480);
-	return r;
+	PAD_Init();
+	ExtraInput_Init();
 }
 
 static inline s32 ExtraInput_WPADShutdown(void)
@@ -36,72 +28,11 @@ static inline s32 ExtraInput_WPADShutdown(void)
 	return WPAD_Shutdown();
 }
 
-static inline s32 ExtraInput_WPADSetVRes(int chan, u32 xres, u32 yres)
-{
-	ExtraInput_SetScreen((int)xres, (int)yres);
-	return WPAD_SetVRes(chan, xres, yres);
-}
-
-static inline s32 ExtraInput_WPADScanPads(void)
-{
-	s32 r = WPAD_ScanPads();
-	ExtraInput_Update();
-	return r;
-}
-
-static inline void ExtraInput_WPADIR(int chan, struct ir_t *ir)
-{
-	float x, y;
-	WPAD_IR(chan, ir);
-	if (chan == 0 && ir && ExtraInput_Pointer(&x, &y))
-	{
-		ir->valid = 1;
-		ir->x = x;
-		ir->y = y;
-		ir->angle = 0;
-	}
-}
-
-static inline WPADData *ExtraInput_WPADData(int chan, WPADData *real)
-{
-	static WPADData patched[4];
-
-	if (!real || chan < 0 || chan > 3)
-	{
-		return real;
-	}
-	patched[chan] = *real;
-	patched[chan].btns_h |= ExtraInput_WpadHeld(chan);
-	patched[chan].btns_d |= ExtraInput_WpadDown(chan);
-	patched[chan].btns_u |= ExtraInput_WpadUp(chan);
-	if (chan == 0)
-	{
-		float x, y;
-		if (ExtraInput_Pointer(&x, &y))
-		{
-			patched[chan].ir.valid = 1;
-			patched[chan].ir.x = x;
-			patched[chan].ir.y = y;
-			patched[chan].ir.angle = 0;
-		}
-	}
-	return &patched[chan];
-}
-
-#define WPAD_Init()                  ExtraInput_WPADInit()
-#define WPAD_Shutdown()              ExtraInput_WPADShutdown()
-#define WPAD_SetVRes(c, w, h)        ExtraInput_WPADSetVRes((c), (w), (h))
-#define WPAD_ScanPads()              ExtraInput_WPADScanPads()
-#define WPAD_IR(c, ir)               ExtraInput_WPADIR((c), (ir))
-#define WPAD_Data(c)                 ExtraInput_WPADData((c), WPAD_Data(c))
-#define WPAD_ButtonsHeld(c)          (WPAD_ButtonsHeld(c) | ExtraInput_WpadHeld(c))
-#define WPAD_ButtonsDown(c)          (WPAD_ButtonsDown(c) | ExtraInput_WpadDown(c))
-#define WPAD_ButtonsUp(c)            (WPAD_ButtonsUp(c) | ExtraInput_WpadUp(c))
-
 // The GameCube controller adapter for Wii U: a real pad on a port wins, otherwise the adapter's pad is that port's pad
 static inline u32 ExtraInput_PADScanPads(void)
 {
 	u32 mask = PAD_ScanPads();
+	ExtraInput_Update();
 	for (int i = 0; i < 4; i++)
 	{
 		if (ExtraInput_GcPad(i, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL))
@@ -143,6 +74,8 @@ static inline u8 ExtraInput_PADTrigger(int port, u8 real, int right)
 	return v > real ? v : real;
 }
 
+#define WPAD_Shutdown()              ExtraInput_WPADShutdown()
+#define PAD_Init()                   ExtraInput_PADInit()
 #define PAD_ScanPads()               ExtraInput_PADScanPads()
 #define PAD_ButtonsHeld(c)           ExtraInput_PADButtons((c), PAD_ButtonsHeld(c), 0)
 #define PAD_ButtonsDown(c)           ExtraInput_PADButtons((c), PAD_ButtonsDown(c), 1)
