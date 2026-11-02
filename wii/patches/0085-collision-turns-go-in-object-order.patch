@@ -1,0 +1,25 @@
+Reason: collision events took their turns object by object in the order of the lowest object each one collides with,
+so Samus's beam (oBeam, whose first target is oBlockShoot) went long before AM2R's door (oDoor). Every door builds a
+solid block beside itself, and a power beam that reaches the door touches that block in the same frame: its oSolid
+event destroyed it before the door's oBeam event could open the door, so blue doors only opened to missiles (issue
+#1). The native runner takes the turns in object index order, which puts the door first; the list is now built in
+that order once, at load.
+Upstream: Bug on every platform - upstream fixed it on 2026-10-31 (ea5e8c2, "fix(collision): sort events in ascending
+order", which sorts a copy every frame). Retires this patch when the pin moves past it.
+
+--- a/src/runner.c
++++ b/src/runner.c
+@@ -3101,6 +3101,13 @@
+                 arrput(runner->objectsWithAnyEventOfType[t], obj);
+             }
+         }
++
++        // The native runner takes collision turns in object index order: AM2R's door must catch a beam before the
++        // beam's own solid event destroys it on the door's block.
++        if (t == EVENT_COLLISION) {
++            arrsetlen(runner->objectsWithAnyEventOfType[t], 0);
++            repeat(objectCount, obj) if (seen[obj]) arrput(runner->objectsWithAnyEventOfType[t], obj);
++        }
+     }
+ 
+     free(seen);
