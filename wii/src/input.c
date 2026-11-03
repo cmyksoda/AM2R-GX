@@ -2,6 +2,7 @@
 
 #include "am2r.h"
 #include "controls.h"
+#include "ds3.h"
 #include "vm.h"
 #include "stb_ds.h"
 #include "log.h"
@@ -38,6 +39,7 @@ static u32 polled_wheld; /* the last poll's reading, test hooks included */
 static u16 polled_gcheld;
 static WiiPad pad_in_use = WII_PAD_CLASSIC;
 static bool classic_is_wiiu;
+static bool ds3_in_use; /* the Classic in use is a DualShock standing in for one */
 static float rumble_level;
 static bool rumble_fresh, gc_motor, wiiu_motor;
 
@@ -505,10 +507,15 @@ WiiPad WiiInput_pad(void)
 	return pad_in_use;
 }
 
+bool WiiInput_isDs3(void)
+{
+	return pad_in_use == WII_PAD_CLASSIC && ds3_in_use;
+}
+
 /* A Classic Controller would buzz the Remote it hangs from; a Wii U Pro Controller has its own motor. */
 bool WiiInput_hasRumble(void)
 {
-	return pad_in_use == WII_PAD_GAMECUBE || (pad_in_use == WII_PAD_CLASSIC && classic_is_wiiu);
+	return pad_in_use == WII_PAD_GAMECUBE || (pad_in_use == WII_PAD_CLASSIC && (classic_is_wiiu || ds3_in_use));
 }
 
 /* AM2R calls gamepad_set_vibration every step while its Vibration option is on, so a step without a call stops. */
@@ -522,10 +529,11 @@ void WiiInput_rumble(float left, float right)
 
 static void set_motors(bool on)
 {
-	bool gc = on && pad_in_use == WII_PAD_GAMECUBE, wiiu = on && pad_in_use == WII_PAD_CLASSIC;
+	bool gc = on && pad_in_use == WII_PAD_GAMECUBE, wiiu = on && pad_in_use == WII_PAD_CLASSIC && !ds3_in_use;
 
 	if (gc != gc_motor) {
 		PAD_ControlMotor(PAD_CHAN0, gc ? PAD_MOTOR_RUMBLE : PAD_MOTOR_STOP);
+		INPUT_GCAdapterRumble(0, gc); /* the adapter's port 1; needs its grey power cable */
 		gc_motor = gc;
 	}
 	if (wiiu != wiiu_motor) {
@@ -549,7 +557,7 @@ static void drive_rumble(void)
 		acc = 1.0f; /* a new rumble starts with a pulse */
 		if (active)
 			logInfo("rumble on (%.2f, %s)\n", level,
-				pad_in_use == WII_PAD_GAMECUBE ? "GameCube" : "Wii U Pro");
+				pad_in_use == WII_PAD_GAMECUBE ? "GameCube" : ds3_in_use ? "DualShock" : "Wii U Pro");
 		else
 			logInfo("rumble off (motor on %d of %d frames)\n", frames_on, frames);
 		frames = frames_on = 0;
@@ -562,11 +570,15 @@ static void drive_rumble(void)
 	frames += active;
 	frames_on += on;
 	set_motors(on);
+	/* a DualShock's motors take a force, so it gets the level itself rather than on/off frames */
+	Ds3_rumble(WiiInput_isDs3() ? level : 0.0f);
 }
 
 void WiiInput_stopRumble(void)
 {
 	PAD_ControlMotor(PAD_CHAN0, PAD_MOTOR_STOP_HARD);
+	INPUT_GCAdapterRumble(0, false);
+	Ds3_rumble(0.0f);
 	WPAD_Rumble(WPAD_CHAN_0, 0);
 	gc_motor = wiiu_motor = false;
 }
@@ -575,6 +587,7 @@ void WiiInput_shutdown(void)
 {
 	WiiInput_stopRumble();
 	ExtraInput_Shutdown();
+	Ds3_shutdown();
 }
 
 static int gcadapter_log(const char *fmt, ...)
@@ -595,8 +608,34 @@ void WiiInput_init(void)
 	INPUT_GCAdapterSetLog(gcadapter_log);
 	WPAD_Init();
 	PAD_Init();
+	Ds3_init();
 	WPAD_SetDataFormat(WPAD_CHAN_0, WPAD_FMT_BTNS_ACC);
 	home_held = 0;
+}
+
+/* A DualShock stands in as a Classic Controller only on frames it is used, so a Nunchuk player keeps theirs. */
+static void merge_ds3(Runner *runner, u32 *wheld, expansion_t *exp)
+{
+	Ds3Pad ds3;
+	float mag, ang;
+
+	if (exp->type == WPAD_EXP_CLASSIC)
+		ds3_in_use = false;
+	if (!Ds3_poll(&ds3) || exp->type == WPAD_EXP_CLASSIC)
+		return;
+	mag = sqrtf(ds3.x * ds3.x + ds3.y * ds3.y);
+	if ((!ds3.classic && mag < STICK_DEADZONE) || (pad_locked(runner) && pad_in_use != WII_PAD_CLASSIC))
+		return;
+	ang = atan2f(ds3.x, ds3.y) * (180.0f / (float)M_PI);
+	if (!ds3_in_use)
+		logInfo("pad in use: DualShock (as a Classic)\n");
+	ds3_in_use = true;
+	*wheld |= ds3.classic;
+	memset(exp, 0, sizeof *exp);
+	exp->type = WPAD_EXP_CLASSIC;
+	exp->classic.type = CLASSIC_TYPE_PRO;
+	exp->classic.ljs.mag = mag > 1.0f ? 1.0f : mag;
+	exp->classic.ljs.ang = ang < 0.0f ? ang + 360.0f : ang;
 }
 
 void WiiInput_poll(Runner *runner)
@@ -621,6 +660,7 @@ void WiiInput_poll(Runner *runner)
 	sticks[1] = PAD_StickY(0);
 	sticks[2] = PAD_SubStickY(0);
 	WPAD_Expansion(0, &exp);
+	merge_ds3(runner, &wheld, &exp);
 	Wii_hooksPad(runner, &wheld, &gcheld, &exp, sticks);
 	polled_wheld = wheld;
 	polled_gcheld = gcheld;

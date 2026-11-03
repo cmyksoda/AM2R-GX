@@ -24,6 +24,7 @@
 #define XJOY_EXIT 15
 #define XJOY_TITLE 50 /* its op[] slot for the title */
 #define OP_SLOTS 64 /* the options screens file rows from 0 and titles, headers and Back from 50 */
+#define PLAYSTATION_NAMES 1
 #define NINTENDO_NAMES 2
 
 enum { SCR_DEFAULTS, SCR_NAME, SCR_SPRITE, SCR_SAVE, SCR_LOAD, SCR_TEXT, SCR_COUNT };
@@ -190,14 +191,23 @@ static bool nintendo_names(Runner *runner)
 	       NINTENDO_NAMES;
 }
 
-/* A fresh options file says Xbox; every other setting than Nintendo Pro draws buttons no Wii pad has. */
+/* The game's PlayStation prompts for a DualShock (its face slots go by position, as ours do), Nintendo Pro else. */
+static int pinned_names(void)
+{
+	return WiiInput_isDs3() ? PLAYSTATION_NAMES : NINTENDO_NAMES;
+}
+
+static int last_pin = NINTENDO_NAMES;
+
+/* A fresh options file says Xbox; every other setting draws buttons no pad in use has. */
 static void pin_nintendo_names(Runner *runner)
 {
 	Instance *control = first_instance(runner, "oControl");
 	int32_t id = control ? var_id(runner, "mod_buttonsconfig", INSTANCE_SELF) : -1;
 
-	if (id >= 0 && !nintendo_names(runner))
-		Instance_setSelfVar(control, id, RValue_makeInt32(NINTENDO_NAMES));
+	last_pin = pinned_names();
+	if (id >= 0 && var_num(runner, control, "mod_buttonsconfig", INSTANCE_SELF, 0) != last_pin)
+		Instance_setSelfVar(control, id, RValue_makeInt32(last_pin));
 }
 
 static const char *const *letter_rows(char ch)
@@ -440,15 +450,121 @@ static void hide_vibration_row(Runner *runner, Instance *menu)
 	logInfo("controls: Vibration hidden (no pad with a motor in use)\n");
 }
 
-/* Fullscreen and Window Size mean nothing on a TV, so their rows become Resize/Move Screen and HUD Margins (labels in
- * get_text, opened from input.c); Controller Tips is pinned to Nintendo Pro, the one setting that draws Wii buttons. */
-static void fit_display_rows(Runner *runner, Instance *menu)
+static void move_instance(Runner *runner, Instance *inst, float y)
 {
-	int32_t scale = (int32_t)var_num(runner, menu, "opScale", INSTANCE_SELF, -1);
-	int32_t tips = (int32_t)var_num(runner, menu, "opButtonType", INSTANCE_SELF, -1);
+	inst->y = y;
+	if (runner->spatialGrid)
+		SpatialGrid_markInstanceAsDirty(runner->spatialGrid, inst);
+}
 
-	if (tips > scale && hide_row(runner, menu, "canEdit", "SPACER", tips))
-		logInfo("controls: Controller Tips hidden\n");
+/* Controller Tips is pinned to Nintendo Pro (the one setting that draws Wii buttons), so its row becomes Scanlines and
+ * moves up under Widescreen. The per-row arrays, each row's optionid and the op* indexes all shift together, so the
+ * game's own cursor and value code carry on unchanged. */
+static void move_scanline_row(Runner *runner, Instance *menu)
+{
+	static const char *const indexVars[] = { "opFullscreen", "opScale", "opVSync", "opSensitivity",
+						 "opWidescreen", "opShowHUD", "opShowMap", "opCounterStyle",
+						 "opShowHints", "opShowScans", "opLanguage" };
+	static const char *const rowArrays[] = { "op", "canEdit", "tip" };
+	int32_t wide = (int32_t)var_num(runner, menu, "opWidescreen", INSTANCE_SELF, -1);
+	int32_t tips = (int32_t)var_num(runner, menu, "opButtonType", INSTANCE_SELF, -1);
+	int32_t optionid = var_id(runner, "optionid", INSTANCE_SELF), id, v, k;
+	float sep = (float)var_num(runner, menu, "SPACER", INSTANCE_SELF, 16);
+	Instance *row = op_row(runner, menu, tips), *wideRow = op_row(runner, menu, wide), *other;
+	RValue moved;
+	unsigned a;
+
+	if (wide < 0 || tips <= wide + 1 || !row || !wideRow || optionid < 0) {
+		logWarn("controls: no Controller Tips row to make Scanlines (%d, %d)\n", (int)wide, (int)tips);
+		return;
+	}
+	for (a = 0; a < sizeof rowArrays / sizeof rowArrays[0]; a++)
+		for (k = wide + 1; k <= tips; k++)
+			if (!array_slot(runner, menu, rowArrays[a], k))
+				return;
+	for (k = 0; k < OP_SLOTS; k++)
+		if ((other = op_row(runner, menu, k)) && other != row && other->y > wideRow->y && other->y < row->y)
+			move_instance(runner, other, other->y + sep);
+	move_instance(runner, row, wideRow->y + sep);
+	for (a = 0; a < sizeof rowArrays / sizeof rowArrays[0]; a++) {
+		moved = *array_slot(runner, menu, rowArrays[a], tips);
+		for (k = tips; k > wide + 1; k--)
+			*array_slot(runner, menu, rowArrays[a], k) = *array_slot(runner, menu, rowArrays[a], k - 1);
+		*array_slot(runner, menu, rowArrays[a], wide + 1) = moved;
+	}
+	for (k = wide + 1; k <= tips; k++)
+		if ((other = op_row(runner, menu, k)))
+			Instance_setSelfVar(other, optionid, RValue_makeInt32(k));
+	for (a = 0; a < sizeof indexVars / sizeof indexVars[0]; a++) {
+		v = (int32_t)var_num(runner, menu, indexVars[a], INSTANCE_SELF, -1);
+		if (v > wide && v < tips && (id = var_id(runner, indexVars[a], INSTANCE_SELF)) >= 0)
+			Instance_setSelfVar(menu, id, RValue_makeInt32(v + 1));
+	}
+	if ((id = var_id(runner, "opButtonType", INSTANCE_SELF)) >= 0)
+		Instance_setSelfVar(menu, id, RValue_makeInt32(wide + 1));
+	logInfo("controls: Controller Tips row is Scanlines, moved from row %d to %d\n", (int)tips, (int)wide + 1);
+}
+
+/* Scanlines draw nothing in 240p (a CRT has real ones there), so their row leaves the menu while 240p is on and the
+ * rows below close up, the way hide_row does; turning 240p off brings it back with its setting kept. */
+static void fit_scanline_row(Runner *runner, Instance *menu, bool *hidden)
+{
+	int32_t row = (int32_t)var_num(runner, menu, "opButtonType", INSTANCE_SELF, -1);
+	int32_t vsync = var_id(runner, "opvsync", INSTANCE_GLOBAL), k;
+	float sep = (float)var_num(runner, menu, "SPACER", INSTANCE_SELF, 16);
+	Instance *line = op_row(runner, menu, row), *other;
+	RValue *edit = array_slot(runner, menu, "canEdit", row);
+	bool hide;
+
+	if (!line || !edit || vsync < 0)
+		return;
+	hide = RValue_toReal(Instance_getSelfVar(runner->vmContext->globalScopeInstance, vsync)) != 0.0;
+	if (hide == *hidden)
+		return;
+	*hidden = hide;
+	RValue_free(edit);
+	*edit = RValue_makeInt32(hide ? 0 : 1);
+	line->visible = !hide;
+	for (k = 0; k < OP_SLOTS; k++)
+		if ((other = op_row(runner, menu, k)) && other != line &&
+		    (hide ? other->y > line->y : other->y >= line->y))
+			move_instance(runner, other, other->y + (hide ? -sep : sep));
+	logInfo("controls: Scanlines row %s (240p %s)\n", hide ? "hidden" : "shown", hide ? "on" : "off");
+}
+
+/* The game steps Controller Tips by one either way; that step moves the scanline level before the pin undoes it. */
+static void scanline_value(Runner *runner, Instance *menu)
+{
+	Instance *control = first_instance(runner, "oControl");
+	int32_t row = (int32_t)var_num(runner, menu, "opButtonType", INSTANCE_SELF, -1);
+	int32_t curropt = var_id(runner, "curropt", INSTANCE_GLOBAL), optext = var_id(runner, "optext", INSTANCE_SELF);
+	double config = var_num(runner, control, "mod_buttonsconfig", INSTANCE_SELF, last_pin);
+	Instance *line = op_row(runner, menu, row);
+	RValue args[2], text, shown;
+	char level[32];
+
+	if (!line || optext < 0)
+		return;
+	/* against last frame's pin: a pad switch that changes the prompt style is no step */
+	if (config != last_pin && curropt >= 0 &&
+	    RValue_toInt32(Instance_getSelfVar(runner->vmContext->globalScopeInstance, curropt)) == row)
+		Overscan_stepScanlines(config > last_pin ? 1 : -1);
+	pin_nintendo_names(runner);
+	if (Overscan_scanlines()) {
+		snprintf(level, sizeof level, "%d%%", Overscan_scanlines() * 25);
+	} else {
+		args[0] = RValue_makeString("GlobalOptions");
+		args[1] = RValue_makeString("Disabled");
+		text = call_script(runner->vmContext, SCR_TEXT, args, 2);
+		snprintf(level, sizeof level, "%s", text.type == RVALUE_STRING && text.string ? text.string : "Off");
+		RValue_free(&text);
+	}
+	shown = Instance_getSelfVar(line, optext);
+	if (shown.type == RVALUE_STRING && shown.string && strcmp(shown.string, level) == 0)
+		return;
+	text = RValue_makeOwnedString(safeStrdup(level));
+	Instance_setSelfVar(line, optext, text);
+	RValue_free(&text);
 }
 
 /* A value beside the two adjust rows would only show the window settings they stand in for. */
@@ -548,10 +664,13 @@ bool WiiControls_menuBack(Runner *runner)
 void WiiControls_frame(Runner *runner)
 {
 	static uint32_t controlMenu, joypadMenu, displayMenu;
+	static bool scanlineRowHidden;
 	Instance *menu;
 
 	if (!runner || !runner->vmContext)
 		return;
+	if ((menu = first_instance(runner, "oOptionsDisplay")) && menu->instanceId == displayMenu)
+		scanline_value(runner, menu);
 	pin_nintendo_names(runner);
 	if ((menu = first_instance(runner, "oOptionsControl")) && menu->instanceId != controlMenu) {
 		controlMenu = menu->instanceId;
@@ -561,8 +680,10 @@ void WiiControls_frame(Runner *runner)
 	if ((menu = first_instance(runner, "oOptionsDisplay"))) {
 		if (menu->instanceId != displayMenu) {
 			displayMenu = menu->instanceId;
-			fit_display_rows(runner, menu);
+			move_scanline_row(runner, menu);
+			scanlineRowHidden = false;
 		}
+		fit_scanline_row(runner, menu, &scanlineRowHidden);
 		blank_value(runner, menu, "opFullscreen");
 		blank_value(runner, menu, "opScale");
 	}
