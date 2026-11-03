@@ -23,6 +23,7 @@
 #define SAFE_BOTTOM (240 - WiiSafe_rows())
 #define PROMPT_EDGE 8 /* prompts this close to a side are corner prompts (AM2R puts them at 2 and 318) */
 #define PORT_LINK "github.com/cmyksoda/AM2R-GX"
+#define HOME_LINK "cmyksoda.cc"
 #define LINK_TOP 3 /* the menu font's letters start 3 rows lower than the blog picture's */
 
 enum { SCR_1BUTTON, SCR_2BUTTONS, SCR_COUNT };
@@ -443,6 +444,9 @@ static RValue wii_draw_text_colour(VMContext *ctx, RValue *args, int32_t argCoun
 	if (argCount != 8 || !in_object(ctx, titleBg))
 		return engineDrawTextColour(ctx, args, argCount);
 	memcpy(moved, args, sizeof moved);
+	/* the title's reddit line points at the port's home page instead */
+	if (args[2].type == RVALUE_STRING && args[2].string && strcmp(args[2].string, "reddit.com/r/AM2R") == 0)
+		moved[2] = RValue_makeString(HOME_LINK);
 	x = RValue_toReal(args[0]);
 	y = RValue_toReal(args[1]);
 	moved[0] = RValue_makeReal(y < TITLE_MID ? x + Overscan_marginH() : x - Overscan_marginH());
