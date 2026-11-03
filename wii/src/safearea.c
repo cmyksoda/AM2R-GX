@@ -309,7 +309,7 @@ static RValue wii_draw_txt_2buttons(VMContext *ctx, RValue *args, int32_t argCou
 /* The inventory's "[arrows] - Select item" row is a background plus a draw_text, not a prompt script: hold the arrows
  * until the text arrives, then center the pair. */
 static BuiltinFunc engineDrawBackground, engineDrawText, engineStringWidth, engineStringHeight, engineDrawRectangle;
-static BuiltinFunc engineDrawBackgroundExt, engineDrawTextColour, engineDrawRectangleColour;
+static BuiltinFunc engineDrawBackgroundExt, engineDrawTextColour, engineDrawRectangleColour, engineDrawSetAlpha;
 static int32_t introText = -2, introFull = -1;
 static int32_t tipArrow = -2, subscreenFg = -2, optionsFg = -2, scoreScreen = -2, titleBg = -2,
 	       bgVersion = -1, bgUrl = -1;
@@ -436,6 +436,10 @@ static RValue wii_draw_background_ext(VMContext *ctx, RValue *args, int32_t argC
 	return engineDrawTextColour(ctx, line, 8);
 }
 
+/* The reddit line's black box comes before its text and its font; it waits here to be sized for the home link. */
+static RValue linkBox[9];
+static bool linkBoxWaiting;
+
 static RValue wii_draw_text_colour(VMContext *ctx, RValue *args, int32_t argCount)
 {
 	RValue moved[8];
@@ -444,13 +448,31 @@ static RValue wii_draw_text_colour(VMContext *ctx, RValue *args, int32_t argCoun
 	if (argCount != 8 || !in_object(ctx, titleBg))
 		return engineDrawTextColour(ctx, args, argCount);
 	memcpy(moved, args, sizeof moved);
-	/* the title's reddit line points at the port's home page instead */
-	if (args[2].type == RVALUE_STRING && args[2].string && strcmp(args[2].string, "reddit.com/r/AM2R") == 0)
-		moved[2] = RValue_makeString(HOME_LINK);
 	x = RValue_toReal(args[0]);
 	y = RValue_toReal(args[1]);
 	moved[0] = RValue_makeReal(y < TITLE_MID ? x + Overscan_marginH() : x - Overscan_marginH());
 	moved[1] = RValue_makeReal(y < TITLE_MID ? y + WiiSafe_rows() : y - WiiSafe_rows());
+	/* the title's reddit line points at the port's home page instead, its box as wide as the new text */
+	if (args[2].type == RVALUE_STRING && args[2].string && strcmp(args[2].string, "reddit.com/r/AM2R") == 0) {
+		moved[2] = RValue_makeString(HOME_LINK);
+		if (linkBoxWaiting) {
+			RValue home = RValue_makeString(HOME_LINK), width = engineStringWidth(ctx, &home, 1);
+
+			linkBox[0] = RValue_makeReal(RValue_toReal(moved[0]) - RValue_toReal(width) - 1);
+			RValue_free(&width);
+			linkBoxWaiting = false;
+			/* the game draws this box at the title's fade-in alpha, then sets 1 again for the text */
+			if (engineDrawSetAlpha) {
+				RValue fade = args[7], opaque = RValue_makeReal(1.0);
+
+				engineDrawSetAlpha(ctx, &fade, 1);
+				engineDrawRectangleColour(ctx, linkBox, 9);
+				engineDrawSetAlpha(ctx, &opaque, 1);
+			} else {
+				engineDrawRectangleColour(ctx, linkBox, 9);
+			}
+		}
+	}
 	return engineDrawTextColour(ctx, moved, 8);
 }
 
@@ -465,6 +487,11 @@ static RValue wii_draw_rectangle_colour(VMContext *ctx, RValue *args, int32_t ar
 	lifted[0] = RValue_makeReal(RValue_toReal(args[0]) - Overscan_marginH());
 	lifted[1] = RValue_makeReal(RValue_toReal(args[1]) - WiiSafe_rows());
 	lifted[3] = RValue_makeReal(RValue_toReal(args[3]) - WiiSafe_rows());
+	if (RValue_toReal(args[1]) > TITLE_MID) {
+		memcpy(linkBox, lifted, sizeof linkBox);
+		linkBoxWaiting = true;
+		return RValue_makeReal(0.0);
+	}
 	return engineDrawRectangleColour(ctx, lifted, 9);
 }
 
@@ -508,6 +535,7 @@ void WiiSafe_hookScripts(VMContext *ctx)
 	engineDrawBackgroundExt = VM_findBuiltin(ctx, "draw_background_ext");
 	engineDrawTextColour = VM_findBuiltin(ctx, "draw_text_colour");
 	engineDrawRectangleColour = VM_findBuiltin(ctx, "draw_rectangle_colour");
+	engineDrawSetAlpha = VM_findBuiltin(ctx, "draw_set_alpha");
 	if (engineDrawBackgroundExt && engineDrawTextColour && engineDrawRectangleColour && engineStringWidth) {
 		titleBg = Wii_objectIndex(ctx->runner, "oDrawTitleBG");
 		bgVersion = background_index(ctx->dataWin, "bgVersion");
