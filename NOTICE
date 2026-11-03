@@ -21,6 +21,16 @@ The boot.dol in this folder contains the following software, under these license
   xdelta3 (applies the 1.1 -> 1.5.5 patch on the console), Copyright 2016 Joshua MacDonald
     Apache License 2.0 (LICENSE-xdelta3.txt)
 
+  GameCube controller adapter for Wii U driver, from quatric's libwiiinput
+    (https://github.com/quatric/libwiiinput), Copyright 2026 quatric and the RiftWii contributors
+    (https://github.com/KakarottoCake/Riftwii), 2017 Alex Chadwick (wup-028-bslug), and FIX94 and the
+    Nintendont contributors (used with permission)
+    GNU General Public License v3.0 or later (the text is in patch/LICENSE.txt)
+
+  DualShock 3 and 4 report layouts, from embedded-game-controller's drivers
+    (https://github.com/embedded-game-controller/embedded-game-controller), Copyright 2026
+    embedded-game-controller — MIT License; the reader in this port is its own code, written with them as reference
+
   libogc, libfat and aesnd (devkitPro), Copyright 2004-2025 Michael Wiedenbauer, Dave Murphy
     and contributors — zlib-style license
   wiiuse (Wii Remote support inside libogc), Copyright 2006-2007 Michael Laforest

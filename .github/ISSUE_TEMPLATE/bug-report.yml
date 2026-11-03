@@ -45,7 +45,9 @@ body:
       options:
         - Classic Controller
         - GameCube controller
+        - GameCube controller (Wii U adapter)
         - Wii Remote + Nunchuk
+        - DualShock 3 or 4 (USB)
     validations:
       required: true
 
