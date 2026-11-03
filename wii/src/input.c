@@ -14,10 +14,16 @@
 
 #include <math.h>
 #include <ogc/pad.h>
+#include <stdarg.h>
+#include <stdio.h>
 #include <ogc/system.h>
 #include <string.h>
 #include <wiiuse/wiiuse.h>
 #include <wiiuse/wpad.h>
+
+/* Wraps this file's PAD_* calls so the Wii U GameCube adapter's ports read as GameCube pads. */
+#include "libwiiinput/extrainput_compat.h"
+#include "libwiiinput/input_wii.h"
 
 #define STICK_DEADZONE 0.2f
 #define STICK_DIGITAL 0.4f /* stick deflection that counts as a d-pad press */
@@ -565,8 +571,28 @@ void WiiInput_stopRumble(void)
 	gc_motor = wiiu_motor = false;
 }
 
+void WiiInput_shutdown(void)
+{
+	WiiInput_stopRumble();
+	ExtraInput_Shutdown();
+}
+
+static int gcadapter_log(const char *fmt, ...)
+{
+	char line[192];
+	va_list ap;
+	int n;
+
+	va_start(ap, fmt);
+	n = vsnprintf(line, sizeof line, fmt, ap);
+	va_end(ap);
+	logInfo("%s", line);
+	return n;
+}
+
 void WiiInput_init(void)
 {
+	INPUT_GCAdapterSetLog(gcadapter_log);
 	WPAD_Init();
 	PAD_Init();
 	WPAD_SetDataFormat(WPAD_CHAN_0, WPAD_FMT_BTNS_ACC);
