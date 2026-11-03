@@ -14,6 +14,7 @@ static int g_x; /* horizontal shift, + = right */
 static int g_vi; /* VI active width, 0 = the mode's own */
 static int g_mh;
 static int g_mv = MARGIN_DEFAULT_V;
+static int g_scan;
 static OverscanPage g_page;
 static char g_path[96]; /* this console's own file; the shared overscan.txt is only a fallback */
 
@@ -42,13 +43,13 @@ void Overscan_load(void)
 	FILE *f = fopen(own_path(), "r");
 	const char *from = f ? "this console's file" : "defaults";
 	char shared[96];
-	int h = 0, v = 0, vi = 0, y = 0, x = 0, mh = 0, mv = MARGIN_DEFAULT_V, n = 0;
+	int h = 0, v = 0, vi = 0, y = 0, x = 0, mh = 0, mv = MARGIN_DEFAULT_V, scan = 0, n = 0;
 
 	snprintf(shared, sizeof shared, "%s/overscan.txt", WII_APP_DIR);
 	if (!f && (f = fopen(shared, "r")))
 		from = "overscan.txt";
 	if (f) {
-		n = fscanf(f, "%d %d %d %d %d %d %d", &h, &v, &vi, &y, &x, &mh, &mv);
+		n = fscanf(f, "%d %d %d %d %d %d %d %d", &h, &v, &vi, &y, &x, &mh, &mv, &scan);
 		if (n >= 2) {
 			g_h = clampi(h, 0, OVERSCAN_MAX_H);
 			g_v = clampi(v, 0, OVERSCAN_MAX_V);
@@ -63,10 +64,13 @@ void Overscan_load(void)
 			g_mh = clampi(mh, 0, MARGIN_MAX_H);
 			g_mv = clampi(mv, 0, MARGIN_MAX_V);
 		}
+		if (n >= 8)
+			g_scan = clampi(scan, 0, SCANLINE_MAX);
 		fclose(f);
 	}
 	/* Not the file's name: testers share this log, and the name carries the console's device id. */
-	logInfo("Overscan: h=%d v=%d vi=%d y=%d x=%d margins %d/%d (%s)\n", g_h, g_v, g_vi, g_y, g_x, g_mh, g_mv, from);
+	logInfo("Overscan: h=%d v=%d vi=%d y=%d x=%d margins %d/%d scanlines %d%% (%s)\n", g_h, g_v, g_vi, g_y, g_x, g_mh,
+		g_mv, g_scan * 25, from);
 }
 
 static void Overscan_save(void)
@@ -74,7 +78,9 @@ static void Overscan_save(void)
 	FILE *f = fopen(own_path(), "w");
 
 	if (f) {
-		if (g_mh || g_mv != MARGIN_DEFAULT_V)
+		if (g_scan)
+			fprintf(f, "%d %d %d %d %d %d %d %d\n", g_h, g_v, g_vi, g_y, g_x, g_mh, g_mv, g_scan);
+		else if (g_mh || g_mv != MARGIN_DEFAULT_V)
 			fprintf(f, "%d %d %d %d %d %d %d\n", g_h, g_v, g_vi, g_y, g_x, g_mh, g_mv);
 		else if (g_x)
 			fprintf(f, "%d %d %d %d %d\n", g_h, g_v, g_vi, g_y, g_x);
@@ -85,8 +91,8 @@ static void Overscan_save(void)
 		else
 			fprintf(f, "%d %d\n", g_h, g_v);
 		fclose(f);
-		logInfo("Overscan saved: h=%d v=%d vi=%d y=%d x=%d margins %d/%d\n", g_h, g_v, g_vi, g_y, g_x, g_mh,
-			g_mv);
+		logInfo("Overscan saved: h=%d v=%d vi=%d y=%d x=%d margins %d/%d scanlines %d%%\n", g_h, g_v, g_vi, g_y,
+			g_x, g_mh, g_mv, g_scan * 25);
 	}
 }
 
@@ -182,4 +188,17 @@ void Overscan_adjustMarginH(int delta)
 void Overscan_adjustMarginV(int delta)
 {
 	g_mv = clampi(g_mv + delta, 0, MARGIN_MAX_V);
+}
+
+int Overscan_scanlines(void)
+{
+	return g_scan;
+}
+
+/* Off, then full strength: every other line black is the 240p look on a 480p CRT; softer levels are for
+ * brighter sets. */
+void Overscan_stepScanlines(int dir)
+{
+	g_scan = (g_scan + SCANLINE_MAX + 1 - dir) % (SCANLINE_MAX + 1);
+	Overscan_save();
 }

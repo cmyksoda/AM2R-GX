@@ -22,6 +22,7 @@ u32 WiiVideo_efbHeight(void);
 /* SYSCONF 16:9: the TV stretches the 640-wide frame, so the game composes its own wide view for it
  * (platform.c, gx_renderer.c). */
 bool WiiVideo_isWide(void);
+bool WiiVideo_is480p(void);
 void WiiVideo_set240p(bool on); /* from the next frame on */
 /* Text console on its own XFB: the panic screen and the patcher's progress display. */
 bool WiiVideo_console(void);

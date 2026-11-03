@@ -1572,6 +1572,20 @@ static void gx_bind_compose(GxRenderer *gx, bool restore)
 	gx_ortho(0, (float)s->h, 0, (float)s->w);
 }
 
+/* Where the game's picture sits in the EFB: inset by overscan, and pillarboxed on a wide TV when asked. */
+static void gx_picture_rect(int w, int h, int *x, int *y, int *pw, int *ph)
+{
+	int oh = Overscan_h();
+	/* overscan.txt counts 480-line units, so a setting covers the same part of the screen in 240p */
+	int ov = Overscan_v() * h / WII_FB_H, oy = Overscan_y() * h / WII_FB_H;
+	int box = gx_pillarbox && WiiVideo_isWide() ? (w * 3) / 4 : w;
+
+	*x = (w - box) / 2 + oh + Overscan_x();
+	*y = ov + oy;
+	*pw = box - 2 * oh;
+	*ph = h - 2 * ov;
+}
+
 static void gx_bind_host(GxRenderer *gx)
 {
 	/* Physical output is always the full framebuffer, whatever window size the game set. */
@@ -1591,16 +1605,10 @@ static void gx_bind_host(GxRenderer *gx)
 	gx_cur = gx;
 	/* Overscan: squeeze everything into the safe area; the border stays black
 	 * (EFB clears full each present, and the scissor clips to the viewport). */
-	int oh = Overscan_h();
-	/* overscan.txt counts 480-line units, so a setting covers the same part of the screen in 240p */
-	int ov = Overscan_v() * h / WII_FB_H, oy = Overscan_y() * h / WII_FB_H;
-	if (gx_pillarbox && WiiVideo_isWide()) {
-		int pw = (w * 3) / 4;
+	int px, py, pw, ph;
 
-		gx_viewport((w - pw) / 2 + oh + Overscan_x(), ov + oy, pw - 2 * oh, h - 2 * ov);
-	} else {
-		gx_viewport(oh + Overscan_x(), ov + oy, w - 2 * oh, h - 2 * ov);
-	}
+	gx_picture_rect(w, h, &px, &py, &pw, &ph);
+	gx_viewport(px, py, pw, ph);
 	gx->base.CPortX = 0;
 	gx->base.CPortY = 0;
 	gx->base.CPortW = w;
@@ -2615,6 +2623,10 @@ static void gx_present_mix_column(float x, float h, float ua, float ub, float v1
 	GX_TexCoord2f32(ub, v1);
 }
 
+/* The wide compose stretch ignores the overscan inset, so the scanline pass needs its rect. */
+static bool gx_composed;
+static int gx_composed_x, gx_composed_w, gx_composed_h;
+
 void GxRenderer_present(void)
 {
 	GxRenderer *gx = gx_cur;
@@ -2645,6 +2657,10 @@ void GxRenderer_present(void)
 	emit_quad((float)ox, 0, (float)(ox + 3 * n), 0, (float)(ox + 3 * n), h, (float)ox, h,
 		  0, 0, u1, 0, u1, v1, 0, v1,
 		  255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255);
+	gx_composed = true;
+	gx_composed_x = ox;
+	gx_composed_w = 3 * n;
+	gx_composed_h = s->h;
 
 	GX_SetVtxDesc(GX_VA_TEX1, GX_DIRECT);
 	GX_SetVtxAttrFmt(GX_VTXFMT1, GX_VA_POS, GX_POS_XY, GX_F32, 0);
@@ -2670,6 +2686,50 @@ void GxRenderer_present(void)
 	gx_vtx_fmt();
 	gx_unbind_tex(gx);
 	gx_apply_blend(gx);
+}
+
+/* CRT scanlines, 480p only: the lower half of each game line darkened (240p has real ones, 480i would flicker). */
+void GxRenderer_scanlines(void)
+{
+	GxRenderer *gx = gx_cur;
+	int fbw = (int)WiiVideo_fbWidth(), fbh = (int)WiiVideo_efbHeight();
+	int level = Overscan_scanlines(), x, y, w, h, r;
+	bool composed = gx_composed;
+	static int said;
+	float row;
+	u8 alpha;
+
+	gx_composed = false;
+	if (!gx || !level || gx->gameH < 1 || !WiiVideo_is480p())
+		return;
+	if (composed) {
+		x = gx_composed_x;
+		y = 0;
+		w = gx_composed_w;
+		h = gx_composed_h;
+	} else {
+		gx_picture_rect(fbw, fbh, &x, &y, &w, &h);
+	}
+	row = (float)h / (float)gx->gameH;
+	if (said != level * 10000 + h) {
+		said = level * 10000 + h;
+		logInfo("GX: scanlines %d%%, %d game lines over %d px (%.2f each)\n", level * 25, gx->gameH, h, row);
+	}
+	if (row < 1.5f)
+		return;
+	alpha = (u8)(level * 255 / SCANLINE_MAX);
+	gx_ov_drawing = true;
+	gx_bind_host(gx);
+	gx_viewport(0, 0, fbw, fbh);
+	gx_ortho(0, (float)fbh, 0, (float)fbw);
+	gx_unbind_tex(gx);
+	GX_SetColorUpdate(GX_TRUE);
+	GX_SetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA, GX_LO_CLEAR);
+	for (r = 0; r < gx->gameH; r++)
+		gx_ov_rect((float)x, (float)y + ((float)r + 0.5f) * row, (float)w, row * 0.5f, 0, 0, 0, alpha);
+	gx_apply_blend(gx);
+	GX_SetColorUpdate(gx->colorWriteR || gx->colorWriteG || gx->colorWriteB);
+	gx_ov_drawing = false;
 }
 
 static void gxDrawSprite(Renderer *renderer, int32_t tpagIndex, float x, float y, float originX, float originY,

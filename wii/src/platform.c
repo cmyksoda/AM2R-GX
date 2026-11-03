@@ -227,6 +227,14 @@ static RValue wii_get_text(VMContext *ctx, RValue *args, int32_t argCount)
 	if (argCount >= 2 && args[0].type == RVALUE_STRING && args[1].type == RVALUE_STRING && args[0].string &&
 	    args[1].string && strcmp(args[0].string, "ExtrasMenu") == 0 && strcmp(args[1].string, "GBFilter_Tip") == 0)
 		return without_pc_key(cached_text(ctx, args, argCount));
+	/* Controller Tips' row is Scanlines here (controls.c); the menu is its only user of these two keys. */
+	if (argCount >= 2 && args[0].type == RVALUE_STRING && args[1].type == RVALUE_STRING && args[0].string &&
+	    args[1].string && strcmp(args[0].string, "ExtrasMenu") == 0) {
+		if (strcmp(args[1].string, "Controller") == 0)
+			return RValue_makeOwnedString(safeStrdup("Scanlines"));
+		if (strcmp(args[1].string, "Controller_Tip") == 0)
+			return RValue_makeOwnedString(safeStrdup("Dark gaps between the lines, as on a CRT (480p only)"));
+	}
 	if (argCount >= 2 && args[0].type == RVALUE_STRING && args[1].type == RVALUE_STRING && args[0].string &&
 	    args[1].string && strcmp(args[0].string, "Title") == 0 &&
 	    strcmp(args[1].string, "ControllerRecommended") == 0)
@@ -444,6 +452,7 @@ void platformSwapBuffers(void)
 	uint64_t cpuDone;
 
 	GxRenderer_present();
+	GxRenderer_scanlines();
 	Wii_hooksBeforeCopy();
 	cpuDone = nowNanos();
 	WiiVideo_present();

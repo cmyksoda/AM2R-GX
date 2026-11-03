@@ -415,6 +415,11 @@ u32 WiiVideo_efbHeight(void)
 	return rmode ? rmode->efbHeight : WII_FB_H;
 }
 
+bool WiiVideo_is480p(void)
+{
+	return rmode && (rmode->viTVMode & 3) == VI_PROGRESSIVE && rmode->efbHeight >= WII_FB_H;
+}
+
 bool WiiVideo_isWide(void)
 {
 	return wide;

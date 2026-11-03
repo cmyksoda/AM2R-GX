@@ -13,6 +13,7 @@
 #define MARGIN_MAX_H 24
 #define MARGIN_MAX_V 20
 #define MARGIN_DEFAULT_V 11
+#define SCANLINE_MAX 4
 
 typedef enum { OVERSCAN_OFF, OVERSCAN_SCREEN, OVERSCAN_HUD } OverscanPage;
 
@@ -37,5 +38,7 @@ int Overscan_marginH(void);
 int Overscan_marginV(void);
 void Overscan_adjustMarginH(int delta);
 void Overscan_adjustMarginV(int delta);
+int Overscan_scanlines(void); /* 0 = off, else the strength in quarters (4 = 100%) */
+void Overscan_stepScanlines(int dir); /* +1 = the next row value: off, 100, 75, 50, 25%; saved */
 
 #endif

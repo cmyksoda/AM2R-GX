@@ -17,6 +17,7 @@ void GxRenderer_loseSurfaces(void);
 const char *GxRenderer_fatal(void);
 /* Wide mode: the composed 426×480 frame goes to the screen here, just before the display copy. */
 void GxRenderer_present(void);
+void GxRenderer_scanlines(void); /* after GxRenderer_present: the last thing drawn before the copy */
 /* A loose RGBA image as a texture page of its own; returns the page id (past the TXTR pages) or -1. */
 int32_t GxRenderer_addImage(const uint8_t *rgba, int w, int h);
 bool GxRenderer_surfacePixel(int32_t surfaceID, int x, int y, uint8_t rgba[4]);
