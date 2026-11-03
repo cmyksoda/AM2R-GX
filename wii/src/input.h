@@ -16,6 +16,7 @@ WiiPad WiiInput_pad(void);
 bool WiiInput_hasRumble(void);
 void WiiInput_rumble(float left, float right); /* gamepad_set_vibration's levels, 0..1 */
 void WiiInput_stopRumble(void);
+void WiiInput_shutdown(void); /* closes the GameCube adapter before the loader takes over */
 void WiiInput_applyLayout(struct VMContext *vm);
 void WiiInput_flipMenus(struct VMContext *vm); /* swaps the menu bindings to/from their Nunchuk slots */
 

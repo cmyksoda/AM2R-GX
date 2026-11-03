@@ -24,11 +24,7 @@ set(WII_MACHDEP "-DGEKKO -mrvl -mcpu=750 -meabi -mhard-float")
 set(WII_INCLUDES "-I${DEVKITPRO}/libogc/include -I${DEVKITPRO}/portlibs/wii/include -I${DEVKITPRO}/portlibs/ppc/include")
 set(WII_LDFLAGS "-mrvl -mcpu=750 -meabi -mhard-float -Wl,--gc-sections -L${DEVKITPRO}/libogc/lib/wii -L${DEVKITPRO}/portlibs/wii/lib -L${DEVKITPRO}/portlibs/ppc/lib")
 
-# GameCube controller adapter for Wii U, folded onto the program's PAD_* calls (wii/src/libwiiinput/extrainput.h)
-get_filename_component(EXTRA_SRC "${CMAKE_CURRENT_LIST_DIR}/../src/libwiiinput" ABSOLUTE)
-set(EXTRA_FLAGS "-DHAVE_GCADAPTER -I${EXTRA_SRC} -include extrainput_compat.h")
-
-set(CMAKE_C_FLAGS_INIT "${WII_MACHDEP} ${WII_INCLUDES} ${EXTRA_FLAGS} -ffunction-sections -fdata-sections")
+set(CMAKE_C_FLAGS_INIT "${WII_MACHDEP} ${WII_INCLUDES} -ffunction-sections -fdata-sections")
 set(CMAKE_CXX_FLAGS_INIT "${CMAKE_C_FLAGS_INIT}")
 set(CMAKE_EXE_LINKER_FLAGS_INIT "${WII_LDFLAGS}")
 set(CMAKE_EXECUTABLE_SUFFIX ".elf")
