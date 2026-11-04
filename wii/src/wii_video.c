@@ -16,6 +16,7 @@
 
 static GXRModeObj *rmode;
 static GXRModeObj modes[2]; /* the console's own mode, and its 240p twin */
+static u16 modeWidth; /* the console mode's own VI width, for WiiVideo_setActiveWidth(0) */
 static bool low, lowWanted;
 static void *xfb[3];
 static bool fifty;
@@ -175,6 +176,7 @@ bool WiiVideo_init(void)
 
 	VIDEO_Init();
 	modes[0] = *pick_mode();
+	modeWidth = modes[0].viWidth;
 	make_240(&modes[0], &modes[1]);
 	rmode = &modes[0];
 	wide = (CONF_GetAspectRatio() == CONF_ASPECT_16_9);
@@ -381,12 +383,14 @@ void WiiVideo_present(void)
 		switch_mode();
 }
 
-/* VI scales the 640-wide XFB onto this many of the line's 720 pixels. Nintendo's 640 leaves
+/* VI scales the 640-wide XFB onto this many of the line's 720 pixels; 0 = the mode's own. Nintendo's 640 leaves
  * borders on the Wii U's HDMI path; 704 or 720 fill it (overscan.txt's third number). */
 void WiiVideo_setActiveWidth(int w)
 {
 	int k;
 
+	if (w == 0)
+		w = modeWidth;
 	if (!rmode || w < 640 || w > 720 || w == rmode->viWidth)
 		return;
 	WiiVideo_settle();

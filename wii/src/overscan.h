@@ -29,6 +29,7 @@ int Overscan_v(void);
 int Overscan_y(void); /* vertical shift, + = down (overscan.txt's fourth number) */
 int Overscan_x(void); /* horizontal shift, + = right (the fifth) */
 int Overscan_viWidth(void);
+void Overscan_setViWidth(int w); /* 0 = the video mode's own; saved */
 void Overscan_adjustH(int delta);
 void Overscan_adjustV(int delta);
 void Overscan_adjustY(int delta);

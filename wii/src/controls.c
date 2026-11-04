@@ -6,12 +6,14 @@
 #include "input.h"
 #include "instance.h"
 #include "log.h"
+#include "renderer.h"
 #include "runner.h"
 #include "rvalue.h"
 #include "spatial_grid.h"
 #include "stb_ds.h"
 #include "utils.h"
 #include "vm.h"
+#include "wii_video.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -380,6 +382,31 @@ static RValue wii_get_xjoybtnsprite(VMContext *ctx, RValue *args, int32_t argCou
 	return sprite >= 0 ? RValue_makeInt32(sprite) : call_script(ctx, SCR_SPRITE, args, argCount);
 }
 
+static BuiltinFunc engine_draw_rectangle;
+
+/* The options rows mark the chosen one with c_gray at alpha 0.4, about 15% gray once blitted: on a CRT that is under
+ * 1% of white's light. In 240p (the CRT mode) it is drawn about 25% gray on black; other modes keep the original. */
+static RValue wii_draw_rectangle(VMContext *ctx, RValue *args, int32_t argCount)
+{
+	static const char *const rows[] = { "oOptionLR", "oOptionSlider", "oOptionSeed" };
+	Renderer *renderer = ctx->runner->renderer;
+	RValue out;
+	size_t k;
+
+	if (!renderer || renderer->drawColor != 0x808080 || renderer->drawAlpha != 0.4f ||
+	    WiiVideo_efbHeight() >= WII_FB_H || !ctx->currentInstance)
+		return engine_draw_rectangle(ctx, args, argCount);
+	for (k = 0; k < sizeof rows / sizeof rows[0]; k++)
+		if (ctx->currentInstance->objectIndex == Wii_objectIndex(ctx->runner, rows[k]))
+			break;
+	if (k == sizeof rows / sizeof rows[0])
+		return engine_draw_rectangle(ctx, args, argCount);
+	renderer->drawColor = 0xd2d2d2;
+	out = engine_draw_rectangle(ctx, args, argCount);
+	renderer->drawColor = 0x808080;
+	return out;
+}
+
 void WiiControls_hookScripts(VMContext *ctx)
 {
 	static const BuiltinFunc standIns[SCR_COUNT] = {
@@ -393,9 +420,12 @@ void WiiControls_hookScripts(VMContext *ctx)
 
 		scriptCode[k] = s >= 0 ? ctx->codeIndexByName[s].value : -1;
 	}
+	engine_draw_rectangle = VM_findBuiltin(ctx, "draw_rectangle");
 	repeat(ctx->funcCallCacheCount, fi) {
 		const char *name = ctx->dataWin->func.functions[fi].name;
 
+		if (engine_draw_rectangle && ctx->funcCallCache[fi].builtin == (void *)engine_draw_rectangle)
+			ctx->funcCallCache[fi].builtin = (void *)wii_draw_rectangle;
 		for (k = 0; k < SCR_COUNT && name; k++)
 			if (standIns[k] && scriptCode[k] >= 0 && strcmp(name, scriptNames[k]) == 0) {
 				ctx->funcCallCache[fi].builtin = (void *)standIns[k];
@@ -503,6 +533,101 @@ static void move_scanline_row(Runner *runner, Instance *menu)
 	if ((id = var_id(runner, "opButtonType", INSTANCE_SELF)) >= 0)
 		Instance_setSelfVar(menu, id, RValue_makeInt32(wide + 1));
 	logInfo("controls: Controller Tips row is Scanlines, moved from row %d to %d\n", (int)tips, (int)wide + 1);
+}
+
+/* 704 of the line's 720 pixels is the full 4:3 (or 16:9) picture on a TV, so game pixels come out square, as on PC. */
+#define ASPECT_WIDTH 704
+
+static bool set_row_text(Instance *row, int32_t var, const char *text)
+{
+	RValue shown = Instance_getSelfVar(row, var), value;
+
+	if (shown.type == RVALUE_STRING && shown.string && strcmp(shown.string, text) == 0)
+		return false;
+	value = RValue_makeOwnedString(safeStrdup(text));
+	Instance_setSelfVar(row, var, value);
+	RValue_free(&value);
+	return true;
+}
+
+/* Every Display row already stands in for something, so Aspect Correction is a new one under Widescreen. As in
+ * move_scanline_row, the per-row arrays, optionids and op* indexes below it shift together. */
+static int32_t insert_aspect_row(Runner *runner, Instance *menu)
+{
+	static const char *const indexVars[] = { "opButtonType", "opShowHUD", "opShowMap", "opCounterStyle",
+						 "opShowHints", "opShowScans", "opLanguage", "menuSize" };
+	static const char *const rowArrays[] = { "op", "canEdit", "tip" };
+	int32_t wide = (int32_t)var_num(runner, menu, "opWidescreen", INSTANCE_SELF, -1);
+	int32_t size = (int32_t)var_num(runner, menu, "menuSize", INSTANCE_SELF, -1), at = wide + 1;
+	int32_t optionid = var_id(runner, "optionid", INSTANCE_SELF), object = Wii_objectIndex(runner, "oOptionLR");
+	int32_t label = var_id(runner, "label", INSTANCE_SELF), id, v, k;
+	float sep = (float)var_num(runner, menu, "SPACER", INSTANCE_SELF, 16);
+	Instance *wideRow = op_row(runner, menu, wide), *row, *other;
+	RValue arrays[3], added[3];
+	unsigned a;
+
+	if (wide < 0 || size <= at || !wideRow || optionid < 0 || label < 0 || object < 0) {
+		logWarn("controls: no room for Aspect Correction (%d, %d)\n", (int)wide, (int)size);
+		return -1;
+	}
+	for (a = 0; a < 3; a++) {
+		arrays[a] = (id = var_id(runner, rowArrays[a], INSTANCE_SELF)) >= 0 ? Instance_getSelfVar(menu, id) :
+										     RValue_makeUndefined();
+		if (arrays[a].type != RVALUE_ARRAY)
+			return -1;
+	}
+	for (k = 0; k < OP_SLOTS; k++)
+		if ((other = op_row(runner, menu, k)) && other->y > wideRow->y)
+			move_instance(runner, other, other->y + sep);
+	if (!(row = Runner_createInstance(runner, wideRow->x, wideRow->y + sep, object)))
+		return -1;
+	set_row_text(row, label, "Aspect Correction");
+	added[0] = RValue_makeInt32((int32_t)row->instanceId);
+	added[1] = RValue_makeInt32(1);
+	added[2] = RValue_makeOwnedString(safeStrdup("Square pixels, as on PC: fills the full width of the TV"));
+	for (a = 0; a < 3; a++) {
+		GMLArray_growTo(arrays[a].array, size + 2);
+		for (k = size + 1; k > at; k--)
+			*GMLArray_slot(arrays[a].array, k) = *GMLArray_slot(arrays[a].array, k - 1);
+		*GMLArray_slot(arrays[a].array, at) = added[a];
+	}
+	for (k = at; k <= size + 1; k++)
+		if ((other = op_row(runner, menu, k)))
+			Instance_setSelfVar(other, optionid, RValue_makeInt32(k));
+	for (a = 0; a < sizeof indexVars / sizeof indexVars[0]; a++) {
+		v = (int32_t)var_num(runner, menu, indexVars[a], INSTANCE_SELF, -1);
+		if (v > wide && (id = var_id(runner, indexVars[a], INSTANCE_SELF)) >= 0)
+			Instance_setSelfVar(menu, id, RValue_makeInt32(v + 1));
+	}
+	if ((id = var_id(runner, "vTargetY", INSTANCE_SELF)) >= 0)
+		Instance_setSelfVar(menu, id, RValue_makeReal(RValue_toReal(Instance_getSelfVar(menu, id)) + sep));
+	logInfo("controls: Aspect Correction row added at %d\n", (int)at);
+	return at;
+}
+
+/* The game has no step for this row: a fresh left or right press toggles it here, with the game's own sound. */
+static void aspect_row_frame(Runner *runner, Instance *menu, int32_t at)
+{
+	Instance *control = first_instance(runner, "oControl"), *row = op_row(runner, menu, at);
+	int32_t curropt = var_id(runner, "curropt", INSTANCE_GLOBAL), optext = var_id(runner, "optext", INSTANCE_SELF);
+	RValue args[2], text;
+
+	if (!row || !control || curropt < 0 || optext < 0)
+		return;
+	if (var_num(runner, menu, "active", INSTANCE_SELF, 0) != 0 &&
+	    RValue_toInt32(Instance_getSelfVar(runner->vmContext->globalScopeInstance, curropt)) == at &&
+	    var_num(runner, control, "kRight", INSTANCE_SELF, 0) != var_num(runner, control, "kLeft", INSTANCE_SELF, 0) &&
+	    var_num(runner, control, "kRightPushedSteps", INSTANCE_SELF, 1) ==
+		    var_num(runner, control, "kLeftPushedSteps", INSTANCE_SELF, 1) &&
+	    var_num(runner, control, "kUp", INSTANCE_SELF, 1) == 0 && var_num(runner, control, "kDown", INSTANCE_SELF, 1) == 0) {
+		Overscan_setViWidth(Overscan_viWidth() ? 0 : ASPECT_WIDTH);
+		WiiVideo_setActiveWidth(Overscan_viWidth());
+	}
+	args[0] = RValue_makeString("GlobalOptions");
+	args[1] = RValue_makeString(Overscan_viWidth() ? "Enabled" : "Disabled");
+	text = call_script(runner->vmContext, SCR_TEXT, args, 2);
+	set_row_text(row, optext, text.type == RVALUE_STRING && text.string ? text.string : args[1].string);
+	RValue_free(&text);
 }
 
 /* Scanlines draw nothing in 240p (a CRT has real ones there), so their row leaves the menu while 240p is on and the
@@ -665,6 +790,7 @@ void WiiControls_frame(Runner *runner)
 {
 	static uint32_t controlMenu, joypadMenu, displayMenu;
 	static bool scanlineRowHidden;
+	static int32_t aspectRow = -1;
 	Instance *menu;
 
 	if (!runner || !runner->vmContext)
@@ -681,8 +807,11 @@ void WiiControls_frame(Runner *runner)
 		if (menu->instanceId != displayMenu) {
 			displayMenu = menu->instanceId;
 			move_scanline_row(runner, menu);
+			aspectRow = insert_aspect_row(runner, menu);
 			scanlineRowHidden = false;
 		}
+		if (aspectRow >= 0)
+			aspect_row_frame(runner, menu, aspectRow);
 		fit_scanline_row(runner, menu, &scanlineRowHidden);
 		blank_value(runner, menu, "opFullscreen");
 		blank_value(runner, menu, "opScale");

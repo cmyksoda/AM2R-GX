@@ -170,6 +170,12 @@ int Overscan_viWidth(void)
 	return g_vi;
 }
 
+void Overscan_setViWidth(int w)
+{
+	g_vi = w;
+	Overscan_save();
+}
+
 int Overscan_marginH(void)
 {
 	return g_mh;
