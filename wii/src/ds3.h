@@ -4,7 +4,7 @@
 #include <gctypes.h>
 #include <stdbool.h>
 
-/* A DualShock 3 or 4 on a USB cable, read as a Classic Controller. Experimental: not yet run on hardware. */
+/* A DualShock 3 or 4 or a DualSense on a USB cable, read as a Classic Controller. Experimental. */
 typedef struct Ds3Pad {
 	u32 classic; /* WPAD_CLASSIC_BUTTON_* bits */
 	float x, y;  /* left stick, -1..1, y up */

@@ -13,12 +13,17 @@
 #define DS3_PID 0x0268
 #define DS4_PID 0x05c4
 #define DS4V2_PID 0x09cc
+#define DS5_PID 0x0ce6
+#define DS5_EDGE_PID 0x0df2
+#define DS3_IN_ENDPOINT 0x81
 #define DS4_IN_ENDPOINT 0x84
 #define DS4_OUT_ENDPOINT 0x03
 #define DS4_REPORT_BYTES 64
 #define DS4_OUT_BYTES 32
+#define DS5_OUT_BYTES 63
 #define REPORT_BYTES 49
 #define WAKE_BYTES 17
+#define HOST_BYTES 8
 #define LED_BYTES 35
 #define SCAN_FRAMES 120
 #define STUCK_FRAMES 120
@@ -42,6 +47,9 @@ static const u8 led_report[LED_BYTES] = {
 	0x00, 0x00, 0x00, 0x00, 0x00,
 };
 
+/* Feature report 0xF4 as a PS3 sends it on USB: start reporting */
+static const u8 operational[] = { 0x42, 0x0c, 0x00, 0x00 };
+
 static s32 heap = -1;
 static Ds3Buffers *buf;
 static s32 fd = -1;
@@ -51,8 +59,11 @@ static volatile u32 generation; /* a late answer to a request from before close_
 static int scan_wait;
 static int waited;
 static bool ready, shown;
+static bool lit; /* the LED/light bar report has gone out for this connection */
 static Ds3Pad last;
-static bool ds4; /* the pad open is a DualShock 4: it streams reports on its own, no wake-up */
+/* A DS4 or DualSense streams reports on its own and shares endpoints; only a DS3 needs waking */
+static enum { PAD_DS3, PAD_DS4, PAD_DS5 } kind;
+static bool edge; /* a DualSense Edge takes only the newer rumble mode */
 static u8 rumble_want, rumble_sent; /* big motor force; the small one runs at full when it is past half */
 static volatile bool sending; /* the transfer in flight is a rumble report, not a read */
 static const char *pad_name = "DS3";
@@ -82,7 +93,21 @@ static s32 send_rumble(bool async)
 {
 	u8 level = rumble_want, small = level > 0x80 ? 0xff : 0;
 
-	if (ds4) {
+	if (kind == PAD_DS5) {
+		memset(buf->leds, 0, DS5_OUT_BYTES);
+		buf->leds[0] = 0x02;
+		buf->leds[1] = edge ? 0x02 : 0x03; /* the Edge has no legacy vibration; it takes flag 0x04 at [39] */
+		buf->leds[2] = 0x14; /* light bar and player LEDs */
+		buf->leds[3] = small;
+		buf->leds[4] = level;
+		buf->leds[39] = edge ? 0x04 : 0;
+		buf->leds[44] = 0x04; /* the middle player LED: player 1 */
+		buf->leds[47] = 0x40; /* light bar blue, as on the DS4 */
+		return async ? USB_WriteIntrMsgAsync(fd, DS4_OUT_ENDPOINT, DS5_OUT_BYTES, buf->leds, on_report,
+						     (void *)generation) :
+			       USB_WriteIntrMsg(fd, DS4_OUT_ENDPOINT, DS5_OUT_BYTES, buf->leds);
+	}
+	if (kind == PAD_DS4) {
 		memset(buf->leds, 0, DS4_OUT_BYTES);
 		buf->leds[0] = 0x05;
 		buf->leds[1] = 0x03; /* rumble and light bar */
@@ -105,7 +130,23 @@ static s32 send_rumble(bool async)
 					0, LED_BYTES, buf->leds);
 }
 
-/* A DS3 stays silent on USB until its 0xF2 feature report is read. */
+/* EGC's USB start-up since it began working with replica DS3s: read 0xF2, write 0xF4, read 0xF5 and one input
+ * report; then reports stream on the interrupt endpoint. A step that fails is logged, not fatal, as in EGC. */
+static void start_ds3(u32 device_id)
+{
+	s32 op, host, in;
+
+	memcpy(buf->wake, operational, sizeof operational);
+	op = USB_WriteCtrlMsg(fd, USB_REQTYPE_INTERFACE_SET, USB_REQ_SETREPORT, (USB_REPTYPE_FEATURE << 8) | 0xf4, 0,
+			      sizeof operational, buf->wake);
+	host = USB_ReadCtrlMsg(fd, USB_REQTYPE_INTERFACE_GET, USB_REQ_GETREPORT, (USB_REPTYPE_FEATURE << 8) | 0xf5, 0,
+			       HOST_BYTES, buf->wake);
+	in = USB_ReadCtrlMsg(fd, USB_REQTYPE_INTERFACE_GET, USB_REQ_GETREPORT, (USB_REPTYPE_INPUT << 8) | 0x01, 0,
+			     REPORT_BYTES, buf->report);
+	logInfo("DS3: connected (device %08x, operational %d, host %d, input %d)\n", (unsigned)device_id, (int)op,
+		(int)host, (int)in);
+}
+
 static bool open_pad(void)
 {
 	usb_device_entry list[MAX_DEVICES];
@@ -117,31 +158,41 @@ static bool open_pad(void)
 		return false;
 	for (i = 0; i < count; i++) {
 		if (list[i].vid != SONY_VID ||
-		    (list[i].pid != DS3_PID && list[i].pid != DS4_PID && list[i].pid != DS4V2_PID))
+		    (list[i].pid != DS3_PID && list[i].pid != DS4_PID && list[i].pid != DS4V2_PID &&
+		     list[i].pid != DS5_PID && list[i].pid != DS5_EDGE_PID))
 			continue;
 		if (USB_OpenDevice(list[i].device_id, SONY_VID, list[i].pid, &fd) < 0) {
 			fd = -1;
 			return false;
 		}
-		ds4 = list[i].pid != DS3_PID;
-		pad_name = ds4 ? "DS4" : "DS3";
+		kind = list[i].pid == DS3_PID ? PAD_DS3 : list[i].pid == DS4_PID || list[i].pid == DS4V2_PID ? PAD_DS4 : PAD_DS5;
+		edge = list[i].pid == DS5_EDGE_PID;
+		pad_name = kind == PAD_DS3 ? "DS3" : kind == PAD_DS4 ? "DS4" : "DualSense";
 		rumble_sent = rumble_want = 0;
-		if (ds4) {
+		lit = kind != PAD_DS3;
+		if (kind == PAD_DS5) {
+			memset(buf->leds, 0, DS5_OUT_BYTES);
+			buf->leds[0] = 0x02;
+			buf->leds[39] = 0x02; /* light bar setup: fade out, as Linux does once before its first color */
+			buf->leds[42] = 0x02;
+			r = USB_WriteIntrMsg(fd, DS4_OUT_ENDPOINT, DS5_OUT_BYTES, buf->leds);
+			logInfo("DualSense: light bar setup %d\n", (int)r);
+		}
+		if (kind != PAD_DS3) {
 			r = send_rumble(false);
-			logInfo("DS4: connected (device %08x, %04x, light bar %d)\n", (unsigned)list[i].device_id,
+			logInfo("%s: connected (device %08x, %04x, light bar %d)\n", pad_name, (unsigned)list[i].device_id,
 				list[i].pid, (int)r);
 			return true;
 		}
-		r = USB_WriteCtrlMsg(fd, USB_REQTYPE_INTERFACE_GET, USB_REQ_GETREPORT, (USB_REPTYPE_FEATURE << 8) | 0xf2, 0,
-				     WAKE_BYTES, buf->wake);
+		r = USB_ReadCtrlMsg(fd, USB_REQTYPE_INTERFACE_GET, USB_REQ_GETREPORT, (USB_REPTYPE_FEATURE << 8) | 0xf2, 0,
+				    WAKE_BYTES, buf->wake);
 		if (r < 0) {
 			logInfo("DS3: wake-up read failed (%d)\n", (int)r);
 			USB_CloseDevice(&fd);
 			fd = -1;
 			return false;
 		}
-		r = send_rumble(false);
-		logInfo("DS3: connected (device %08x, LED report %d)\n", (unsigned)list[i].device_id, (int)r);
+		start_ds3(list[i].device_id);
 		return true;
 	}
 	return false;
@@ -176,9 +227,10 @@ static float axis(u8 raw)
 	return v < -1.0f ? -1.0f : v > 1.0f ? 1.0f : v;
 }
 
-/* DS4 report 0x01: bytes 1-2 left stick (y down); byte 5 = d-pad hat (0 up, clockwise, 8 none) under Square, Cross,
- * Circle, Triangle (bits 4-7); byte 6 bits from 0 = L1 R1 L2 R2 Share Options L3 R3; byte 7 bit 0 = PS. */
-static void parse_ds4(const u8 *r)
+/* DS4 report 0x01: bytes 1-2 left stick (y down); b[0] = d-pad hat (0 up, clockwise, 8 none) under Square, Cross,
+ * Circle, Triangle (bits 4-7); b[1] bits from 0 = L1 R1 L2 R2 Share Options L3 R3; b[2] bit 0 = PS. b is byte 5 on
+ * a DS4 and byte 8 on a DualSense, whose Create sits where Share was. */
+static void parse_ds4(const u8 *r, const u8 *b)
 {
 	static const u32 hat[8] = {
 		WPAD_CLASSIC_BUTTON_UP, WPAD_CLASSIC_BUTTON_UP | WPAD_CLASSIC_BUTTON_RIGHT, WPAD_CLASSIC_BUTTON_RIGHT,
@@ -193,16 +245,16 @@ static void parse_ds4(const u8 *r)
 		WPAD_CLASSIC_BUTTON_FULL_L, WPAD_CLASSIC_BUTTON_FULL_R, WPAD_CLASSIC_BUTTON_ZL, WPAD_CLASSIC_BUTTON_ZR,
 		WPAD_CLASSIC_BUTTON_MINUS, WPAD_CLASSIC_BUTTON_PLUS, 0, 0,
 	};
-	u32 held = (r[5] & 0x0f) < 8 ? hat[r[5] & 0x0f] : 0;
+	u32 held = (b[0] & 0x0f) < 8 ? hat[b[0] & 0x0f] : 0;
 	int i;
 
 	for (i = 0; i < 4; i++)
-		if (r[5] & (0x10u << i))
+		if (b[0] & (0x10u << i))
 			held |= faces[i];
 	for (i = 0; i < 8; i++)
-		if (r[6] & (1u << i))
+		if (b[1] & (1u << i))
 			held |= b6[i];
-	if (r[7] & 1)
+	if (b[2] & 1)
 		held |= WPAD_CLASSIC_BUTTON_HOME;
 	last.classic = held;
 	last.x = axis(r[1]);
@@ -211,7 +263,7 @@ static void parse_ds4(const u8 *r)
 
 /* Report 0x01, bits from 0: byte 2 = Select L3 R3 Start Up Right Down Left, byte 3 = L2 R2 L1 R1 Triangle Circle
  * Cross Square, byte 4 bit 0 = PS, bytes 6-7 = left stick (128 centered, y down). Faces map by position on the pad. */
-static void parse(const u8 *r)
+static bool parse(const u8 *r)
 {
 	static const u32 b2[8] = {
 		WPAD_CLASSIC_BUTTON_MINUS, 0, 0, WPAD_CLASSIC_BUTTON_PLUS,
@@ -224,17 +276,17 @@ static void parse(const u8 *r)
 	u32 held = 0;
 	int i;
 
-	/* an all-0xFF DS3 report would read as PS held, and a held PS quits; a DS4's byte 1 is its stick */
-	if (r[0] != 0x01 || (!ds4 && r[1] == 0xff))
-		return;
+	/* an all-0xFF DS3 report would read as PS held, and a held PS quits; on the others byte 1 is the stick */
+	if (r[0] != 0x01 || (kind == PAD_DS3 && r[1] == 0xff))
+		return false;
 	if (!shown) {
 		shown = true;
 		logInfo("%s: first report %02x %02x %02x %02x %02x %02x %02x %02x\n", pad_name, r[0], r[1], r[2], r[3], r[4],
 			r[5], r[6], r[7]);
 	}
-	if (ds4) {
-		parse_ds4(r);
-		return;
+	if (kind != PAD_DS3) {
+		parse_ds4(r, r + (kind == PAD_DS4 ? 5 : 8));
+		return true;
 	}
 	for (i = 0; i < 8; i++) {
 		if (r[2] & (1u << i))
@@ -247,6 +299,7 @@ static void parse(const u8 *r)
 	last.classic = held;
 	last.x = axis(r[6]);
 	last.y = -axis(r[7]);
+	return true;
 }
 
 void Ds3_init(void)
@@ -274,17 +327,20 @@ bool Ds3_poll(Ds3Pad *out)
 		return false;
 	}
 	if (!busy) {
+		bool fresh;
+
 		waited = 0;
 		if (ready && result < 0) {
 			logInfo("%s: unplugged (%d)\n", pad_name, (int)result);
 			close_pad();
 			return false;
 		}
-		if (ready && !sending)
-			parse(buf->report);
+		fresh = ready && !sending && parse(buf->report);
 		ready = !sending;
 		sending = false;
-		if (rumble_want != rumble_sent) {
+		/* LED 1 waits for the first report, as in EGC, so a lit LED tells a tester reports are arriving */
+		if (rumble_want != rumble_sent || (fresh && !lit)) {
+			lit = true;
 			rumble_sent = rumble_want;
 			sending = busy = true;
 			if (send_rumble(true) < 0) {
@@ -295,11 +351,9 @@ bool Ds3_poll(Ds3Pad *out)
 			return true;
 		}
 		busy = true;
-		r = ds4 ? USB_ReadIntrMsgAsync(fd, DS4_IN_ENDPOINT, DS4_REPORT_BYTES, buf->report, on_report,
-					       (void *)generation) :
-			  USB_WriteCtrlMsgAsync(fd, USB_REQTYPE_INTERFACE_GET, USB_REQ_GETREPORT,
-						(USB_REPTYPE_INPUT << 8) | 0x01, 0, REPORT_BYTES, buf->report, on_report,
-						(void *)generation);
+		r = USB_ReadIntrMsgAsync(fd, kind == PAD_DS3 ? DS3_IN_ENDPOINT : DS4_IN_ENDPOINT,
+					 kind == PAD_DS3 ? REPORT_BYTES : DS4_REPORT_BYTES, buf->report, on_report,
+					 (void *)generation);
 		if (r < 0) {
 			busy = false;
 			logInfo("%s: report request failed (%d)\n", pad_name, (int)r);
