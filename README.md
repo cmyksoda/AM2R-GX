@@ -7,7 +7,7 @@
 ## What you need
 
 - A Wii (or a Wii U in Wii mode) with the Homebrew Channel, and an SD card or a FAT32 USB drive.
-- A GameCube controller, Wii Remote with Nunchuk, or a Classic Controller. A GameCube controller adapter also works on a Wii U in Wii mode, and a DualShock 3 or 4 on a USB cable is experimental and untested; see Controls.
+- A GameCube controller, Wii Remote with Nunchuk, or a Classic Controller. A GameCube controller adapter also works on a Wii U in Wii mode, and a DualShock 3, DualShock 4 or DualSense works on a USB cable; see Controls.
 - The original **AM2R 1.1** release zip (use a search engine to find this!)
 
 ## Install
@@ -27,7 +27,7 @@ Saves live in `/apps/am2r/save/` in the game's own format.
 By default, missiles work in **Hold** style: hold Arm Weapon to use the selected weapon, let go to return to the beam. Aiming uses **one** diagonal button: hold it, and Up or Down picks the diagonal. Both can be changed in Options → Controls, and every button can be remapped there.
 
 **Default Controls:**
-| Action | Classic Controller | GameCube Controller | Wii Remote + Nunchuk | DualShock 3 or 4 (experimental) |
+| Action | Classic Controller | GameCube Controller | Wii Remote + Nunchuk | DualShock or DualSense |
 |---|---|---|---|---|
 | Move | stick or d-pad | stick or d-pad | Nunchuk stick | left stick or d-pad |
 | Jump | B | A | B trigger | Cross |
@@ -37,21 +37,22 @@ By default, missiles work in **Hold** style: hold Arm Weapon to use the selected
 | Aim Diagonal (hold) | L | L | d-pad ↑ / ↓ (up / down diagonal) | L1 |
 | Arm Weapon (hold) | R | R | Z | R1 |
 | Aim Lock | ZL | Z | d-pad ← or → | L2 |
-| Map / pause | + | Start | + | Start (DS4: Options) |
+| Map / pause | + | Start | + | Start (DS4 and DualSense: Options) |
 
-Hold **HOME** for a second (Wii Remote or Classic Controller), **PS** on a DualShock, or **X + B + Start** on a GameCube controller, to return to the Homebrew Channel. **Exit Game** on the title menu does the same.
+Hold **HOME** for a second (Wii Remote or Classic Controller), **PS** on a DualShock or DualSense, or **X + B + Start** on a GameCube controller, to return to the Homebrew Channel. **Exit Game** on the title menu does the same.
 
 - **GameCube controller adapter** (Wii U in Wii mode): Nintendo's WUP-028 or a clone switched to Wii U mode. Plug the controller into port 1, and the adapter's gray power cable too for rumble.
-- **DualShock 3 or 4** (experimental, untested on hardware): USB cable only. It plays as a Classic Controller with PlayStation button prompts, rumble, and the defaults in the table above. On a DualShock 4, Share and Options work as Select and Start, and the prompts call them that. If you try one, please report on the [issues page](https://github.com/cmyksoda/AM2R-GX/issues) with `/apps/am2r/profile.txt` attached.
+- **DualShock 3, DualShock 4 or DualSense**: USB cable only. It plays as a Classic Controller with PlayStation button prompts, rumble, and the defaults in the table above. On a DualShock 4, Share and Options work as Select and Start, and the prompts call them that; a DualSense's Create button works as Share. DualSense Edge is untested.
 
 ## Picture
 
 - The console's own screen setting (Wii Settings → Screen → 4:3 or 16:9) picks the video mode. On a widescreen display, one has the ability to toggle widescreen off. With it toggled off, you get pillarboxed 4:3.
-- **240p** draws each of the game's 240 lines once, for CRT TVs that show 240p sharply.
-- **Scanlines** (Options → Display, right under Widescreen): Left/Right to choose between Disabled, 100%, 75%, 50% and 25%. At 100%, every other line is black, which on a 480p CRT gives the look of 240p on a high-end CRT. The lower values darken the lines less. Only available in 480p.
+- **240p** draws each of the game's 240 lines once, for CRT TVs that show 240p sharply. In 240p the options menus draw their highlight bar brighter, since a CRT all but hides the original's faint gray.
+- **Aspect Correction** (Options → Display, right under Widescreen): widens the picture to the full width of the TV, so the game's pixels come out square, as on PC. Disabled keeps Nintendo's usual width, about 9% narrower, with thin black bars at the sides. Enabled can lose a little more of the sides to a CRT's overscan; Resize/Move Screen can pull it back in.
+- **Scanlines** (Options → Display, right under Aspect Correction): Left/Right to choose between Disabled, 100%, 75%, 50% and 25%. At 100%, every other line is black, which on a 480p CRT gives the look of 240p on a high-end CRT. The lower values darken the lines less. Only available in 480p.
 - **Resize/Move Screen** (Options → Display): if your TV cuts the edges, the d-pad pulls the picture in from the sides and the top/bottom, and **A** held with the d-pad moves the whole picture. **B** closes it.
 - **HUD Margins** (Options → Display): moves the HUD, the corner prompts and the notification box in from the sides and the top/bottom, one game pixel at a time, while the world keeps its sharp 2× pixels. The default keeps them 11 pixels from the top and bottom (typical safe area for overscanning televisions); a TV that shows the whole picture can bring them back out to the edges. **B** closes it.
-- Resize/Move Screen, HUD Margins and Scanlines are saved per console (`overscan-<console id>.txt` in `/apps/am2r/`, with `overscan.txt` as a shared fallback: `h v [viWidth] [up/down shift] [sideways shift] [HUD sides] [HUD top/bottom] [scanlines, 0 for Disabled, then 1 to 4 for 25% to 100%]`).
+- Resize/Move Screen, HUD Margins, Aspect Correction and Scanlines are saved per console (`overscan-<console id>.txt` in `/apps/am2r/`, with `overscan.txt` as a shared fallback: `h v [viWidth, 704 with Aspect Correction] [up/down shift] [sideways shift] [HUD sides] [HUD top/bottom] [scanlines, 0 for Disabled, then 1 to 4 for 25% to 100%]`).
 
 ## Note on randomizer
 
@@ -65,6 +66,7 @@ Hold **HOME** for a second (Wii Remote or Classic Controller), **PS** on a DualS
 - **wiiuse** by Michael Laforest, for the Wii Remote, as included in libogc
 - **libwiiinput** from [quatric](https://github.com/quatric/libwiiinput), which holds the GameCube controller adapter driver
 - **embedded-game-controller** (MIT), whose DualShock 3 and 4 drivers were the reference for this port's DualShock reader
+- The **Linux** kernel's hid-playstation driver and **SDL**, whose DualSense code documents the controller's reports
 - **xdelta3** by Joshua MacDonald (Apache License 2.0), the on-console delta decoder
 - **stb** by Sean Barrett and contributors, for image decoding
 - **FreeType** by the FreeType Project, which draws the game's fonts
