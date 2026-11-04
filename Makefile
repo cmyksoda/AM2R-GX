@@ -127,6 +127,7 @@ wii: $(BUTTER)/CMakeLists.txt
 	cd $(BUTTER) && git apply ../../wii/patches/0083-tile-layer-find-asks-the-tile-grid.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0084-a-destroy-skips-the-id-scan-when-no-variable-holds-its-id.patch
 	cd $(BUTTER) && git apply ../../wii/patches/0085-collision-turns-go-in-object-order.patch
+	cd $(BUTTER) && git apply ../../wii/patches/0086-background-parts-stay-inside-their-image.patch
 	if [ "$(HOOKS)" != 0 ] && [ -f wii/test/patches/0099-debug-collision-trace.patch ]; then cd $(BUTTER) && git apply ../../wii/test/patches/0099-debug-collision-trace.patch; fi
 	cmake -B $(WII_BUILD) -S $(BUTTER) $(WII_CMAKE_FLAGS)
 	cmake --build $(WII_BUILD) -j$(JOBS)

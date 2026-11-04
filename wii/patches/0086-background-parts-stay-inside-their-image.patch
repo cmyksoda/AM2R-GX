@@ -1,0 +1,147 @@
+Reason: draw_background_part and draw_background_part_ext handed the renderer the part exactly as asked, while the
+sprite part draws clip it to the image first, as GameMaker does. AM2R's area 7 waterfalls (oWaterfall) draw
+bgWaterfall, 64x128, in parts that run down to the water level, hundreds of rows taller than the image, so the
+renderer read whatever sits below it on the texture page and added it on screen, moving with the falling water
+(issue #3). The clip the two sprite part draws repeated now lives in one helper that the background parts share.
+Upstream: Bug on every platform, still in upstream main on 2026-11-04 (16cc651).
+
+--- a/src/renderer.h
++++ b/src/renderer.h
+@@ -354,36 +354,38 @@
+ }
+ 
+ 
+-// Draws part of a sprite with extended parameters (scale, rotation, color, alpha)
+-static inline void Renderer_drawSpritePartExt(Renderer* renderer, int32_t spriteIndex, int32_t subimg, int32_t left, int32_t top, int32_t width, int32_t height, float x, float y, float xscale, float yscale, float angleDeg, float pivotX, float pivotY, uint32_t color, float alpha) {
+-    DataWin* dw = renderer->dataWin;
+-    int32_t tpagIndex = Renderer_resolveTPAGIndex(dw, spriteIndex, subimg);
+-    if (0 > tpagIndex) return;
+-
+-    TexturePageItem* tpag = &dw->tpag.items[tpagIndex];
+-
+-    // Clip region to TPAG bounds (same as Renderer_drawSpritePart)
+-    if (tpag->targetX > left) {
+-        int32_t off = tpag->targetX - left;
+-        x += (float) off * xscale;
+-        width -= off;
+-        left = 0;
++// Clips a part to the image the TPAG holds, as GameMaker does: past its edges lie other images on the same page.
++static inline bool Renderer_clipPartToTpag(const TexturePageItem* tpag, int32_t* left, int32_t* top, int32_t* width, int32_t* height, float* x, float* y, float xscale, float yscale) {
++    if (tpag->targetX > *left) {
++        int32_t off = tpag->targetX - *left;
++        *x += (float) off * xscale;
++        *width -= off;
++        *left = 0;
+     } else {
+-        left -= tpag->targetX;
++        *left -= tpag->targetX;
+     }
+ 
+-    if (tpag->targetY > top) {
+-        int32_t off = tpag->targetY - top;
+-        y += (float) off * yscale;
+-        height -= off;
+-        top = 0;
++    if (tpag->targetY > *top) {
++        int32_t off = tpag->targetY - *top;
++        *y += (float) off * yscale;
++        *height -= off;
++        *top = 0;
+     } else {
+-        top -= tpag->targetY;
++        *top -= tpag->targetY;
+     }
+ 
+-    if (width > tpag->sourceWidth - left) width = tpag->sourceWidth - left;
+-    if (height > tpag->sourceHeight - top) height = tpag->sourceHeight - top;
+-    if (0 >= width || 0 >= height) return;
++    if (*width > tpag->sourceWidth - *left) *width = tpag->sourceWidth - *left;
++    if (*height > tpag->sourceHeight - *top) *height = tpag->sourceHeight - *top;
++    return *width > 0 && *height > 0;
++}
++
++// Draws part of a sprite with extended parameters (scale, rotation, color, alpha)
++static inline void Renderer_drawSpritePartExt(Renderer* renderer, int32_t spriteIndex, int32_t subimg, int32_t left, int32_t top, int32_t width, int32_t height, float x, float y, float xscale, float yscale, float angleDeg, float pivotX, float pivotY, uint32_t color, float alpha) {
++    DataWin* dw = renderer->dataWin;
++    int32_t tpagIndex = Renderer_resolveTPAGIndex(dw, spriteIndex, subimg);
++    if (0 > tpagIndex) return;
++
++    if (!Renderer_clipPartToTpag(&dw->tpag.items[tpagIndex], &left, &top, &width, &height, &x, &y, xscale, yscale)) return;
+ 
+     renderer->vtable->drawSpritePart(renderer, tpagIndex, left, top, width, height, x, y, xscale, yscale, angleDeg, pivotX, pivotY, color, alpha);
+ }
+@@ -417,30 +419,7 @@
+     int32_t tpagIndex = Renderer_resolveTPAGIndex(dw, spriteIndex, subimg);
+     if (0 > tpagIndex) return;
+ 
+-    TexturePageItem* tpag = &dw->tpag.items[tpagIndex];
+-
+-    // Clip region to TPAG bounds (same as Renderer_drawSpritePart(Ext))
+-    if (tpag->targetX > left) {
+-        int32_t off = tpag->targetX - left;
+-        x += (float) off * xscale;
+-        width -= off;
+-        left = 0;
+-    } else {
+-        left -= tpag->targetX;
+-    }
+-
+-    if (tpag->targetY > top) {
+-        int32_t off = tpag->targetY - top;
+-        y += (float) off * yscale;
+-        height -= off;
+-        top = 0;
+-    } else {
+-        top -= tpag->targetY;
+-    }
+-
+-    if (width > tpag->sourceWidth - left) width = tpag->sourceWidth - left;
+-    if (height > tpag->sourceHeight - top) height = tpag->sourceHeight - top;
+-    if (0 >= width || 0 >= height) return;
++    if (!Renderer_clipPartToTpag(&dw->tpag.items[tpagIndex], &left, &top, &width, &height, &x, &y, xscale, yscale)) return;
+ 
+     if (color1 == color2 && color2 == color3 && color3 == color4) {
+         renderer->vtable->drawSpritePart(renderer, tpagIndex, left, top, width, height, x, y, xscale, yscale, angleDeg, x, y, color1, alpha);
+@@ -661,6 +640,16 @@
+     return dataWin->bgnd.backgrounds[bgndIndex].tpagIndex;
+ }
+ 
++// draw_background_part(_ext): the part is clipped like a sprite's.
++static inline void Renderer_drawBackgroundPartExt(Renderer* renderer, int32_t bgndIndex, int32_t left, int32_t top, int32_t width, int32_t height, float x, float y, float xscale, float yscale, uint32_t color, float alpha) {
++    DataWin* dw = renderer->dataWin;
++    int32_t tpagIndex = Renderer_resolveBackgroundTPAGIndex(dw, bgndIndex);
++    if (0 > tpagIndex) return;
++    if (!Renderer_clipPartToTpag(&dw->tpag.items[tpagIndex], &left, &top, &width, &height, &x, &y, xscale, yscale)) return;
++
++    renderer->vtable->drawSpritePart(renderer, tpagIndex, left, top, width, height, x, y, xscale, yscale, 0.0f, 0.0f, 0.0f, color, alpha);
++}
++
+ // Resolves a SPRT index to the TPAG index of its first frame.
+ static inline int32_t Renderer_resolveSpriteTPAGIndex(DataWin* dataWin, int32_t sprtIndex) {
+     if (0 > sprtIndex || (uint32_t) sprtIndex >= dataWin->sprt.count) return -1;
+--- a/src/vm_builtins.c
++++ b/src/vm_builtins.c
+@@ -11487,10 +11487,7 @@
+     float x = (float) RValue_toReal(args[5]);
+     float y = (float) RValue_toReal(args[6]);
+ 
+-    int32_t tpagIndex = Renderer_resolveBackgroundTPAGIndex(runner->dataWin, bgIndex);
+-    if (0 > tpagIndex) return RValue_makeUndefined();
+-
+-    runner->renderer->vtable->drawSpritePart(runner->renderer, tpagIndex, left, top, width, height, x, y, 1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0xFFFFFF, runner->renderer->drawAlpha);
++    Renderer_drawBackgroundPartExt(runner->renderer, bgIndex, left, top, width, height, x, y, 1.0f, 1.0f, 0xFFFFFF, runner->renderer->drawAlpha);
+     return RValue_makeUndefined();
+ }
+ 
+@@ -11511,10 +11508,7 @@
+     uint32_t color = RValue_toColour(args[9]);
+     float alpha = (float) RValue_toReal(args[10]);
+ 
+-    int32_t tpagIndex = Renderer_resolveBackgroundTPAGIndex(runner->dataWin, bgIndex);
+-    if (0 > tpagIndex) return RValue_makeUndefined();
+-
+-    runner->renderer->vtable->drawSpritePart(runner->renderer, tpagIndex, left, top, width, height, x, y, xscale, yscale, 0.0f, 0.0f, 0.0f, color, alpha);
++    Renderer_drawBackgroundPartExt(runner->renderer, bgIndex, left, top, width, height, x, y, xscale, yscale, color, alpha);
+     return RValue_makeUndefined();
+ }
+ 
