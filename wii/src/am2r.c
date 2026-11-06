@@ -1,5 +1,6 @@
 #include "am2r.h"
 #include "gx_renderer.h"
+#include "safearea.h"
 #include "wii_audio_system.h"
 
 #include "gml_array.h"
@@ -462,6 +463,24 @@ static RValue wii_surface_free(VMContext *ctx, RValue *args, int32_t argCount)
 	if (ctx->currentCodeIndex == controlUser4Code && ctx->currentInstance)
 		Instance_setSelfVar(ctx->currentInstance, screenSurfaceVar, RValue_makeReal(-1));
 	return r;
+}
+
+static int32_t itemDrawCode = -1, itemSurfVar;
+static BuiltinFunc engineSurfaceExists;
+
+/* In 16:9 the item screen draws the wide view's surface into that same surface, so each frame's glow copies land on the
+ * last and GX blending dims the picture to black. The copy oControl froze at the pickup holds the same frame. */
+static RValue wii_surface_exists(VMContext *ctx, RValue *args, int32_t argCount)
+{
+	int32_t frozen;
+
+	if (ctx->currentCodeIndex == itemDrawCode && ctx->currentInstance && argCount == 1 &&
+	    RValue_toInt32(args[0]) == ctx->runner->views[1].surfaceId &&
+	    (frozen = WiiSafe_screenSurface(ctx->runner)) >= 0) {
+		Instance_setSelfVar(ctx->currentInstance, itemSurfVar, RValue_makeReal(frozen));
+		args[0] = RValue_makeReal(frozen);
+	}
+	return engineSurfaceExists(ctx, args, argCount);
 }
 
 /* The bytecode's instance for widescreen_space: oControl's object index in 1.5.5. */
@@ -1541,6 +1560,7 @@ void Wii_hookAm2rScripts(VMContext *ctx)
 	ptrdiff_t s = shgeti(ctx->codeIndexByName, "reset_map"), t = shgeti(ctx->codeIndexByName, "draw_cool_text");
 	ptrdiff_t m = shgeti(ctx->codeIndexByName, "draw_map_surf"), b = shgeti(ctx->codeIndexByName, "draw_mapblock");
 	ptrdiff_t u = shgeti(ctx->codeIndexByName, "gml_Object_oControl_Other_14");
+	ptrdiff_t cut = shgeti(ctx->codeIndexByName, "gml_Object_oItemCutscene_Draw_0");
 	ptrdiff_t w = shgeti(ctx->codeIndexByName, "gml_Object_oWaterFXV2_Draw_0");
 	ptrdiff_t a = shgeti(ctx->codeIndexByName, "gml_Object_oTilesRandomAlpha_Other_10");
 	ptrdiff_t lb = shgeti(ctx->codeIndexByName, "gml_Object_oLBubble_Step_0");
@@ -1583,6 +1603,10 @@ void Wii_hookAm2rScripts(VMContext *ctx)
 	engineSurfaceFree = VM_findBuiltin(ctx, "surface_free");
 	if (u >= 0 && screenSurfaceVar >= 0 && engineSurfaceFree)
 		controlUser4Code = ctx->codeIndexByName[u].value;
+	itemSurfVar = Wii_varId(ctx->runner, "surf", INSTANCE_SELF);
+	engineSurfaceExists = VM_findBuiltin(ctx, "surface_exists");
+	if (cut >= 0 && itemSurfVar >= 0 && engineSurfaceExists)
+		itemDrawCode = ctx->codeIndexByName[cut].value;
 	waveHeightVar = Wii_varId(ctx->runner, "wave_height", INSTANCE_GLOBAL);
 	widescreenSpaceVar = Wii_varId(ctx->runner, "widescreen_space", INSTANCE_SELF);
 	water = w >= 0 && waveHeightVar >= 0 && widescreenSpaceVar >= 0 &&
@@ -1646,6 +1670,8 @@ void Wii_hookAm2rScripts(VMContext *ctx)
 			standIn = (void *)wii_draw_mapblock;
 		else if (name && controlUser4Code >= 0 && strcmp(name, "surface_free") == 0)
 			standIn = (void *)wii_surface_free;
+		else if (name && itemDrawCode >= 0 && strcmp(name, "surface_exists") == 0)
+			standIn = (void *)wii_surface_exists;
 		else if (name && skorpLureCode >= 0 && strcmp(name, "skorp_get_lure") == 0)
 			standIn = (void *)wii_skorp_get_lure;
 		if (standIn) {
