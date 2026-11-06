@@ -1,0 +1,18 @@
+Reason: GameMaker stops a step as soon as it asks for another room and switches rooms before drawing, so the room
+being left is never drawn again. Butterscotch drew it once more and only skipped showing that frame. The extra draw
+still painted the view surfaces, and AM2R's item screen shows the frozen game straight from the widescreen view's
+surface, so the picture it froze was that hidden frame: the item already gone and Samus not drawn.
+Upstream: Bug on every platform.
+
+--- a/src/loop.c
++++ b/src/loop.c
+@@ -1263,7 +1263,8 @@
+             int32_t fbWidth, fbHeight;
+             platformGetWindowSize(&fbWidth, &fbHeight);
+ 
+-            if (shouldRender) {
++            // GameMaker leaves the room as soon as a step asks to, without drawing it again
++            if (shouldRender && runner->pendingRoom == -1) {
+                 // Clear the default framebuffer (window background) to black
+ #ifdef ENABLE_SW_RENDERER
+                 if (gfx == SOFTWARE && shouldRender)
