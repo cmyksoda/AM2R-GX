@@ -4,6 +4,7 @@
 #include "data_win.h"
 #include "file_system.h"
 #include "log.h"
+#include "wii_mem.h"
 #include "wii_paths.h"
 
 #include <aesndlib.h>
@@ -79,6 +80,8 @@ typedef struct {
     uint32_t voices;        // voices playing or draining it: never freed under them
     bool bad;               // not 16-bit PCM the DSP can play
     bool pinned;            // read at boot, never evicted
+    bool arena;             // borrowed from the texture arena
+    bool warned;            // a failed play was logged
 } SfxPcm;
 
 typedef struct {
@@ -178,132 +181,107 @@ static void setVoiceVolume(AESNDPB* pb, float g) {
 
 // ===[ Embedded SFX ]===
 
-static const uint8_t* findWavDataChunk(const uint8_t* data, uint32_t dataSize, uint32_t* lenOut) {
-    if (data == nullptr || dataSize < 12) return nullptr;
-    if (data[0] != 'R' || data[1] != 'I' || data[2] != 'F' || data[3] != 'F') return nullptr;
-    uint32_t offset = 12;
-    while (offset + 8 <= dataSize) {
-        uint32_t chunkLen = data[offset+4] | (data[offset+5] << 8) | (data[offset+6] << 16) | (data[offset+7] << 24);
-        uint32_t chunkDataOffset = offset + 8;
-        uint32_t available = dataSize - chunkDataOffset;
-        if (chunkLen > available) chunkLen = available;
-        if (data[offset] == 'd' && data[offset+1] == 'a' && data[offset+2] == 't' && data[offset+3] == 'a') {
-            *lenOut = chunkLen;
-            return data + chunkDataOffset;
-        }
-        offset = chunkDataOffset + chunkLen;
-        if (offset & 1) offset++;
-    }
-    return nullptr;
+static uint32_t le32(const uint8_t* p) { return p[0] | (p[1] << 8) | (p[2] << 16) | ((uint32_t) p[3] << 24); }
+static uint32_t le16(const uint8_t* p) { return p[0] | (p[1] << 8); }
+
+static void blobFree(WiiAudioSystem* a, SfxPcm* sfx) {
+    if (sfx->arena)
+        WiiMem_texFree(sfx->pcm);
+    else
+        free(sfx->pcm);
+    sfx->pcm = nullptr;
+    a->blobBytes -= sfx->size;
 }
 
-static bool parseWavHeader(const uint8_t* data, uint32_t dataSize, uint32_t* chans,
-                           uint32_t* rate, uint32_t* bits, const uint8_t** audio, uint32_t* audioLen) {
-    if (data == nullptr || dataSize < 36) return false;
-    if (data[0] != 'R' || data[1] != 'I' || data[2] != 'F' || data[3] != 'F') return false;
-    *chans = data[22] | (data[23] << 8);
-    *rate  = data[24] | (data[25] << 8) | (data[26] << 16) | (data[27] << 24);
-    *bits  = data[34] | (data[35] << 8);
-    uint32_t len = 0;
-    const uint8_t* found = findWavDataChunk(data, dataSize, &len);
-    *audio = found;
-    *audioLen = len;
-    return found != nullptr && len > 0 && *chans > 0 && *rate > 0 && *bits > 0;
+// One too big to keep, else (when over budget) the least recently played; never one a voice still holds.
+static SfxPcm* blobVictim(WiiAudioSystem* a, uint32_t keep, bool over) {
+    SfxPcm* victim = nullptr;
+    for (uint32_t i = 0; i < a->dw->audo.count; i++) {
+        SfxPcm* sfx = &a->sfx[i];
+        if (sfx->pcm == nullptr || sfx->voices > 0 || i == keep || sfx->pinned) continue;
+        if (sfx->size > BLOB_BIG_BYTES) return sfx;
+        if (over && (victim == nullptr || sfx->used < victim->used)) victim = sfx;
+    }
+    return victim;
 }
 
 // Without this every sound ever heard stays in RAM.
 static void blobTrim(WiiAudioSystem* a, uint32_t keep) {
-    uint32_t count = a->dw->audo.count;
-    for (;;) {
-        uint32_t victim = UINT32_MAX, oldest = UINT32_MAX;
-        bool over = a->blobBytes > BLOB_CACHE_BYTES;
-        for (uint32_t i = 0; i < count; i++) {
-            SfxPcm* sfx = &a->sfx[i];
-            if (sfx->pcm == nullptr || sfx->voices > 0 || i == keep || sfx->pinned) continue;
-            if (sfx->size > BLOB_BIG_BYTES) {
-                victim = i;
-                break;
-            }
-            if (over && sfx->used < oldest) {
-                oldest = sfx->used;
-                victim = i;
-            }
-        }
-        if (victim == UINT32_MAX) return;
-        free(a->sfx[victim].pcm);
-        a->sfx[victim].pcm = nullptr;
-        a->blobBytes -= a->sfx[victim].size;
-    }
+    SfxPcm* victim;
+    while ((victim = blobVictim(a, keep, a->blobBytes > BLOB_CACHE_BYTES)) != nullptr) blobFree(a, victim);
 }
 
-static void sfxConvert(SfxPcm* sfx, const AudioEntry* entry) {
-    if (entry->data == nullptr || entry->dataSize == 0) return;
-    uint32_t chans = 0, rate = 0, bits = 0, audioLen = 0;
-    const uint8_t* audioData = nullptr;
-    bool parsed = parseWavHeader(entry->data, entry->dataSize, &chans, &rate, &bits, &audioData, &audioLen);
-    uint32_t frame = chans * 2;
-    if (!parsed || bits != 16 || chans < 1 || chans > 2 || audioData == nullptr || audioLen == 0
-        || audioLen > MAX_SFX_BYTES || audioLen < frame) {
+// Late in a long session the heap can lack a block for a big sound (issue #4): drop cached sounds, oldest first,
+// then borrow the texture arena.
+static uint8_t* sfxAlloc(WiiAudioSystem* a, uint32_t size, uint32_t keep, bool* arena) {
+    uint8_t* pcm;
+    SfxPcm* victim;
+    while ((pcm = (uint8_t*) memalign(32, size)) == nullptr && (victim = blobVictim(a, keep, true)) != nullptr)
+        blobFree(a, victim);
+    *arena = pcm == nullptr;
+    return pcm != nullptr ? pcm : (uint8_t*) WiiMem_texAlloc(size);
+}
+
+// The samples go straight into the DSP's buffer and are byte-swapped there: a raw copy beside it doubled what a big
+// sound needed.
+static void sfxRead(WiiAudioSystem* a, uint32_t audioFile) {
+    SfxPcm* sfx = &a->sfx[audioFile];
+    const AudioEntry* entry = &a->dw->audo.entries[audioFile];
+    FILE* f = a->sfxFile != nullptr ? a->sfxFile : a->dw->lazyLoadFile;
+    if (f == nullptr || !entry->present || entry->dataSize < 12) {
         sfx->bad = true;
         return;
     }
-    uint32_t len = audioLen - (audioLen % frame);
-    uint32_t size = (len + 31) & ~31u;
-    uint8_t* pcm = (uint8_t*) memalign(32, size);
-    if (pcm == nullptr) return;
-    memset(pcm + len, 0, size - len);
-    // WAV is little-endian; the DSP wants native big-endian, so swap each 16-bit sample, two at a time when the
-    // source is word-aligned (it sits 44 bytes into a malloc'd blob) and byte-wise for the rest.
-    uint32_t i = 0;
-    if (((uintptr_t) audioData & 3) == 0) {
-        for (; i + 3 < len; i += 4) {
-            uint32_t w;
-            memcpy(&w, audioData + i, 4);
-            w = ((w & 0x00FF00FFu) << 8) | ((w >> 8) & 0x00FF00FFu);
-            memcpy(pcm + i, &w, 4);
+    long back = ftell(f);
+    uint8_t h[24];   // a chunk header and the start of its body, enough for "fmt "
+    uint32_t chans = 0, rate = 0, bits = 0, dataAt = 0, len = 0;
+    bool riff = fseek(f, (long) entry->dataOffset, SEEK_SET) == 0 && fread(h, 1, 4, f) == 4 && memcmp(h, "RIFF", 4) == 0;
+    for (uint32_t at = 12; riff && dataAt == 0 && at + 8 <= entry->dataSize;) {
+        if (fseek(f, (long) (entry->dataOffset + at), SEEK_SET) != 0 || fread(h, 1, sizeof h, f) < 8) break;
+        uint32_t chunkLen = le32(h + 4);
+        if (chunkLen > entry->dataSize) break;
+        if (memcmp(h, "fmt ", 4) == 0) {
+            chans = le16(h + 10);
+            rate = le32(h + 12);
+            bits = le16(h + 22);
+        } else if (memcmp(h, "data", 4) == 0) {
+            dataAt = at + 8;
+            len = chunkLen < entry->dataSize - dataAt ? chunkLen : entry->dataSize - dataAt;
+        }
+        at += 8 + chunkLen + (chunkLen & 1);
+    }
+    uint32_t frame = chans * 2;
+    if (dataAt == 0 || bits != 16 || chans < 1 || chans > 2 || rate == 0 || len < frame || len > MAX_SFX_BYTES) {
+        sfx->bad = true;
+    } else {
+        len -= len % frame;
+        uint32_t size = (len + 31) & ~31u;
+        bool arena;
+        uint8_t* pcm = sfxAlloc(a, size, audioFile, &arena);
+        if (pcm != nullptr) {
+            size_t got = 0;
+            if (fseek(f, (long) (entry->dataOffset + dataAt), SEEK_SET) == 0) got = fread(pcm, 1, len, f);
+            if (got != len) logError("WiiAudio: read %u of %u bytes of audio entry %u\n", (unsigned) got, len, audioFile);
+            memset(pcm + got, 0, size - got);
+            uint32_t* w = (uint32_t*) pcm;
+            for (uint32_t i = 0; i < size / 4; i++) w[i] = ((w[i] & 0x00FF00FFu) << 8) | ((w[i] >> 8) & 0x00FF00FFu);
+            DCFlushRange(pcm, size);
+            sfx->pcm = pcm;
+            sfx->len = len;
+            sfx->size = size;
+            sfx->chans = chans;
+            sfx->rate = rate;
+            sfx->arena = arena;
         }
     }
-    for (; i + 1 < len; i += 2) {
-        pcm[i] = audioData[i + 1];
-        pcm[i + 1] = audioData[i];
-    }
-    DCFlushRange(pcm, size);
-    sfx->pcm = pcm;
-    sfx->len = len;
-    sfx->size = size;
-    sfx->chans = chans;
-    sfx->rate = rate;
+    if (f != a->sfxFile) fseek(f, back, SEEK_SET);
 }
 
-// DataWin_loadAudoIfNeeded's read, through the audio system's own unbuffered handle.
-static void sfxRead(WiiAudioSystem* a, uint32_t audioFile) {
-    AudioEntry* entry = &a->dw->audo.entries[audioFile];
-    if (a->sfxFile == nullptr) {
-        DataWin_loadAudoIfNeeded(a->dw, audioFile);
-        return;
-    }
-    if (!entry->present || entry->dataSize == 0 || entry->data != nullptr) return;
-    entry->data = (uint8_t*) malloc(entry->dataSize);
-    if (entry->data == nullptr) return;
-    size_t got = 0;
-    if (fseek(a->sfxFile, (long) entry->dataOffset, SEEK_SET) == 0)
-        got = fread(entry->data, 1, entry->dataSize, a->sfxFile);
-    if (got != entry->dataSize) {
-        memset(entry->data + got, 0, entry->dataSize - got);
-        logError("loadAudoIfNeeded: couldn't read %u bytes to load audio entry %u.\n", entry->dataSize, audioFile);
-    }
-}
-
-// The raw WAV is dropped once converted; an evicted sound is read and converted again.
 static SfxPcm* sfxLoad(WiiAudioSystem* a, uint32_t audioFile) {
     SfxPcm* sfx = &a->sfx[audioFile];
     if (sfx->bad) return nullptr;
     if (sfx->pcm == nullptr) {
-        AudioEntry* entry = &a->dw->audo.entries[audioFile];
         sfxRead(a, audioFile);
-        sfxConvert(sfx, entry);
-        free(entry->data);
-        entry->data = nullptr;
         if (sfx->pcm != nullptr) a->blobBytes += sfx->size;
     }
     sfx->used = ++a->blobTick;
@@ -727,7 +705,8 @@ static void wiiDestroy(AudioSystem* audio) {
         free(a->streams[i].vorbisMem);
     }
     if (a->sfx != nullptr)
-        for (uint32_t i = 0; i < a->dw->audo.count; i++) free(a->sfx[i].pcm);
+        for (uint32_t i = 0; i < a->dw->audo.count; i++)
+            if (a->sfx[i].pcm != nullptr) blobFree(a, &a->sfx[i]);
     free(a->sfx);
     if (a->sfxFile != nullptr) fclose(a->sfxFile);
     free(a);
@@ -762,10 +741,15 @@ static int32_t wiiPlaySound(AudioSystem* audio, int32_t soundIndex, MAYBE_UNUSED
     // group 0 is data.win; AM2R keeps its SFX there
     if (a->sfx == nullptr || sound->audioFile < 0 || (uint32_t) sound->audioFile >= dw->audo.count) return -1;
     SfxPcm* sfx = sfxLoad(a, (uint32_t) sound->audioFile);
-    if (sfx == nullptr) return -1;
-
-    WiiVoice* v = findFree(a);
-    if (v == nullptr) return -1;
+    WiiVoice* v = sfx != nullptr ? findFree(a) : nullptr;
+    if (v == nullptr) {
+        SfxPcm* failed = &a->sfx[sound->audioFile];
+        if (!failed->warned)
+            logWarn("WiiAudio: '%s' not played: %s\n", sound->name,
+                    failed->bad ? "not 16-bit PCM" : sfx == nullptr ? "no memory" : "every voice busy");
+        failed->warned = true;
+        return -1;
+    }
 
     v->sfx = sfx;
     sfx->voices++;
