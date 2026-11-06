@@ -184,7 +184,9 @@ sd-pack:
 
 # The release zip: the DOL built without test hooks (its symbols must say so), meta.xml at the same version, the
 # patch kit and the licenses, as dist/am2r-gx-VERSION.zip. The ELF stays beside it to read a crash dump's addresses.
+# The -update zip holds only boot.dol and meta.xml, the files a release changes, for players who already have the game.
 REL := dist/package-$(VERSION)/am2r-gx-$(VERSION)/apps/am2r
+UPD := dist/package-$(VERSION)/am2r-gx-$(VERSION)-update/apps/am2r
 release:
 	@test ! -e dist/am2r-gx-$(VERSION).zip || { echo "dist/am2r-gx-$(VERSION).zip exists: bump AM2R_GX_VERSION"; exit 1; }
 	@grep -q "<version>$(VERSION)</version>" $(META) || { echo "$(META) is not version $(VERSION)"; exit 1; }
@@ -201,8 +203,11 @@ release:
 	cp wii/src/xdelta3/LICENSE $(REL)/LICENSE-xdelta3.txt
 	rsync -a dist/apps/am2r/patch $(REL)/
 	cd dist/package-$(VERSION) && zip -qr ../am2r-gx-$(VERSION).zip am2r-gx-$(VERSION)
+	mkdir -p $(UPD)
+	cp $(REL)/boot.dol $(REL)/meta.xml $(UPD)/
+	cd dist/package-$(VERSION) && zip -qr ../am2r-gx-$(VERSION)-update.zip am2r-gx-$(VERSION)-update
 	cp build/wii-release/butterscotch dist/am2r-gx-$(VERSION).elf
-	@sha1sum dist/am2r-gx-$(VERSION).zip $(REL)/boot.dol
+	@sha1sum dist/am2r-gx-$(VERSION).zip dist/am2r-gx-$(VERSION)-update.zip $(REL)/boot.dol
 
 # Regression check in Dolphin: two tapes shot against a blessed reference DOL, then a short room sweep.
 # The harness lives in project-notes/research/scripts (untracked); bless a build you trust first.

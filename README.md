@@ -22,6 +22,10 @@ Every later boot goes straight to the title. The zip and `patch/` can be deleted
 
 Saves live in `/apps/am2r/save/` in the game's own format.
 
+## Updating
+
+From release 1.2.4 and onwards, two `.zip` files are listed on the release page. The `.zip` with `-update` appended to it only contains the new `boot.dol` and `meta.xml`, the only files required for players migrating from a previous version.
+
 ## Controls
 
 By default, missiles work in **Hold** style: hold Arm Weapon to use the selected weapon, let go to return to the beam. Aiming uses **one** diagonal button: hold it, and Up or Down picks the diagonal. Both can be changed in Options → Controls, and every button can be remapped there.
