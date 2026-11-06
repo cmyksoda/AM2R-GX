@@ -3417,15 +3417,16 @@ static bool gxGpuGetBlendEnable(Renderer *renderer)
 static void gxGpuSetFog(MAYBE_UNUSED Renderer *renderer, MAYBE_UNUSED bool enable, MAYBE_UNUSED uint32_t color) {}
 
 /* Tiles past the projection are scissored anyway; skipping them turns a room-wide background into a
- * screen's worth of quads. A mirrored scale draws each tile on the other side of its lattice point. */
-static void gx_tile_span(float *start, float *end, float tile, float lo, float hi, bool mirrored)
+ * screen's worth of quads. A mirrored scale draws each tile on the other side of its lattice point.
+ * fill also grows the span to the projection: GameMaker tiles a view's background past the room's edges. */
+static void gx_tile_span(float *start, float *end, float tile, float lo, float hi, bool mirrored, bool fill)
 {
 	float first = mirrored ? lo : lo - tile, last = mirrored ? hi + tile : hi;
 	float skip = floorf((first - *start) / tile) + 1;
 
-	if (skip > 0)
+	if (skip > 0 || fill)
 		*start += skip * tile;
-	if (*end > last)
+	if (*end > last || fill)
 		*end = last;
 }
 
@@ -3503,6 +3504,8 @@ static bool gx_tile_pattern(GxRenderer *gx, int32_t tpagIndex, float xscale, flo
 	return true;
 }
 
+static int surface_depth(const Runner *runner);
+
 static void gxDrawSpriteTiled(Renderer *renderer, int32_t tpagIndex, float originX, float originY, float x, float y,
 			      float xscale, float yscale, bool tileX, bool tileY, float roomW, float roomH,
 			      uint32_t color, float alpha)
@@ -3511,6 +3514,7 @@ static void gxDrawSpriteTiled(Renderer *renderer, int32_t tpagIndex, float origi
 	TexturePageItem *tpag;
 	float ax = fabsf(xscale), ay = fabsf(yscale);
 	float tileW, tileH, startX, endX, startY, endY, cx, cy, clipT, clipB;
+	bool fill;
 
 	if (tpagIndex < 0 || (uint32_t)tpagIndex >= dw->tpag.count)
 		return;
@@ -3537,11 +3541,12 @@ static void gxDrawSpriteTiled(Renderer *renderer, int32_t tpagIndex, float origi
 		startY = y - originY * ay;
 		endY = startY + tileH;
 	}
+	fill = ((GxRenderer *)renderer)->viewActive && surface_depth(renderer->runner) <= 1;
 	if (tileX)
-		gx_tile_span(&startX, &endX, tileW, gx_clipL, gx_clipR, xscale < 0);
+		gx_tile_span(&startX, &endX, tileW, gx_clipL, gx_clipR, xscale < 0, fill);
 	gx_clip_rows(&clipT, &clipB);
 	if (tileY)
-		gx_tile_span(&startY, &endY, tileH, clipT, clipB, yscale < 0);
+		gx_tile_span(&startY, &endY, tileH, clipT, clipB, yscale < 0, fill);
 	if (tileX && tileY && gx_tile_pattern((GxRenderer *)renderer, tpagIndex, xscale, yscale, color, alpha,
 					      startX, endX, startY, endY))
 		return;
