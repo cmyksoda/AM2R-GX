@@ -134,6 +134,7 @@ typedef struct {
 	bool compose;
 	int32_t composeId;
 	int32_t guiSurf; /* oControl's HUD layer, drawn inside the HUD margins */
+	int32_t timerSurf; /* oIGT's in-game timer, which sits under the HUD and moves with it */
 	int32_t shPal, shGB; /* SHDR indices of the two shaders we do natively, -1 if absent */
 	int32_t palTpag; /* palette sprite bound with texture_set_stage while shPal is set */
 	int palIndex; /* column of the palette to replace with (the game always passes 1) */
@@ -2075,7 +2076,7 @@ static void gxInit(Renderer *renderer, DataWin *dataWin)
 	gx->currentTarget = HOST_TARGET;
 	gx->appSurfId = -1;
 	gx->composeId = -1;
-	gx->guiSurf = -1;
+	gx->guiSurf = gx->timerSurf = -1;
 	gx->shPal = gx->shGB = -1;
 	gx->palTpag = -1;
 	gx->palIndex = 1;
@@ -2366,6 +2367,7 @@ static void gxBeginFrame(Renderer *renderer, int32_t gameW, int32_t gameH, int32
 	WiiSafe_frame(renderer->runner);
 	WiiControls_frame(renderer->runner);
 	gx->guiSurf = WiiSafe_guiSurface(renderer->runner);
+	gx->timerSurf = WiiSafe_timerSurface(renderer->runner);
 	appId = renderer->runner->applicationSurfaceId;
 	if (appId >= 0)
 		gx_bind_surface(gx, appId, false);
@@ -3754,6 +3756,7 @@ static void gxDrawSurfaceColor(Renderer *renderer, int32_t surfaceID, int32_t sr
 	Matrix4f transform;
 	u8 a = unorm(alpha);
 	bool gb = renderer->currentShader >= 0 && renderer->currentShader == gx->shGB;
+	bool hud;
 
 	if (surfaceID < 0 || (uint32_t)surfaceID >= gx->surfCount)
 		return;
@@ -3761,6 +3764,7 @@ static void gxDrawSurfaceColor(Renderer *renderer, int32_t surfaceID, int32_t sr
 	if (!s->exists)
 		return;
 	s->lastUsed = gx->frameCounter;
+	hud = surfaceID == gx->guiSurf || surfaceID == gx->timerSurf;
 	if (gx->currentTarget == surfaceID)
 		gx_flush_target(gx);
 	if (srcWidth <= 0)
@@ -3768,9 +3772,11 @@ static void gxDrawSurfaceColor(Renderer *renderer, int32_t surfaceID, int32_t sr
 	if (srcHeight <= 0)
 		srcHeight = s->h;
 	/* The HUD's two corner groups slide in from the sides, split where its right group starts: with every weapon
-	 * its left group runs past the middle, and a split there cut the power bomb icon in two. */
-	if (surfaceID == gx->guiSurf && !gx_hud_half && Overscan_marginH() > 0 && angleDeg == 0.0f) {
-		int32_t split = WiiSafe_hudSplit(renderer->runner, srcLeft + srcWidth) - srcLeft,
+	 * its left group runs past the middle, and a split there cut the power bomb icon in two. The timer's two bars
+	 * sit at its two ends, so it splits in the middle. */
+	if (hud && !gx_hud_half && Overscan_marginH() > 0 && angleDeg == 0.0f) {
+		int32_t split = surfaceID == gx->timerSurf ? srcWidth / 2
+							   : WiiSafe_hudSplit(renderer->runner, srcLeft + srcWidth) - srcLeft,
 			mh = Overscan_marginH();
 
 		if (split < 0)
@@ -3786,7 +3792,7 @@ static void gxDrawSurfaceColor(Renderer *renderer, int32_t surfaceID, int32_t sr
 		gx_hud_half = false;
 		return;
 	}
-	if (surfaceID == gx->guiSurf)
+	if (hud)
 		y += (float)WiiSafe_rows() * yscale;
 	angleRad = -angleDeg * ((float)M_PI / 180.0f);
 	Matrix4f_setTransform2D(&transform, x, y, xscale, yscale, angleRad);
@@ -3905,6 +3911,8 @@ static bool gx_draw_preview(GxRenderer *gx, float LW, float LH, float sx, float 
 	if (gx->guiSurf >= 0 && (uint32_t)gx->guiSurf < gx->surfCount && gx->surfs[gx->guiSurf].exists)
 		gxDrawSurfaceColor(&gx->base, gx->guiSurf, 0, 0, 0, 0, 0.0f, 0.0f, sx, sy, 0.0f,
 				   0xFFFFFF, 0xFFFFFF, 0xFFFFFF, 0xFFFFFF, 1.0f);
+	gxDrawSurfaceColor(&gx->base, gx->timerSurf, 0, 0, 0, 0, 0.0f, 0.0f, sx, sy, 0.0f,
+			   0xFFFFFF, 0xFFFFFF, 0xFFFFFF, 0xFFFFFF, 1.0f);
 	gx_unbind_tex(gx);
 	return true;
 }

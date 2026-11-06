@@ -9,6 +9,7 @@ struct VMContext;
 
 int WiiSafe_rows(void);
 int32_t WiiSafe_guiSurface(struct Runner *runner);
+int32_t WiiSafe_timerSurface(struct Runner *runner);
 int32_t WiiSafe_screenSurface(struct Runner *runner);
 bool WiiSafe_ingame(struct Runner *runner);
 bool WiiSafe_paused(struct Runner *runner);

@@ -46,22 +46,28 @@ int WiiSafe_rows(void)
 	return Overscan_marginV();
 }
 
+static int32_t first_int(Runner *runner, int32_t obj, const char *name, int32_t *var)
+{
+	Instance *inst;
+	RValue v;
+
+	if (*var == -2)
+		*var = Wii_varId(runner, name, INSTANCE_SELF);
+	if (*var < 0 || !(inst = first_of(runner, obj)))
+		return -1;
+	v = Instance_getSelfVar(inst, *var);
+	return v.type == RVALUE_UNDEFINED ? -1 : RValue_toInt32(v);
+}
+
 static int32_t control_surface(Runner *runner, const char *name, int32_t *var)
 {
 	static int32_t obj = -2;
-	Instance *control;
-	RValue v;
 
 	if (!runner)
 		return -1;
 	if (obj == -2)
 		obj = Wii_objectIndex(runner, "oControl");
-	if (*var == -2)
-		*var = Wii_varId(runner, name, INSTANCE_SELF);
-	if (*var < 0 || !(control = first_of(runner, obj)))
-		return -1;
-	v = Instance_getSelfVar(control, *var);
-	return v.type == RVALUE_UNDEFINED ? -1 : RValue_toInt32(v);
+	return first_int(runner, obj, name, var);
 }
 
 /* The surface oControl paints the HUD into every step (1.5.5), or -1. */
@@ -109,6 +115,19 @@ static bool global_on(Runner *runner, const char *name, int32_t *var)
 	if (*var == -2)
 		*var = Wii_varId(runner, name, INSTANCE_GLOBAL);
 	return *var >= 0 && RValue_toReal(Instance_getSelfVar(runner->vmContext->globalScopeInstance, *var)) != 0;
+}
+
+/* The surface oIGT paints the in-game timer into, under the HUD, or -1 when the player hides the HUD (oIGT keeps
+ * painting it then, and only skips the draw). */
+int32_t WiiSafe_timerSurface(Runner *runner)
+{
+	static int32_t obj = -2, var = -2, hud = -2;
+
+	if (!runner || !runner->vmContext || !global_on(runner, "opshowhud", &hud))
+		return -1;
+	if (obj == -2)
+		obj = Wii_objectIndex(runner, "oIGT");
+	return first_int(runner, obj, "igt_surface", &var);
 }
 
 /* Where the HUD layer's right group (the map and the Metroid count) starts, or the layer's width when it shows neither:
