@@ -833,6 +833,25 @@ static u8 unorm(float a)
 	return (u8)(a * 255.0f + 0.5f);
 }
 
+/* GX rasterizes a sprite at a sub-pixel spot one row short (a lunging Skorp's discs lost their bottom row, #7).
+ * Whole-scale sprites at right angles move as one onto the pixel grid; the last round drops cos/sin's error. */
+static void gx_snap_corners(float xscale, float yscale, float angleDeg, float *x0, float *y0, float *x1, float *y1,
+			    float *x2, float *y2, float *x3, float *y3)
+{
+	float dx = floorf(*x0 + 0.5f) - *x0, dy = floorf(*y0 + 0.5f) - *y0;
+
+	if (fmodf(angleDeg, 90.0f) != 0.0f || xscale != floorf(xscale) || yscale != floorf(yscale))
+		return;
+	*x0 = floorf(*x0 + dx + 0.5f);
+	*y0 = floorf(*y0 + dy + 0.5f);
+	*x1 = floorf(*x1 + dx + 0.5f);
+	*y1 = floorf(*y1 + dy + 0.5f);
+	*x2 = floorf(*x2 + dx + 0.5f);
+	*y2 = floorf(*y2 + dy + 0.5f);
+	*x3 = floorf(*x3 + dx + 0.5f);
+	*y3 = floorf(*y3 + dy + 0.5f);
+}
+
 #define PRELOAD_MAX_PAGES 2048
 
 /* Pages the game will soon draw (AM2R: Samus's suit, the pause screen), most urgent first: they load on the
@@ -2764,6 +2783,7 @@ static void gxDrawSprite(Renderer *renderer, int32_t tpagIndex, float x, float y
 	Matrix4f_transformPoint(&transform, localX1, localY0, &x1, &y1);
 	Matrix4f_transformPoint(&transform, localX1, localY1, &x2, &y2);
 	Matrix4f_transformPoint(&transform, localX0, localY1, &x3, &y3);
+	gx_snap_corners(xscale, yscale, angleDeg, &x0, &y0, &x1, &y1, &x2, &y2, &x3, &y3);
 	gx_draw_tpag(gx, tpagIndex, x0, y0, x1, y1, x2, y2, x3, y3,
 		     0, 0, (float)tpag->sourceWidth, (float)tpag->sourceHeight,
 		     r, g, b, a, r, g, b, a, r, g, b, a, r, g, b, a);
@@ -2824,6 +2844,7 @@ static void gxDrawSpritePart(Renderer *renderer, int32_t tpagIndex, int32_t srcO
 
 	gx_part_corners(x, y, srcW, srcH, xscale, yscale, angleDeg, pivotX, pivotY,
 			&x0, &y0, &x1, &y1, &x2, &y2, &x3, &y3);
+	gx_snap_corners(xscale, yscale, angleDeg, &x0, &y0, &x1, &y1, &x2, &y2, &x3, &y3);
 	gx_draw_tpag(gx, tpagIndex, x0, y0, x1, y1, x2, y2, x3, y3,
 		     (float)srcOffX, (float)srcOffY, (float)srcW, (float)srcH,
 		     r, g, b, a, r, g, b, a, r, g, b, a, r, g, b, a);
