@@ -182,6 +182,7 @@ void GxRenderer_setPillarbox(bool on)
 	gx_pillarbox = on;
 }
 static void gxSurfaceResize(Renderer *renderer, int32_t surfaceID, int32_t width, int32_t height);
+static void gxSurfaceFree(Renderer *renderer, int32_t surfaceID);
 
 static int pad4(int v)
 {
@@ -2174,39 +2175,59 @@ void GxRenderer_loseSurfaces(void)
 	gx_lose_in = LOSE_SURFACES_FRAMES;
 }
 
+static bool gx_inset; /* this frame's compose is filtered into the Resize Screen box at present */
+
 /* Compose when a game pixel would not be a whole number of screen pixels wide (the 426-wide view
  * on a 640 framebuffer; 4:3 is an exact 2× and stays on the direct path). Sizes come from the
- * window in game pixels, so the game's own scale setting doesn't matter. */
+ * window in game pixels, so the game's own scale setting doesn't matter. A 240p picture resized vertically is
+ * composed too: drawn straight into its shorter box, GX_NEAR drops whole lines (#8). 480 only thins a few. */
 static void gx_setup_compose(GxRenderer *gx, int32_t windowW, int32_t windowH)
 {
 	int fbw = (int)WiiVideo_fbWidth();
 	int fbh = (int)WiiVideo_efbHeight();
-	int cw, ch;
+	int cw = 0, ch = 0;
+	bool have = gx->composeId >= 0 && (uint32_t)gx->composeId < gx->surfCount && gx->surfs[gx->composeId].exists;
 
 	static bool said;
 
 	gx->compose = false;
-	if (!gx_wide_filter || gx->gameH < 1 || windowH < 1)
+	gx_inset = false;
+	if (gx->gameH < 1 || windowH < 1)
 		return;
-	cw = windowW * gx->gameH / windowH;
-	ch = (fbh / gx->gameH) * gx->gameH;
-	if (cw < 2 || cw > WII_FB_W || ch < 1 || fbw % cw == 0 || cw * 3 > fbw * 2)
-		return;
-	if (gx->composeId < 0 || (uint32_t)gx->composeId >= gx->surfCount || !gx->surfs[gx->composeId].exists) {
+	if (gx_wide_filter) {
+		cw = windowW * gx->gameH / windowH;
+		ch = (fbh / gx->gameH) * gx->gameH;
+	}
+	gx_inset = Overscan_v() && fbh == 240;
+	if (cw < 2 || cw > WII_FB_W || ch < 1 || fbw % cw == 0 || cw * 3 > fbw * 2) {
+		if (!gx_inset) {
+			if (have) {
+				gxSurfaceFree(&gx->base, gx->composeId);
+				gx->composeId = -1;
+			}
+			return;
+		}
+		cw = fbw;
+		ch = fbh;
+	}
+	if (!have) {
 		gx->composeId = gx_alloc_surface(gx, cw, ch);
 		if (gx->composeId < 0) {
 			if (!said) {
 				said = true;
-				logWarn("GX: wide compose %dx%d: no surface memory (window %dx%d)\n", cw, ch,
+				logWarn("GX: compose %dx%d: no surface memory (window %dx%d)\n", cw, ch,
 					windowW, windowH);
 			}
+			gx_inset = false;
 			return;
 		}
-		logInfo("GX: wide compose %dx%d -> %d:%d filtered present\n", cw, ch, fbw, cw);
+		logInfo("GX: compose %dx%d for the %s picture\n", cw, ch, cw == fbw ? "resized" : "wide");
 	} else if (gx->surfs[gx->composeId].w != cw || gx->surfs[gx->composeId].h != ch) {
 		gxSurfaceResize(&gx->base, gx->composeId, cw, ch);
-		if (!gx->surfs[gx->composeId].exists)
+		if (!gx->surfs[gx->composeId].exists) {
+			gx_inset = false;
 			return;
+		}
 	}
 	gx->compose = true;
 }
@@ -2666,11 +2687,31 @@ void GxRenderer_present(void)
 	if (!s->exists || !s->texels)
 		return;
 	gx_prep_surf_obj(s);
-	gx_bind_tex(gx, &s->obj, NULL);
-	GX_SetBlendMode(GX_BM_NONE, GX_BL_ONE, GX_BL_ZERO, GX_LO_CLEAR);
 	fbw = (int)WiiVideo_fbWidth();
 	n = s->w / 2;
 	ox = (fbw - n * 3) / 2;
+	if (gx_inset) {
+		/* the viewport is the Resize Screen box, at most half the picture's size, so bilinear reaches every row */
+		bool full = s->w == fbw;
+		float x0 = full ? 0.0f : (float)ox, x1 = full ? (float)fbw : (float)(ox + 3 * n);
+
+		GX_InitTexObjFilterMode(&s->obj, GX_LINEAR, GX_LINEAR);
+		gx->texBound = false;
+		gx_bind_tex(gx, &s->obj, NULL);
+		GX_SetBlendMode(GX_BM_NONE, GX_BL_ONE, GX_BL_ZERO, GX_LO_CLEAR);
+		u1 = (float)(full ? s->w : 2 * n) / (float)s->texW;
+		v1 = (float)s->h / (float)s->texH;
+		emit_quad(x0, 0, x1, 0, x1, (float)s->h, x0, (float)s->h,
+			  0, 0, u1, 0, u1, v1, 0, v1,
+			  255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255);
+		GX_InitTexObjFilterMode(&s->obj, GX_NEAR, GX_NEAR);
+		gx->texBound = false;
+		gx_unbind_tex(gx);
+		gx_apply_blend(gx);
+		return;
+	}
+	gx_bind_tex(gx, &s->obj, NULL);
+	GX_SetBlendMode(GX_BM_NONE, GX_BL_ONE, GX_BL_ZERO, GX_LO_CLEAR);
 	tw = (float)s->texW;
 	h = (float)s->h;
 	v1 = h / (float)s->texH;
