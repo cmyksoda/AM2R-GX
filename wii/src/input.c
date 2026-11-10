@@ -736,9 +736,13 @@ bool WiiInput_shouldQuit(void)
 	PAD_ScanPads();
 	w = WPAD_ButtonsHeld(0) | polled_wheld;
 	g = PAD_ButtonsHeld(0) | polled_gcheld;
-	if ((w & (WPAD_BUTTON_HOME | WPAD_CLASSIC_BUTTON_HOME)) || (g & GC_QUIT) == GC_QUIT)
-		home_held++;
-	else
+	if ((w & (WPAD_BUTTON_HOME | WPAD_CLASSIC_BUTTON_HOME)) || (g & GC_QUIT) == GC_QUIT) {
+		if (++home_held == HOME_HOLD_FRAMES)
+			logInfo("HOME held: quitting\n");
+	} else {
+		if (home_held > 0 && home_held < HOME_HOLD_FRAMES)
+			logInfo("HOME let go after %d frames (quitting takes %d)\n", home_held, HOME_HOLD_FRAMES);
 		home_held = 0;
+	}
 	return home_held >= HOME_HOLD_FRAMES;
 }
