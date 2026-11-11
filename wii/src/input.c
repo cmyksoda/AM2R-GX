@@ -116,9 +116,9 @@ typedef struct {
 } ButtonMap;
 
 static const ButtonMap classicMap[] = {
-	{ WPAD_CLASSIC_BUTTON_B, SLOT_FACE1 },      /* jump, menu accept */
-	{ WPAD_CLASSIC_BUTTON_A, SLOT_FACE2 },      /* morph */
-	{ WPAD_CLASSIC_BUTTON_Y, SLOT_FACE3 },      /* fire, menu back */
+	{ WPAD_CLASSIC_BUTTON_B, SLOT_FACE1 },      /* jump, menu back */
+	{ WPAD_CLASSIC_BUTTON_A, SLOT_FACE2 },      /* morph, menu OK */
+	{ WPAD_CLASSIC_BUTTON_Y, SLOT_FACE3 },      /* fire */
 	{ WPAD_CLASSIC_BUTTON_X, SLOT_FACE4 },      /* weapon select */
 	{ WPAD_CLASSIC_BUTTON_FULL_L, SLOT_LB },    /* aim diagonal */
 	{ WPAD_CLASSIC_BUTTON_FULL_R, SLOT_RB },    /* arm weapon */
@@ -141,7 +141,7 @@ static const ButtonMap gcMap[] = {
 	{ 0, 0 },
 };
 /* The stick moves, so the Remote's d-pad holds the aim: up/down aim diagonally, left/right lock the aim. */
-/* A fires and B jumps like Prime; menus still take A as OK (see swap_menus). */
+/* A fires and B jumps like Prime; menus still take A as OK (see menu_slots). */
 static const ButtonMap nunchukMap[] = {
 	{ WPAD_BUTTON_B, SLOT_FACE1 },         /* jump */
 	{ WPAD_NUNCHUK_BUTTON_C, SLOT_FACE2 }, /* morph */
@@ -257,18 +257,18 @@ static bool repeat_step(bool held, int *frames, int first, int every)
 	return *frames == 1 || (*frames > first && (*frames - first) % every == 0);
 }
 
-/* The Display menu's Resize/Move Screen and HUD Margins rows open these pages with the menus' OK (the bottom button:
- * B on a Classic Controller, A elsewhere, where B is Back). The d-pad (or a stick) sizes the picture or sets the
- * margins, A held moves the picture, X (Nunchuk C) recenters it, and B closes. True while the game must see neutral
- * input: the page is up, or the B that closed it is still down and would also leave the menu underneath. */
+/* The Display menu's Resize/Move Screen and HUD Margins rows open these pages with the menus' OK (A, or Cross on a
+ * PlayStation pad). The d-pad (or a stick) sizes the picture or sets the margins, OK held moves the picture, X
+ * (Nunchuk C) recenters it, and Back (B, or Circle) closes. True while the game must see neutral input: the page is
+ * up, or the Back that closed it is still down and would also leave the menu underneath. */
 static bool overscan_input(u32 wheld, u16 gcheld, const s8 *sticks, const expansion_t *exp, OverscanPage row)
 {
-	static bool opening, closing, prev_b, prev_ok;
+	static bool opening, closing, prev_back, prev_ok;
 	static int rep[4];
 	float sx = gc_axis(sticks[0]), sy = -gc_axis(sticks[1]), wx = 0.0f, wy = 0.0f;
 	/* the Nunchuk's Z and C share their bits with the Classic's Up and Left */
 	u32 classic = exp->type == WPAD_EXP_CLASSIC ? wheld : 0, nunchuk = exp->type == WPAD_EXP_NUNCHUK ? wheld : 0;
-	bool up, down, left, right, a, b, ok, center, face, screen;
+	bool up, down, left, right, a, b, ps, ok, back, center, face, screen;
 	static bool prev_center;
 	int first, every, step;
 
@@ -286,35 +286,37 @@ static bool overscan_input(u32 wheld, u16 gcheld, const s8 *sticks, const expans
 		wx > STICK_DIGITAL || sx > STICK_DIGITAL;
 	a = (classic & WPAD_CLASSIC_BUTTON_A) || (wheld & WPAD_BUTTON_A) || (gcheld & PAD_BUTTON_A);
 	b = (classic & WPAD_CLASSIC_BUTTON_B) || (wheld & WPAD_BUTTON_B) || (gcheld & PAD_BUTTON_B);
-	ok = pad_in_use == WII_PAD_CLASSIC ? b : a;
+	ps = ds3_in_use && pad_in_use == WII_PAD_CLASSIC;
+	ok = ps ? b : a;
+	back = ps ? a : b;
 	center = (classic & WPAD_CLASSIC_BUTTON_X) || (gcheld & PAD_BUTTON_X) || (nunchuk & WPAD_NUNCHUK_BUTTON_C);
 	face = a || b || (classic & (WPAD_CLASSIC_BUTTON_X | WPAD_CLASSIC_BUTTON_Y)) ||
 	       (wheld & (WPAD_BUTTON_1 | WPAD_BUTTON_2)) || (gcheld & (PAD_BUTTON_X | PAD_BUTTON_Y));
 
 	if (!Overscan_active()) {
-		closing = closing && b;
+		closing = closing && back;
 		if (!closing && row != OVERSCAN_OFF && ok && !prev_ok) {
 			Overscan_open(row);
 			opening = true; /* the button that opened the page is still down on its first frames */
 		}
 		prev_ok = ok;
-		prev_b = b;
+		prev_back = back;
 		prev_center = center;
 		return closing || Overscan_active();
 	}
 	prev_ok = ok;
 	if (opening) {
 		opening = face;
-		prev_b = b;
+		prev_back = back;
 		return true;
 	}
-	if (b && !prev_b) {
+	if (back && !prev_back) {
 		Overscan_close();
 		closing = true;
-		prev_b = b;
+		prev_back = back;
 		return true;
 	}
-	prev_b = b;
+	prev_back = back;
 	screen = Overscan_page() == OVERSCAN_SCREEN;
 	if (screen && center && !prev_center)
 		Overscan_recenter();
@@ -323,10 +325,10 @@ static bool overscan_input(u32 wheld, u16 gcheld, const s8 *sticks, const expans
 	every = screen ? 2 : 5;
 	step = repeat_step(right, &rep[0], first, every) - repeat_step(left, &rep[1], first, every);
 	if (step)
-		(!screen ? Overscan_adjustMarginH : a ? Overscan_adjustX : Overscan_adjustH)(step);
+		(!screen ? Overscan_adjustMarginH : ok ? Overscan_adjustX : Overscan_adjustH)(step);
 	step = repeat_step(down, &rep[2], first, every) - repeat_step(up, &rep[3], first, every);
 	if (step)
-		(!screen ? Overscan_adjustMarginV : a ? Overscan_adjustY : Overscan_adjustV)(step);
+		(!screen ? Overscan_adjustMarginV : ok ? Overscan_adjustY : Overscan_adjustV)(step);
 	return true;
 }
 
@@ -349,7 +351,7 @@ static const struct {
 	{ "opxjoybtn_menu2", GP_FACE2, GP_FACE3 },
 };
 
-static bool defaults_done, menus_swapped;
+static bool defaults_done;
 
 static double global_num(VMContext *vm, const char *name)
 {
@@ -370,23 +372,38 @@ static void set_global_num(VMContext *vm, const char *name, int value)
 		Instance_setSelfVar(vm->globalScopeInstance, vm->varNameMap[slot].value, RValue_makeInt32(value));
 }
 
-static int swap_face(int button)
+/* Menus take A as OK and B as Back on every Nintendo pad, Cross and Circle on a PlayStation one. While a pad is in use
+ * the menu bindings sit in its own face slots (each table: real slot -> the pad's); the options file keeps the real
+ * ones, which are the GameCube's. */
+static const int nunchukMenus[4] = { 2, 1, 0, 3 };
+static const int classicMenus[4] = { 1, 2, 0, 3 };
+static const int playstationMenus[4] = { 0, 2, 1, 3 };
+static const int *menu_slots; /* NULL: the real slots */
+
+static const int *menu_slots_for_pad(void)
 {
-	return button == GP_FACE1 ? GP_FACE3 : button == GP_FACE3 ? GP_FACE1 : button;
+	if (pad_in_use == WII_PAD_NUNCHUK)
+		return nunchukMenus;
+	if (pad_in_use == WII_PAD_CLASSIC)
+		return ds3_in_use ? playstationMenus : classicMenus;
+	return NULL;
 }
 
-/* The Nunchuk's A and B sit on each other's slots, so while it is in use the menu bindings are held swapped too: menus,
- * their prompts and the remap screen then all see A as OK. The options file only ever gets the real slots. */
-static void swap_menus(VMContext *vm)
+static void map_menus(VMContext *vm, bool toPad)
 {
 	static const char *const vars[] = { "opxjoybtn_menu1", "opxjoybtn_menu2" };
 	unsigned k;
+	int face, j;
 
+	if (!menu_slots)
+		return;
 	for (k = 0; k < 2; k++) {
-		double b = global_num(vm, vars[k]);
-
-		if (b >= 0)
-			set_global_num(vm, vars[k], swap_face((int)b));
+		face = (int)global_num(vm, vars[k]) - GP_FACE1;
+		if (face < 0 || face > 3)
+			continue;
+		for (j = 0; !toPad && menu_slots[j] != face; j++)
+			;
+		set_global_num(vm, vars[k], GP_FACE1 + (toPad ? menu_slots[face] : j));
 	}
 }
 
@@ -407,10 +424,14 @@ static void menu_back(Runner *runner, GamepadSlot *slot)
 	slot->buttonPressed[ok] = true;
 }
 
-void WiiInput_flipMenus(VMContext *vm)
+void WiiInput_menusToReal(VMContext *vm)
 {
-	if (menus_swapped)
-		swap_menus(vm);
+	map_menus(vm, false);
+}
+
+void WiiInput_menusToPad(VMContext *vm)
+{
+	map_menus(vm, true);
 }
 
 void WiiInput_applyLayout(VMContext *vm)
@@ -681,10 +702,12 @@ void WiiInput_poll(Runner *runner)
 	wii_pad_defaults(runner);
 	if (!pad_locked(runner))
 		note_pad(wheld, gcheld, sticks, &exp);
-	if (defaults_done && (pad_in_use == WII_PAD_NUNCHUK) != menus_swapped) {
-		swap_menus(runner->vmContext);
-		menus_swapped = !menus_swapped;
-		logInfo("menu buttons: %s\n", menus_swapped ? "Nunchuk (A = OK)" : "real");
+	if (defaults_done && menu_slots_for_pad() != menu_slots) {
+		map_menus(runner->vmContext, false);
+		menu_slots = menu_slots_for_pad();
+		map_menus(runner->vmContext, true);
+		logInfo("menu buttons: %s\n", !menu_slots ? "real" : menu_slots == playstationMenus ? "Cross = OK" :
+			menu_slots == classicMenus ? "Classic (A = OK)" : "Nunchuk (A = OK)");
 	}
 	drive_rumble();
 	row = Overscan_active() ? OVERSCAN_OFF : WiiControls_displayRow(runner);

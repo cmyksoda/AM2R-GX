@@ -19,6 +19,7 @@ void WiiInput_rumble(float left, float right); /* gamepad_set_vibration's levels
 void WiiInput_stopRumble(void);
 void WiiInput_shutdown(void); /* closes the GameCube adapter before the loader takes over */
 void WiiInput_applyLayout(struct VMContext *vm);
-void WiiInput_flipMenus(struct VMContext *vm); /* swaps the menu bindings to/from their Nunchuk slots */
+void WiiInput_menusToReal(struct VMContext *vm); /* menu bindings from the pad's face slots to the real ones */
+void WiiInput_menusToPad(struct VMContext *vm);
 
 #endif

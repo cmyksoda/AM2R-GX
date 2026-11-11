@@ -45,6 +45,8 @@ By default, missiles work in **Hold** style: hold Arm Weapon to use the selected
 
 Hold **HOME** for a second (Wii Remote or Classic Controller), **PS** on a DualShock or DualSense, or **X + B + Start** on a GameCube controller, to return to the Homebrew Channel. **Exit Game** on the title menu does the same.
 
+In menus, **A** selects and **B** goes back on every Nintendo controller; on a DualShock or DualSense, **Cross** selects and **Circle** goes back.
+
 - **GameCube controller adapter** (Wii U in Wii mode): Nintendo's WUP-028 or a clone switched to Wii U mode. Plug the controller into port 1, and the adapter's gray power cable too for rumble.
 - **DualShock 3, DualShock 4 or DualSense**: USB cable only. It plays as a Classic Controller with PlayStation button prompts, rumble, and the defaults in the table above. On a DualShock 4, Share and Options work as Select and Start, and the prompts call them that; a DualSense's Create button works as Share. DualSense Edge is untested.
 

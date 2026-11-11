@@ -312,7 +312,7 @@ static RValue wii_set_default_xjoypad(VMContext *ctx, RValue *args, int32_t argC
 		WiiInput_applyLayout(ctx);
 		logInfo("controls: Defaults restores the Wii layout\n");
 	}
-	WiiInput_flipMenus(ctx);
+	WiiInput_menusToPad(ctx);
 	return r;
 }
 
@@ -321,9 +321,9 @@ static RValue wii_save_gameoptions(VMContext *ctx, RValue *args, int32_t argCoun
 {
 	RValue r;
 
-	WiiInput_flipMenus(ctx);
+	WiiInput_menusToReal(ctx);
 	r = call_script(ctx, SCR_SAVE, args, argCount);
-	WiiInput_flipMenus(ctx);
+	WiiInput_menusToPad(ctx);
 	return r;
 }
 
@@ -331,7 +331,7 @@ static RValue wii_load_gameoptions(VMContext *ctx, RValue *args, int32_t argCoun
 {
 	RValue r = call_script(ctx, SCR_LOAD, args, argCount);
 
-	WiiInput_flipMenus(ctx);
+	WiiInput_menusToPad(ctx);
 	return r;
 }
 
