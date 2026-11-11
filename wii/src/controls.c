@@ -382,28 +382,82 @@ static RValue wii_get_xjoybtnsprite(VMContext *ctx, RValue *args, int32_t argCou
 	return sprite >= 0 ? RValue_makeInt32(sprite) : call_script(ctx, SCR_SPRITE, args, argCount);
 }
 
-static BuiltinFunc engine_draw_rectangle;
+/* What these calls reached before: the safe area's wrappers (they hook first), then the engine. */
+static BuiltinFunc next_draw_rectangle, next_draw_text;
 
-/* The options rows mark the chosen one with c_gray at alpha 0.4, about 15% gray once blitted: on a CRT that is under
- * 1% of white's light. In 240p (the CRT mode) it is drawn about 25% gray on black; other modes keep the original. */
-static RValue wii_draw_rectangle(VMContext *ctx, RValue *args, int32_t argCount)
+/* The chosen options row: the original c_gray bar at alpha 0.4 blits to about 15% gray, nearly invisible on a CRT, so
+ * it is drawn as a light bar with dark text instead, in every video mode. */
+#define LIT_BAR 0xd8d8d8
+#define LIT_TEXT 0x101010
+
+static struct {
+	Instance *inst;
+	int32_t frame, count;
+	float x1[2], x2[2];
+} lit;
+
+static bool option_row(VMContext *ctx)
 {
 	static const char *const rows[] = { "oOptionLR", "oOptionSlider", "oOptionSeed" };
-	Renderer *renderer = ctx->runner->renderer;
-	RValue out;
 	size_t k;
 
-	if (!renderer || renderer->drawColor != 0x808080 || renderer->drawAlpha != 0.4f ||
-	    WiiVideo_efbHeight() >= WII_FB_H || !ctx->currentInstance)
-		return engine_draw_rectangle(ctx, args, argCount);
 	for (k = 0; k < sizeof rows / sizeof rows[0]; k++)
 		if (ctx->currentInstance->objectIndex == Wii_objectIndex(ctx->runner, rows[k]))
-			break;
-	if (k == sizeof rows / sizeof rows[0])
-		return engine_draw_rectangle(ctx, args, argCount);
-	renderer->drawColor = 0xd2d2d2;
-	out = engine_draw_rectangle(ctx, args, argCount);
+			return true;
+	return false;
+}
+
+static RValue wii_draw_rectangle(VMContext *ctx, RValue *args, int32_t argCount)
+{
+	Renderer *renderer = ctx->runner->renderer;
+	float x1, x2;
+	RValue out;
+
+	if (!renderer || renderer->drawColor != 0x808080 || renderer->drawAlpha != 0.4f || argCount < 4 ||
+	    !ctx->currentInstance || !option_row(ctx))
+		return next_draw_rectangle(ctx, args, argCount);
+	if (lit.inst != ctx->currentInstance || lit.frame != ctx->runner->frameCount) {
+		lit.inst = ctx->currentInstance;
+		lit.frame = ctx->runner->frameCount;
+		lit.count = 0;
+	}
+	x1 = (float)RValue_toReal(args[0]);
+	x2 = (float)RValue_toReal(args[2]);
+	if (lit.count < 2) {
+		lit.x1[lit.count] = x1 < x2 ? x1 : x2;
+		lit.x2[lit.count++] = x1 < x2 ? x2 : x1;
+	}
+	renderer->drawColor = LIT_BAR;
+	renderer->drawAlpha = 1.0f;
+	out = next_draw_rectangle(ctx, args, argCount);
 	renderer->drawColor = 0x808080;
+	renderer->drawAlpha = 0.4f;
+	return out;
+}
+
+/* Text on a lit bar: white turns dark, the black drop shadow is left out, and colors (the seed's green digit) darken. */
+static RValue wii_draw_text(VMContext *ctx, RValue *args, int32_t argCount)
+{
+	Renderer *renderer = ctx->runner->renderer;
+	uint32_t color;
+	float x;
+	int32_t k;
+	RValue out;
+
+	if (!renderer || argCount < 3 || !ctx->currentInstance || lit.inst != ctx->currentInstance ||
+	    lit.frame != ctx->runner->frameCount)
+		return next_draw_text(ctx, args, argCount);
+	x = (float)RValue_toReal(args[0]);
+	for (k = 0; k < lit.count && (x < lit.x1[k] || x > lit.x2[k]); k++)
+		;
+	if (k == lit.count)
+		return next_draw_text(ctx, args, argCount);
+	color = renderer->drawColor;
+	if (color == 0)
+		return RValue_makeUndefined();
+	renderer->drawColor = color == 0xffffff ? LIT_TEXT : (color >> 1) & 0x7f7f7f;
+	out = next_draw_text(ctx, args, argCount);
+	renderer->drawColor = color;
 	return out;
 }
 
@@ -420,12 +474,17 @@ void WiiControls_hookScripts(VMContext *ctx)
 
 		scriptCode[k] = s >= 0 ? ctx->codeIndexByName[s].value : -1;
 	}
-	engine_draw_rectangle = VM_findBuiltin(ctx, "draw_rectangle");
 	repeat(ctx->funcCallCacheCount, fi) {
 		const char *name = ctx->dataWin->func.functions[fi].name;
 
-		if (engine_draw_rectangle && ctx->funcCallCache[fi].builtin == (void *)engine_draw_rectangle)
+		if (name && ctx->funcCallCache[fi].builtin && strcmp(name, "draw_rectangle") == 0) {
+			next_draw_rectangle = (BuiltinFunc)ctx->funcCallCache[fi].builtin;
 			ctx->funcCallCache[fi].builtin = (void *)wii_draw_rectangle;
+		}
+		if (name && ctx->funcCallCache[fi].builtin && strcmp(name, "draw_text") == 0) {
+			next_draw_text = (BuiltinFunc)ctx->funcCallCache[fi].builtin;
+			ctx->funcCallCache[fi].builtin = (void *)wii_draw_text;
+		}
 		for (k = 0; k < SCR_COUNT && name; k++)
 			if (standIns[k] && scriptCode[k] >= 0 && strcmp(name, scriptNames[k]) == 0) {
 				ctx->funcCallCache[fi].builtin = (void *)standIns[k];

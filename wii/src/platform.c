@@ -371,8 +371,8 @@ static void register_stubs(VMContext *ctx)
 			if (b)
 				ctx->funcCallCache[fi].builtin = (void *)b;
 		}
+		WiiSafe_hookScripts(ctx); /* first: the controls hooks wrap its draw_rectangle and draw_text */
 		WiiControls_hookScripts(ctx);
-		WiiSafe_hookScripts(ctx);
 		Wii_hookAm2rScripts(ctx);
 		Wii_addCredits(ctx->dataWin);
 		hook_get_text(ctx);

@@ -53,7 +53,7 @@ In menus, **A** selects and **B** goes back on every Nintendo controller; on a D
 ## Picture
 
 - The console's own screen setting (Wii Settings → Screen → 4:3 or 16:9) picks the video mode. On a widescreen display, one has the ability to toggle widescreen off. With it toggled off, you get pillarboxed 4:3.
-- **240p** draws each of the game's 240 lines once, for CRT TVs that show 240p sharply. In 240p the options menus draw their highlight bar brighter, since a CRT all but hides the original's faint gray.
+- **240p** draws each of the game's 240 lines once, for CRT TVs that show 240p sharply.
 - **Aspect Correction** (Options → Display, right under Widescreen): widens the picture to the full width of the TV, so the game's pixels come out square, as on PC. Disabled keeps Nintendo's usual width, about 9% narrower, with thin black bars at the sides. Enabled can lose a little more of the sides to a CRT's overscan; Resize/Move Screen can pull it back in.
 - **Scanlines** (Options → Display, right under Aspect Correction): Left/Right to choose between Disabled, 100%, 75%, 50% and 25%. At 100%, every other line is black, which on a 480p CRT gives the look of 240p on a high-end CRT. The lower values darken the lines less. Only available in 480p.
 - **Resize/Move Screen** (Options → Display): if your TV cuts the edges, the d-pad pulls the picture in from the sides and the top/bottom, and **A** held with the d-pad moves the whole picture. **B** closes it.
