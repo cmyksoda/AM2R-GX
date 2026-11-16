@@ -6,6 +6,7 @@
 #include "input.h"
 #include "instance.h"
 #include "log.h"
+#include "overscan.h"
 #include "renderer.h"
 #include "runner.h"
 #include "rvalue.h"
@@ -383,10 +384,12 @@ static RValue wii_get_xjoybtnsprite(VMContext *ctx, RValue *args, int32_t argCou
 }
 
 /* What these calls reached before: the safe area's wrappers (they hook first), then the engine. */
-static BuiltinFunc next_draw_rectangle, next_draw_text;
+static BuiltinFunc next_draw_rectangle, next_draw_text, next_draw_background_ext;
+static int32_t bgOptionLine = -1;
+static float optionLineWidth = 1.0f;
 
 /* The chosen options row: the original c_gray bar at alpha 0.4 blits to about 15% gray, nearly invisible on a CRT, so
- * it is drawn as a light bar with dark text instead, in every video mode. */
+ * High Contrast (Display, on by default) draws it as a light bar with dark text instead. */
 #define LIT_BAR 0xd8d8d8
 #define LIT_TEXT 0x101010
 
@@ -396,43 +399,87 @@ static struct {
 	float x1[2], x2[2];
 } lit;
 
-static bool option_row(VMContext *ctx)
-{
-	static const char *const rows[] = { "oOptionLR", "oOptionSlider", "oOptionSeed" };
-	size_t k;
+/* Rows with a value beside them light a draw_rectangle; plain rows (Done, the Options, pause and title lists, the
+ * Logbook) light a bgOptionLine stretched across the label. */
+static const char *const valueRows[] = { "oOptionLR", "oOptionSlider", "oOptionSeed", NULL };
+static const char *const plainRows[] = {
+	"oPauseOption", "oNormalOption", "oNormalOptionC", "oNormalOptionR", "oLog", "oLogEntry", NULL
+};
 
-	for (k = 0; k < sizeof rows / sizeof rows[0]; k++)
-		if (ctx->currentInstance->objectIndex == Wii_objectIndex(ctx->runner, rows[k]))
+static bool drawn_by(VMContext *ctx, const char *const *rows)
+{
+	for (; *rows; rows++)
+		if (ctx->currentInstance->objectIndex == Wii_objectIndex(ctx->runner, *rows))
 			return true;
 	return false;
 }
 
-static RValue wii_draw_rectangle(VMContext *ctx, RValue *args, int32_t argCount)
+static void light_up(VMContext *ctx, float x1, float x2)
 {
-	Renderer *renderer = ctx->runner->renderer;
-	float x1, x2;
-	RValue out;
-
-	if (!renderer || renderer->drawColor != 0x808080 || renderer->drawAlpha != 0.4f || argCount < 4 ||
-	    !ctx->currentInstance || !option_row(ctx))
-		return next_draw_rectangle(ctx, args, argCount);
 	if (lit.inst != ctx->currentInstance || lit.frame != ctx->runner->frameCount) {
 		lit.inst = ctx->currentInstance;
 		lit.frame = ctx->runner->frameCount;
 		lit.count = 0;
 	}
-	x1 = (float)RValue_toReal(args[0]);
-	x2 = (float)RValue_toReal(args[2]);
 	if (lit.count < 2) {
 		lit.x1[lit.count] = x1 < x2 ? x1 : x2;
 		lit.x2[lit.count++] = x1 < x2 ? x2 : x1;
 	}
+}
+
+#define SEED_LIME (140 | 255 << 8 | 100 << 16) /* make_color_rgb(140, 255, 100), as the game packs its green */
+
+/* The Seed row draws its label bar, then its digits box. */
+static bool seed_box_editing(VMContext *ctx)
+{
+	Instance *inst = ctx->currentInstance;
+
+	return inst->objectIndex == Wii_objectIndex(ctx->runner, "oOptionSeed") && lit.inst == inst &&
+	       lit.frame == ctx->runner->frameCount && lit.count == 1 &&
+	       var_num(ctx->runner, inst, "editing", INSTANCE_SELF, 0) != 0;
+}
+
+static RValue wii_draw_rectangle(VMContext *ctx, RValue *args, int32_t argCount)
+{
+	Renderer *renderer = ctx->runner->renderer;
+	RValue out;
+
+	if (!Overscan_highlights() || !renderer || renderer->drawColor != 0x808080 || renderer->drawAlpha != 0.4f || argCount < 4 ||
+	    !ctx->currentInstance || !drawn_by(ctx, valueRows))
+		return next_draw_rectangle(ctx, args, argCount);
+	/* While a seed is being edited its digits box goes dark instead, under a bright lime digit (wii_draw_text). */
+	if (seed_box_editing(ctx)) {
+		renderer->drawColor = LIT_TEXT;
+		renderer->drawAlpha = 1.0f;
+		out = next_draw_rectangle(ctx, args, argCount);
+		renderer->drawColor = 0x808080;
+		renderer->drawAlpha = 0.4f;
+		return out;
+	}
+	light_up(ctx, (float)RValue_toReal(args[0]), (float)RValue_toReal(args[2]));
 	renderer->drawColor = LIT_BAR;
 	renderer->drawAlpha = 1.0f;
 	out = next_draw_rectangle(ctx, args, argCount);
 	renderer->drawColor = 0x808080;
 	renderer->drawAlpha = 0.4f;
 	return out;
+}
+
+static RValue wii_draw_background_ext(VMContext *ctx, RValue *args, int32_t argCount)
+{
+	RValue lit_args[8];
+	float x;
+
+	if (!Overscan_highlights() || argCount != 8 || bgOptionLine < 0 || RValue_toInt32(args[0]) != bgOptionLine ||
+	    RValue_toInt32(args[6]) != 0xa0a0a0 || (float)RValue_toReal(args[7]) != 0.4f || !ctx->currentInstance ||
+	    !drawn_by(ctx, plainRows))
+		return next_draw_background_ext(ctx, args, argCount);
+	x = (float)RValue_toReal(args[1]);
+	light_up(ctx, x, x + optionLineWidth * (float)RValue_toReal(args[3]));
+	memcpy(lit_args, args, sizeof lit_args);
+	lit_args[6] = RValue_makeInt32(LIT_BAR);
+	lit_args[7] = RValue_makeReal(1.0);
+	return next_draw_background_ext(ctx, lit_args, 8);
 }
 
 /* Text on a lit bar: white turns dark, the black drop shadow is left out, and colors (the seed's green digit) darken. */
@@ -444,15 +491,22 @@ static RValue wii_draw_text(VMContext *ctx, RValue *args, int32_t argCount)
 	int32_t k;
 	RValue out;
 
-	if (!renderer || argCount < 3 || !ctx->currentInstance || lit.inst != ctx->currentInstance ||
+	if (!Overscan_highlights() || !renderer || argCount < 3 || !ctx->currentInstance || lit.inst != ctx->currentInstance ||
 	    lit.frame != ctx->runner->frameCount)
 		return next_draw_text(ctx, args, argCount);
 	x = (float)RValue_toReal(args[0]);
 	for (k = 0; k < lit.count && (x < lit.x1[k] || x > lit.x2[k]); k++)
 		;
-	if (k == lit.count)
-		return next_draw_text(ctx, args, argCount);
 	color = renderer->drawColor;
+	if (k == lit.count && (color == 0 || color == 0xffffff ||
+			       ctx->currentInstance->objectIndex != Wii_objectIndex(ctx->runner, "oOptionSeed")))
+		return next_draw_text(ctx, args, argCount);
+	if (k == lit.count) {
+		renderer->drawColor = SEED_LIME;
+		out = next_draw_text(ctx, args, argCount);
+		renderer->drawColor = color;
+		return out;
+	}
 	if (color == 0)
 		return RValue_makeUndefined();
 	renderer->drawColor = color == 0xffffff ? LIT_TEXT : (color >> 1) & 0x7f7f7f;
@@ -474,6 +528,14 @@ void WiiControls_hookScripts(VMContext *ctx)
 
 		scriptCode[k] = s >= 0 ? ctx->codeIndexByName[s].value : -1;
 	}
+	for (uint32_t i = 0; i < ctx->dataWin->bgnd.count; i++) {
+		const Background *bg = &ctx->dataWin->bgnd.backgrounds[i];
+
+		if (bg->name && strcmp(bg->name, "bgOptionLine") == 0 && bg->tpagIndex >= 0) {
+			bgOptionLine = (int32_t)i;
+			optionLineWidth = ctx->dataWin->tpag.items[bg->tpagIndex].boundingWidth;
+		}
+	}
 	repeat(ctx->funcCallCacheCount, fi) {
 		const char *name = ctx->dataWin->func.functions[fi].name;
 
@@ -484,6 +546,11 @@ void WiiControls_hookScripts(VMContext *ctx)
 		if (name && ctx->funcCallCache[fi].builtin && strcmp(name, "draw_text") == 0) {
 			next_draw_text = (BuiltinFunc)ctx->funcCallCache[fi].builtin;
 			ctx->funcCallCache[fi].builtin = (void *)wii_draw_text;
+		}
+		if (name && ctx->funcCallCache[fi].builtin && bgOptionLine >= 0 &&
+		    strcmp(name, "draw_background_ext") == 0) {
+			next_draw_background_ext = (BuiltinFunc)ctx->funcCallCache[fi].builtin;
+			ctx->funcCallCache[fi].builtin = (void *)wii_draw_background_ext;
 		}
 		for (k = 0; k < SCR_COUNT && name; k++)
 			if (standIns[k] && scriptCode[k] >= 0 && strcmp(name, scriptNames[k]) == 0) {
@@ -609,24 +676,23 @@ static bool set_row_text(Instance *row, int32_t var, const char *text)
 	return true;
 }
 
-/* Every Display row already stands in for something, so Aspect Correction is a new one under Widescreen. As in
- * move_scanline_row, the per-row arrays, optionids and op* indexes below it shift together. */
-static int32_t insert_aspect_row(Runner *runner, Instance *menu)
+/* Every Display row already stands in for something, so ours are new rows under `after`. As in move_scanline_row,
+ * the per-row arrays, optionids and op* indexes below it shift together. */
+static int32_t insert_display_row(Runner *runner, Instance *menu, int32_t after, const char *name, const char *tip)
 {
 	static const char *const indexVars[] = { "opButtonType", "opShowHUD", "opShowMap", "opCounterStyle",
 						 "opShowHints", "opShowScans", "opLanguage", "menuSize" };
 	static const char *const rowArrays[] = { "op", "canEdit", "tip" };
-	int32_t wide = (int32_t)var_num(runner, menu, "opWidescreen", INSTANCE_SELF, -1);
-	int32_t size = (int32_t)var_num(runner, menu, "menuSize", INSTANCE_SELF, -1), at = wide + 1;
+	int32_t size = (int32_t)var_num(runner, menu, "menuSize", INSTANCE_SELF, -1), at = after + 1;
 	int32_t optionid = var_id(runner, "optionid", INSTANCE_SELF), object = Wii_objectIndex(runner, "oOptionLR");
 	int32_t label = var_id(runner, "label", INSTANCE_SELF), id, v, k;
 	float sep = (float)var_num(runner, menu, "SPACER", INSTANCE_SELF, 16);
-	Instance *wideRow = op_row(runner, menu, wide), *row, *other;
+	Instance *above = op_row(runner, menu, after), *row, *other;
 	RValue arrays[3], added[3];
 	unsigned a;
 
-	if (wide < 0 || size <= at || !wideRow || optionid < 0 || label < 0 || object < 0) {
-		logWarn("controls: no room for Aspect Correction (%d, %d)\n", (int)wide, (int)size);
+	if (after < 0 || size <= at || !above || optionid < 0 || label < 0 || object < 0) {
+		logWarn("controls: no room for %s (%d, %d)\n", name, (int)after, (int)size);
 		return -1;
 	}
 	for (a = 0; a < 3; a++) {
@@ -636,14 +702,14 @@ static int32_t insert_aspect_row(Runner *runner, Instance *menu)
 			return -1;
 	}
 	for (k = 0; k < OP_SLOTS; k++)
-		if ((other = op_row(runner, menu, k)) && other->y > wideRow->y)
+		if ((other = op_row(runner, menu, k)) && other->y > above->y)
 			move_instance(runner, other, other->y + sep);
-	if (!(row = Runner_createInstance(runner, wideRow->x, wideRow->y + sep, object)))
+	if (!(row = Runner_createInstance(runner, above->x, above->y + sep, object)))
 		return -1;
-	set_row_text(row, label, "Aspect Correction");
+	set_row_text(row, label, name);
 	added[0] = RValue_makeInt32((int32_t)row->instanceId);
 	added[1] = RValue_makeInt32(1);
-	added[2] = RValue_makeOwnedString(safeStrdup("Square pixels, as on PC: fills the full width of the TV"));
+	added[2] = RValue_makeOwnedString(safeStrdup(tip));
 	for (a = 0; a < 3; a++) {
 		GMLArray_growTo(arrays[a].array, size + 2);
 		for (k = size + 1; k > at; k--)
@@ -655,38 +721,57 @@ static int32_t insert_aspect_row(Runner *runner, Instance *menu)
 			Instance_setSelfVar(other, optionid, RValue_makeInt32(k));
 	for (a = 0; a < sizeof indexVars / sizeof indexVars[0]; a++) {
 		v = (int32_t)var_num(runner, menu, indexVars[a], INSTANCE_SELF, -1);
-		if (v > wide && (id = var_id(runner, indexVars[a], INSTANCE_SELF)) >= 0)
+		if (v > after && (id = var_id(runner, indexVars[a], INSTANCE_SELF)) >= 0)
 			Instance_setSelfVar(menu, id, RValue_makeInt32(v + 1));
 	}
 	if ((id = var_id(runner, "vTargetY", INSTANCE_SELF)) >= 0)
 		Instance_setSelfVar(menu, id, RValue_makeReal(RValue_toReal(Instance_getSelfVar(menu, id)) + sep));
-	logInfo("controls: Aspect Correction row added at %d\n", (int)at);
+	logInfo("controls: %s row added at %d\n", name, (int)at);
 	return at;
 }
 
-/* The game has no step for this row: a fresh left or right press toggles it here, with the game's own sound. */
-static void aspect_row_frame(Runner *runner, Instance *menu, int32_t at)
+/* The game has no step for our rows: a fresh left or right press flips them here, with the game's own sound. */
+static bool display_row_flipped(Runner *runner, Instance *menu, int32_t at)
 {
-	Instance *control = first_instance(runner, "oControl"), *row = op_row(runner, menu, at);
-	int32_t curropt = var_id(runner, "curropt", INSTANCE_GLOBAL), optext = var_id(runner, "optext", INSTANCE_SELF);
+	Instance *control = first_instance(runner, "oControl");
+	int32_t curropt = var_id(runner, "curropt", INSTANCE_GLOBAL);
+
+	return control && curropt >= 0 && var_num(runner, menu, "active", INSTANCE_SELF, 0) != 0 &&
+	       RValue_toInt32(Instance_getSelfVar(runner->vmContext->globalScopeInstance, curropt)) == at &&
+	       var_num(runner, control, "kRight", INSTANCE_SELF, 0) != var_num(runner, control, "kLeft", INSTANCE_SELF, 0) &&
+	       var_num(runner, control, "kRightPushedSteps", INSTANCE_SELF, 1) ==
+		       var_num(runner, control, "kLeftPushedSteps", INSTANCE_SELF, 1) &&
+	       var_num(runner, control, "kUp", INSTANCE_SELF, 1) == 0 && var_num(runner, control, "kDown", INSTANCE_SELF, 1) == 0;
+}
+
+static void show_enabled(Runner *runner, Instance *row, bool on)
+{
+	int32_t optext = var_id(runner, "optext", INSTANCE_SELF);
 	RValue args[2], text;
 
-	if (!row || !control || curropt < 0 || optext < 0)
+	if (!row || optext < 0)
 		return;
-	if (var_num(runner, menu, "active", INSTANCE_SELF, 0) != 0 &&
-	    RValue_toInt32(Instance_getSelfVar(runner->vmContext->globalScopeInstance, curropt)) == at &&
-	    var_num(runner, control, "kRight", INSTANCE_SELF, 0) != var_num(runner, control, "kLeft", INSTANCE_SELF, 0) &&
-	    var_num(runner, control, "kRightPushedSteps", INSTANCE_SELF, 1) ==
-		    var_num(runner, control, "kLeftPushedSteps", INSTANCE_SELF, 1) &&
-	    var_num(runner, control, "kUp", INSTANCE_SELF, 1) == 0 && var_num(runner, control, "kDown", INSTANCE_SELF, 1) == 0) {
-		Overscan_setViWidth(Overscan_viWidth() ? 0 : ASPECT_WIDTH);
-		WiiVideo_setActiveWidth(Overscan_viWidth());
-	}
 	args[0] = RValue_makeString("GlobalOptions");
-	args[1] = RValue_makeString(Overscan_viWidth() ? "Enabled" : "Disabled");
+	args[1] = RValue_makeString(on ? "Enabled" : "Disabled");
 	text = call_script(runner->vmContext, SCR_TEXT, args, 2);
 	set_row_text(row, optext, text.type == RVALUE_STRING && text.string ? text.string : args[1].string);
 	RValue_free(&text);
+}
+
+static void aspect_row_frame(Runner *runner, Instance *menu, int32_t at)
+{
+	if (display_row_flipped(runner, menu, at)) {
+		Overscan_setViWidth(Overscan_viWidth() ? 0 : ASPECT_WIDTH);
+		WiiVideo_setActiveWidth(Overscan_viWidth());
+	}
+	show_enabled(runner, op_row(runner, menu, at), Overscan_viWidth() != 0);
+}
+
+static void highlight_row_frame(Runner *runner, Instance *menu, int32_t at)
+{
+	if (display_row_flipped(runner, menu, at))
+		Overscan_setHighlights(!Overscan_highlights());
+	show_enabled(runner, op_row(runner, menu, at), Overscan_highlights());
 }
 
 /* Scanlines draw nothing in 240p (a CRT has real ones there), so their row leaves the menu while 240p is on and the
@@ -849,7 +934,7 @@ void WiiControls_frame(Runner *runner)
 {
 	static uint32_t controlMenu, joypadMenu, displayMenu;
 	static bool scanlineRowHidden;
-	static int32_t aspectRow = -1;
+	static int32_t aspectRow = -1, highlightRow = -1;
 	Instance *menu;
 
 	if (!runner || !runner->vmContext)
@@ -866,11 +951,17 @@ void WiiControls_frame(Runner *runner)
 		if (menu->instanceId != displayMenu) {
 			displayMenu = menu->instanceId;
 			move_scanline_row(runner, menu);
-			aspectRow = insert_aspect_row(runner, menu);
+			aspectRow = insert_display_row(runner, menu,
+						       (int32_t)var_num(runner, menu, "opWidescreen", INSTANCE_SELF, -1),
+						       "Aspect Correction", "Square pixels, as on PC: fills the full width of the TV");
+			highlightRow = insert_display_row(runner, menu, aspectRow, "High Contrast",
+							  "Changes highlights in menus for better visibility");
 			scanlineRowHidden = false;
 		}
 		if (aspectRow >= 0)
 			aspect_row_frame(runner, menu, aspectRow);
+		if (highlightRow >= 0)
+			highlight_row_frame(runner, menu, highlightRow);
 		fit_scanline_row(runner, menu, &scanlineRowHidden);
 		blank_value(runner, menu, "opFullscreen");
 		blank_value(runner, menu, "opScale");

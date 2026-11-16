@@ -15,6 +15,7 @@ static int g_vi; /* VI active width, 0 = the mode's own */
 static int g_mh;
 static int g_mv = MARGIN_DEFAULT_V;
 static int g_scan;
+static int g_lit = 1; /* High Contrast */
 static OverscanPage g_page;
 static char g_path[96]; /* this console's own file; the shared overscan.txt is only a fallback */
 
@@ -43,13 +44,13 @@ void Overscan_load(void)
 	FILE *f = fopen(own_path(), "r");
 	const char *from = f ? "this console's file" : "defaults";
 	char shared[96];
-	int h = 0, v = 0, vi = 0, y = 0, x = 0, mh = 0, mv = MARGIN_DEFAULT_V, scan = 0, n = 0;
+	int h = 0, v = 0, vi = 0, y = 0, x = 0, mh = 0, mv = MARGIN_DEFAULT_V, scan = 0, lit = 1, n = 0;
 
 	snprintf(shared, sizeof shared, "%s/overscan.txt", WII_APP_DIR);
 	if (!f && (f = fopen(shared, "r")))
 		from = "overscan.txt";
 	if (f) {
-		n = fscanf(f, "%d %d %d %d %d %d %d %d", &h, &v, &vi, &y, &x, &mh, &mv, &scan);
+		n = fscanf(f, "%d %d %d %d %d %d %d %d %d", &h, &v, &vi, &y, &x, &mh, &mv, &scan, &lit);
 		if (n >= 2) {
 			g_h = clampi(h, 0, OVERSCAN_MAX_H);
 			g_v = clampi(v, 0, OVERSCAN_MAX_V);
@@ -66,11 +67,13 @@ void Overscan_load(void)
 		}
 		if (n >= 8)
 			g_scan = clampi(scan, 0, SCANLINE_MAX);
+		if (n >= 9)
+			g_lit = lit != 0;
 		fclose(f);
 	}
 	/* Not the file's name: testers share this log, and the name carries the console's device id. */
-	logInfo("Overscan: h=%d v=%d vi=%d y=%d x=%d margins %d/%d scanlines %d%% (%s)\n", g_h, g_v, g_vi, g_y, g_x, g_mh,
-		g_mv, g_scan * 25, from);
+	logInfo("Overscan: h=%d v=%d vi=%d y=%d x=%d margins %d/%d scanlines %d%% highlights %s (%s)\n", g_h, g_v, g_vi,
+		g_y, g_x, g_mh, g_mv, g_scan * 25, g_lit ? "high contrast" : "game's own", from);
 }
 
 static void Overscan_save(void)
@@ -78,7 +81,9 @@ static void Overscan_save(void)
 	FILE *f = fopen(own_path(), "w");
 
 	if (f) {
-		if (g_scan)
+		if (!g_lit)
+			fprintf(f, "%d %d %d %d %d %d %d %d 0\n", g_h, g_v, g_vi, g_y, g_x, g_mh, g_mv, g_scan);
+		else if (g_scan)
 			fprintf(f, "%d %d %d %d %d %d %d %d\n", g_h, g_v, g_vi, g_y, g_x, g_mh, g_mv, g_scan);
 		else if (g_mh || g_mv != MARGIN_DEFAULT_V)
 			fprintf(f, "%d %d %d %d %d %d %d\n", g_h, g_v, g_vi, g_y, g_x, g_mh, g_mv);
@@ -206,5 +211,16 @@ int Overscan_scanlines(void)
 void Overscan_stepScanlines(int dir)
 {
 	g_scan = (g_scan + SCANLINE_MAX + 1 - dir) % (SCANLINE_MAX + 1);
+	Overscan_save();
+}
+
+bool Overscan_highlights(void)
+{
+	return g_lit;
+}
+
+void Overscan_setHighlights(bool on)
+{
+	g_lit = on;
 	Overscan_save();
 }
