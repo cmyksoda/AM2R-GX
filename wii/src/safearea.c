@@ -15,7 +15,8 @@
 #include <math.h>
 #include <string.h>
 
-/* AM2R's prompt rows sit at view_yview + 212 and + 225; the pause map's status bar ends above 205. */
+/* AM2R's prompt rows sit at view_yview + 212 and + 225; the pause map's status bar ends above 205, or above 220
+ * with Items Collected's second row, which band_move lifts clear. */
 #define ROW_UPPER 205
 #define ROW_LOWER 220
 #define NOTIFY_HIDDEN 30 /* oNotification's offset when it is fully slid out */
@@ -155,7 +156,7 @@ int32_t WiiSafe_hudSplit(Runner *runner, int32_t width)
 	return x < width ? x : width;
 }
 
-/* A pause map status band draw in flight: how far it moves (set by band_draw). */
+/* A pause map status band draw in flight: how far it moves (set by band_move). */
 static struct {
 	bool active;
 	float dx, dy;
@@ -402,8 +403,8 @@ static RValue wii_draw_txt_2buttons(VMContext *ctx, RValue *args, int32_t argCou
 /* The inventory's "[arrows] - Select item" row is a background plus a draw_text, not a prompt script: hold the arrows
  * until the text arrives, then center the pair. */
 static BuiltinFunc engineDrawBackground, engineDrawText, engineStringWidth, engineStringHeight, engineDrawRectangle;
-static BuiltinFunc engineDrawBackgroundExt, engineDrawBackgroundPartExt, engineDrawTextColour, engineDrawRectangleColour,
-	engineDrawSetAlpha;
+static BuiltinFunc engineDrawBackgroundExt, engineDrawBackgroundPartExt, engineDrawTextColour,
+	engineDrawRectangleColour, engineDrawSetAlpha;
 static int32_t introText = -2, introFull = -1;
 static int32_t tipArrow = -2, subscreenFg = -2, optionsFg = -2, scoreScreen = -2, titleBg = -2,
 	       bgVersion = -1, bgUrl = -1;

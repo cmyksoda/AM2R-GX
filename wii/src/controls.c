@@ -444,8 +444,8 @@ static RValue wii_draw_rectangle(VMContext *ctx, RValue *args, int32_t argCount)
 	Renderer *renderer = ctx->runner->renderer;
 	RValue out;
 
-	if (!Overscan_highlights() || !renderer || renderer->drawColor != 0x808080 || renderer->drawAlpha != 0.4f || argCount < 4 ||
-	    !ctx->currentInstance || !drawn_by(ctx, valueRows))
+	if (!Overscan_highlights() || !renderer || renderer->drawColor != 0x808080 || renderer->drawAlpha != 0.4f ||
+	    argCount < 4 || !ctx->currentInstance || !drawn_by(ctx, valueRows))
 		return next_draw_rectangle(ctx, args, argCount);
 	/* While a seed is being edited its digits box goes dark instead, under a bright lime digit (wii_draw_text). */
 	if (seed_box_editing(ctx)) {
@@ -482,7 +482,8 @@ static RValue wii_draw_background_ext(VMContext *ctx, RValue *args, int32_t argC
 	return next_draw_background_ext(ctx, lit_args, 8);
 }
 
-/* Text on a lit bar: white turns dark, the black drop shadow is left out, and colors (the seed's green digit) darken. */
+/* Text on a lit bar: white turns dark, the black drop shadow is left out, and colors (the seed's green digit)
+ * darken. */
 static RValue wii_draw_text(VMContext *ctx, RValue *args, int32_t argCount)
 {
 	Renderer *renderer = ctx->runner->renderer;
@@ -491,8 +492,8 @@ static RValue wii_draw_text(VMContext *ctx, RValue *args, int32_t argCount)
 	int32_t k;
 	RValue out;
 
-	if (!Overscan_highlights() || !renderer || argCount < 3 || !ctx->currentInstance || lit.inst != ctx->currentInstance ||
-	    lit.frame != ctx->runner->frameCount)
+	if (!Overscan_highlights() || !renderer || argCount < 3 || !ctx->currentInstance ||
+	    lit.inst != ctx->currentInstance || lit.frame != ctx->runner->frameCount)
 		return next_draw_text(ctx, args, argCount);
 	x = (float)RValue_toReal(args[0]);
 	for (k = 0; k < lit.count && (x < lit.x1[k] || x > lit.x2[k]); k++)
@@ -738,10 +739,12 @@ static bool display_row_flipped(Runner *runner, Instance *menu, int32_t at)
 
 	return control && curropt >= 0 && var_num(runner, menu, "active", INSTANCE_SELF, 0) != 0 &&
 	       RValue_toInt32(Instance_getSelfVar(runner->vmContext->globalScopeInstance, curropt)) == at &&
-	       var_num(runner, control, "kRight", INSTANCE_SELF, 0) != var_num(runner, control, "kLeft", INSTANCE_SELF, 0) &&
+	       var_num(runner, control, "kRight", INSTANCE_SELF, 0) !=
+		       var_num(runner, control, "kLeft", INSTANCE_SELF, 0) &&
 	       var_num(runner, control, "kRightPushedSteps", INSTANCE_SELF, 1) ==
 		       var_num(runner, control, "kLeftPushedSteps", INSTANCE_SELF, 1) &&
-	       var_num(runner, control, "kUp", INSTANCE_SELF, 1) == 0 && var_num(runner, control, "kDown", INSTANCE_SELF, 1) == 0;
+	       var_num(runner, control, "kUp", INSTANCE_SELF, 1) == 0 &&
+	       var_num(runner, control, "kDown", INSTANCE_SELF, 1) == 0;
 }
 
 static void show_enabled(Runner *runner, Instance *row, bool on)
@@ -951,9 +954,9 @@ void WiiControls_frame(Runner *runner)
 		if (menu->instanceId != displayMenu) {
 			displayMenu = menu->instanceId;
 			move_scanline_row(runner, menu);
-			aspectRow = insert_display_row(runner, menu,
-						       (int32_t)var_num(runner, menu, "opWidescreen", INSTANCE_SELF, -1),
-						       "Aspect Correction", "Square pixels, as on PC: fills the full width of the TV");
+			aspectRow = insert_display_row(
+				runner, menu, (int32_t)var_num(runner, menu, "opWidescreen", INSTANCE_SELF, -1),
+				"Aspect Correction", "Square pixels, as on PC: fills the full width of the TV");
 			highlightRow = insert_display_row(runner, menu, aspectRow, "High Contrast",
 							  "Changes highlights in menus for better visibility");
 			scanlineRowHidden = false;
