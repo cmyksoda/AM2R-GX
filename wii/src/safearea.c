@@ -12,6 +12,7 @@
 #include "utils.h"
 #include "vm.h"
 
+#include <math.h>
 #include <string.h>
 
 /* AM2R's prompt rows sit at view_yview + 212 and + 225; the pause map's status bar ends above 205. */
@@ -22,6 +23,14 @@
 #define SCORE_BOTTOM 200 /* the score screen's closing lines sit on row 220 */
 #define SAFE_BOTTOM (240 - WiiSafe_rows())
 #define PROMPT_EDGE 8 /* prompts this close to a side are corner prompts (AM2R puts them at 2 and 318) */
+#define BAND_TOP 195 /* the pause map's status band: one stats row at 198, a second at 209 for Items Collected */
+#define BAND_CLEAR 209 /* rows the band's text needs above the prompts: one stats row */
+#define BAND_CLEAR_TWO 220 /* ...or two */
+#define BAND_WIDE 100 /* wider pictures are the band's own strips (bg_MapBottom...), icons painted in */
+#define BAND_SPLIT 175 /* the strips are bare from 156 to 194: each half goes to its own side from here */
+#define BAND_BARE 19
+#define PROMPT_ROW 225 /* where the pause screens draw their bottom prompts */
+#define BAND_ROW_GAP 8 /* the second stats row sits 11 rows below the first */
 #define PORT_LINK "github.com/cmyksoda/AM2R-GX"
 #define HOME_LINK "cmyksoda.cc"
 #define LINK_TOP 3 /* the menu font's letters start 3 rows lower than the blog picture's */
@@ -146,6 +155,12 @@ int32_t WiiSafe_hudSplit(Runner *runner, int32_t width)
 	return x < width ? x : width;
 }
 
+/* A pause map status band draw in flight: how far it moves (set by band_draw). */
+static struct {
+	bool active;
+	float dx, dy;
+} band;
+
 /* How far up to draw what the current instance draws. The notification box lifts as it slides in, so a box that is
  * slid out stays below the screen. */
 float WiiSafe_lift(Runner *runner)
@@ -164,6 +179,8 @@ float WiiSafe_lift(Runner *runner)
 		intro = Wii_objectIndex(runner, "oIntroController");
 		offset = Wii_varId(runner, "offset", INSTANCE_SELF);
 	}
+	if (band.active)
+		return band.dy;
 	if (inst->objectIndex == popup || inst->objectIndex == scanning || inst->objectIndex == scanMonster ||
 	    inst->objectIndex == intro)
 		return -WiiSafe_rows();
@@ -177,16 +194,23 @@ float WiiSafe_lift(Runner *runner)
 	return -WiiSafe_rows() * (NOTIFY_HIDDEN - off) / NOTIFY_HIDDEN;
 }
 
-/* How far right to draw what the current instance draws: the notification box sits in the bottom-left corner. */
+/* How far right to draw what the current instance draws: the notification box sits in the bottom-left corner,
+ * "Game Saved" (oPopupText) in the bottom-right one. */
 float WiiSafe_shift(Runner *runner)
 {
-	static int32_t notify = -2;
+	static int32_t notify = -2, popup;
 	Instance *inst = runner && runner->vmContext ? runner->vmContext->currentInstance : NULL;
 
 	if (!inst)
 		return 0.0f;
-	if (notify == -2)
+	if (notify == -2) {
 		notify = Wii_objectIndex(runner, "oNotification");
+		popup = Wii_objectIndex(runner, "oPopupText");
+	}
+	if (band.active)
+		return band.dx;
+	if (inst->objectIndex == popup)
+		return -(float)Overscan_marginH();
 	return inst->objectIndex == notify ? (float)Overscan_marginH() : 0.0f;
 }
 
@@ -253,6 +277,13 @@ static float view_top(Runner *runner)
 	return cam ? cam->viewY : 0.0f;
 }
 
+static float view_left(Runner *runner)
+{
+	GMLCamera *cam = view0(runner);
+
+	return cam ? cam->viewX : 0.0f;
+}
+
 static float view_mid(Runner *runner)
 {
 	GMLCamera *cam = view0(runner);
@@ -293,10 +324,50 @@ static bool row_open(VMContext *ctx)
 	return row.inst == ctx->currentInstance && row.frame == ctx->runner->frameCount;
 }
 
+static bool inPrompt; /* a prompt script is drawing: its own rules place it */
+static bool in_subscreen_fg(VMContext *ctx);
+static const TexturePageItem *bg_item(DataWin *dw, int32_t bg);
+
+/* The pause map's status band (oSS_Fg, map page): its pictures and text move in from the sides with the HUD, and rise
+ * clear of the prompts that the HUD margin lifts toward it. Items Collected adds a second stats row, seen by its draws
+ * a row below the band's first (the band slides in, so rows are told apart from each other, not by place). */
+static bool band_move(VMContext *ctx, float x, float y, float width)
+{
+	static int32_t ssmode = -2;
+	static struct {
+		int32_t frame, twoFrame;
+		float top;
+	} rows = { -1, -9, 0.0f };
+	Runner *runner = ctx->runner;
+	float rel = y - view_top(runner), clear;
+
+	if (inPrompt || !in_subscreen_fg(ctx) || rel < BAND_TOP)
+		return false;
+	if (ssmode == -2)
+		ssmode = Wii_varId(runner, "ssmode", INSTANCE_GLOBAL);
+	if (ssmode < 0 || RValue_toReal(Instance_getSelfVar(runner->vmContext->globalScopeInstance, ssmode)) != 0)
+		return false;
+	if (rows.frame != runner->frameCount) {
+		rows.frame = runner->frameCount;
+		rows.top = rel;
+	} else if (rel < rows.top) {
+		rows.top = rel;
+	}
+	if (rel >= rows.top + BAND_ROW_GAP)
+		rows.twoFrame = runner->frameCount;
+	clear = (runner->frameCount - rows.twoFrame <= 1 ? BAND_CLEAR_TWO : BAND_CLEAR) - (PROMPT_ROW - WiiSafe_rows());
+	band.dy = clear > 0.0f ? -clear : 0.0f;
+	band.dx = x - view_left(runner) < BAND_SPLIT ? (float)Overscan_marginH()
+										   : -(float)Overscan_marginH();
+	band.active = band.dx != 0.0f || band.dy != 0.0f;
+	return band.active;
+}
+
 /* draw_txt_*(x, y, text, align (0 centers on x), ...) */
 static RValue draw_prompt(VMContext *ctx, int which, RValue *args, int32_t argCount)
 {
 	float y, rel;
+	RValue out;
 
 	if (scriptCode[which] < 0)
 		return RValue_makeUndefined();
@@ -312,7 +383,10 @@ static RValue draw_prompt(VMContext *ctx, int which, RValue *args, int32_t argCo
 		}
 		args[0] = RValue_makeReal(prompt_x(ctx->runner, (float)RValue_toReal(args[0])));
 	}
-	return VM_callCodeIndex(ctx, scriptCode[which], args, argCount);
+	inPrompt = true;
+	out = VM_callCodeIndex(ctx, scriptCode[which], args, argCount);
+	inPrompt = false;
+	return out;
 }
 
 static RValue wii_draw_txt_1button(VMContext *ctx, RValue *args, int32_t argCount)
@@ -328,7 +402,8 @@ static RValue wii_draw_txt_2buttons(VMContext *ctx, RValue *args, int32_t argCou
 /* The inventory's "[arrows] - Select item" row is a background plus a draw_text, not a prompt script: hold the arrows
  * until the text arrives, then center the pair. */
 static BuiltinFunc engineDrawBackground, engineDrawText, engineStringWidth, engineStringHeight, engineDrawRectangle;
-static BuiltinFunc engineDrawBackgroundExt, engineDrawTextColour, engineDrawRectangleColour, engineDrawSetAlpha;
+static BuiltinFunc engineDrawBackgroundExt, engineDrawBackgroundPartExt, engineDrawTextColour, engineDrawRectangleColour,
+	engineDrawSetAlpha;
 static int32_t introText = -2, introFull = -1;
 static int32_t tipArrow = -2, subscreenFg = -2, optionsFg = -2, scoreScreen = -2, titleBg = -2,
 	       bgVersion = -1, bgUrl = -1;
@@ -375,6 +450,12 @@ static RValue wii_draw_text(VMContext *ctx, RValue *args, int32_t argCount)
 	RValue w, moved[3];
 	float left, right, dx;
 
+	if (argCount == 3 && band_move(ctx, (float)RValue_toReal(args[0]), (float)RValue_toReal(args[1]), 0.0f)) {
+		RValue out = engineDrawText(ctx, args, argCount);
+
+		band.active = false;
+		return out;
+	}
 	if (argCount == 3 && in_object(ctx, introText) && introFull >= 0) {
 		RValue full = Instance_getSelfVar(ctx->currentInstance, introFull);
 		double over = RValue_toReal(args[1]) + RValue_toReal(engineStringHeight(ctx, &full, 1)) - SAFE_BOTTOM;
@@ -415,6 +496,37 @@ static const TexturePageItem *bg_item(DataWin *dw, int32_t bg)
 	return t >= 0 ? &dw->tpag.items[t] : NULL;
 }
 
+/* A band strip in halves, each moved in from its side; the bare columns at the split, stretched, fill both edges. */
+static RValue band_strip(VMContext *ctx, RValue *args, const TexturePageItem *pic)
+{
+	float mh = (float)Overscan_marginH(), bare = mh < BAND_BARE ? mh : BAND_BARE;
+	float x = (float)RValue_toReal(args[1]), xs = (float)RValue_toReal(args[3]), w = pic->boundingWidth;
+	const float from[4] = { 0.0f, BAND_SPLIT + bare, BAND_SPLIT, BAND_SPLIT };
+	const float wide[4] = { BAND_SPLIT - bare, w - BAND_SPLIT - bare, 1.0f, 1.0f };
+	const float at[4] = { x + mh, x + (BAND_SPLIT + bare) * xs - mh, x, x + w * xs - mh };
+	const float scale[4] = { xs, xs, mh, mh };
+	RValue part[11];
+	int k;
+
+	band.dx = 0.0f;
+	part[0] = args[0];
+	part[2] = RValue_makeReal(0.0);
+	part[4] = RValue_makeReal(pic->boundingHeight);
+	part[6] = args[2];
+	part[8] = args[4];
+	part[9] = args[6];
+	part[10] = args[7];
+	for (k = 0; k < 4; k++) {
+		part[1] = RValue_makeReal(from[k]);
+		part[3] = RValue_makeReal(wide[k]);
+		part[5] = RValue_makeReal(at[k]);
+		part[7] = RValue_makeReal(scale[k]);
+		engineDrawBackgroundPartExt(ctx, part, 11);
+	}
+	band.active = false;
+	return RValue_makeUndefined();
+}
+
 /* The title's corner lines: the version moves down and right, the links up and left, and their black boxes grow
  * back out to the screen's corners instead of floating. The blog's line is a picture, so ours replaces it as text in
  * the reddit line's font. */
@@ -426,6 +538,20 @@ static RValue wii_draw_background_ext(VMContext *ctx, RValue *args, int32_t argC
 	RValue fill[8], line[8], link = RValue_makeString(PORT_LINK), width;
 	int k;
 
+	const TexturePageItem *pic = bg_item(ctx->dataWin, bg);
+
+	if (pic && band_move(ctx, (float)RValue_toReal(args[1]), (float)RValue_toReal(args[2]),
+			     pic->boundingWidth * fabsf((float)RValue_toReal(args[3])))) {
+		RValue out;
+
+		if (pic->boundingWidth * fabsf((float)RValue_toReal(args[3])) >= BAND_WIDE && Overscan_marginH() > 0 &&
+		    engineDrawBackgroundPartExt)
+			return band_strip(ctx, args, pic);
+		out = engineDrawBackgroundExt(ctx, args, argCount);
+
+		band.active = false;
+		return out;
+	}
 	if (!in_object(ctx, titleBg) || !ver || !url || (bg != bgVersion && bg != bgUrl))
 		return engineDrawBackgroundExt(ctx, args, argCount);
 	memcpy(fill, args, sizeof fill);
@@ -552,6 +678,7 @@ void WiiSafe_hookScripts(VMContext *ctx)
 		introFull = Wii_varId(ctx->runner, "drawtext", INSTANCE_SELF);
 	}
 	engineDrawBackgroundExt = VM_findBuiltin(ctx, "draw_background_ext");
+	engineDrawBackgroundPartExt = VM_findBuiltin(ctx, "draw_background_part_ext");
 	engineDrawTextColour = VM_findBuiltin(ctx, "draw_text_colour");
 	engineDrawRectangleColour = VM_findBuiltin(ctx, "draw_rectangle_colour");
 	engineDrawSetAlpha = VM_findBuiltin(ctx, "draw_set_alpha");
