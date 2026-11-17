@@ -66,7 +66,8 @@ static void bodies_for_room(Runner *runner, Instance *self)
 	hornoad.room = runner->currentRoomIndex;
 	hornoad.vx = hornoad.vy = 0.0f;
 	hornoad.shape = object_box(obj, 0.0f, 0.0f, self->imageXscale, self->imageYscale);
-	hornoad.invMass = 1.0f / (obj->density * (hornoad.shape.r - hornoad.shape.l) * (hornoad.shape.b - hornoad.shape.t) *
+	hornoad.invMass = 1.0f / (obj->density *
+				  (hornoad.shape.r - hornoad.shape.l) * (hornoad.shape.b - hornoad.shape.t) *
 				  mpp * mpp * mpp);
 	hornoad.friction = obj->friction;
 	hornoad.restitution = obj->restitution;
@@ -131,7 +132,8 @@ static void hornoad_step(Runner *runner, Instance *self)
 		}
 	}
 	if (floor) {
-		float e = fmaxf(hornoad.restitution, floor->restitution), mu = sqrtf(hornoad.friction * floor->friction);
+		float e = fmaxf(hornoad.restitution, floor->restitution),
+		      mu = sqrtf(hornoad.friction * floor->friction);
 		float vn = hornoad.vy * mpp > RESTITUTION_THRESHOLD ? -e * hornoad.vy : 0.0f;
 		float slow = mu * (hornoad.vy - vn);
 
