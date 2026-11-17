@@ -1,9 +1,11 @@
-/* The 100% secret ending (rm_secretEnding): the hornoad's Box2D body. */
+/* The 100% secret ending (rm_secretEnding): the hornoad's Box2D body, and the font of the "Fusion Difficulty unlocked"
+ * line. */
 #include "ending.h"
 
 #include "am2r.h"
 #include "data_win.h"
 #include "instance.h"
+#include "renderer.h"
 #include "runner.h"
 #include "rvalue.h"
 #include "spatial_grid.h"
@@ -38,7 +40,7 @@ static struct {
 
 static Solid solids[MAX_SOLIDS];
 static int solidCount;
-static int32_t hornoadEndStepCode = -1;
+static int32_t hornoadEndStepCode = -1, fadeoutDrawCode = -1, fontMenuTinyVar = -1;
 
 static Box object_box(const GameObject *obj, float x, float y, float sx, float sy)
 {
@@ -168,6 +170,22 @@ static RValue wii_hornoad_end_step(VMContext *ctx)
 	return r;
 }
 
+/* The line takes whatever font is current. The in-game timer's Step leaves its wider one set, which overflows a 4:3
+ * screen, so draw it in the font it has without the timer. */
+static RValue wii_fadeout_draw(VMContext *ctx)
+{
+	Renderer *renderer = ctx->runner->renderer;
+	RValue tiny = Instance_getSelfVar(ctx->globalScopeInstance, fontMenuTinyVar), r;
+	int32_t font = renderer ? renderer->drawFont : -1;
+
+	if (renderer && (tiny.type == RVALUE_INT32 || tiny.type == RVALUE_REAL))
+		renderer->drawFont = RValue_toInt32(tiny);
+	r = VM_interpretCode(ctx, fadeoutDrawCode);
+	if (renderer)
+		renderer->drawFont = font;
+	return r;
+}
+
 static int32_t code_index(VMContext *ctx, const char *name)
 {
 	ptrdiff_t k = shgeti(ctx->codeIndexByName, name);
@@ -185,4 +203,8 @@ void WiiEnding_hook(VMContext *ctx)
 	hornoadEndStepCode = code_index(ctx, "gml_Object_oEndingHornoad_Step_2");
 	if (hornoadEndStepCode >= 0)
 		VM_setNativeCode(ctx, hornoadEndStepCode, wii_hornoad_end_step);
+	fadeoutDrawCode = code_index(ctx, "gml_Object_oEndingFadeout_Draw_0");
+	fontMenuTinyVar = Wii_varId(ctx->runner, "fontMenuTiny", INSTANCE_GLOBAL);
+	if (fadeoutDrawCode >= 0 && fontMenuTinyVar >= 0)
+		VM_setNativeCode(ctx, fadeoutDrawCode, wii_fadeout_draw);
 }
