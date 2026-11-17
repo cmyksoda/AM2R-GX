@@ -3,6 +3,7 @@
 #include "bin_files.h"
 #include "common.h"
 #include "controls.h"
+#include "ending.h"
 #include "gettime.h"
 #include "gml_array.h"
 #include "gx_renderer.h"
@@ -309,8 +310,7 @@ static void register_stubs(VMContext *ctx)
 		"window_get_x",
 		"window_get_y",
 		"texture_set_interpolation_ext",
-		/* 1.5.5's secret-ending hornoad is the only physics object; it sits still. */
-		"physics_apply_local_impulse",
+		/* The secret-ending hornoad, the only physics body, has fixed rotation (ending.c). */
 		"physics_apply_torque",
 	};
 	uint32_t i;
@@ -319,6 +319,8 @@ static void register_stubs(VMContext *ctx)
 		if (VM_findBuiltin(ctx, zeros[i]) == NULL)
 			VM_registerBuiltin(ctx, zeros[i], stub_zero);
 	}
+	if (VM_findBuiltin(ctx, "physics_apply_local_impulse") == NULL)
+		VM_registerBuiltin(ctx, "physics_apply_local_impulse", WiiEnding_impulseBuiltin());
 	if (VM_findBuiltin(ctx, "show_message") == NULL)
 		VM_registerBuiltin(ctx, "show_message", stub_show_message);
 	if (VM_findBuiltin(ctx, "show_message_async") == NULL)
@@ -374,6 +376,7 @@ static void register_stubs(VMContext *ctx)
 		WiiSafe_hookScripts(ctx); /* first: the controls hooks wrap its draw_rectangle and draw_text */
 		WiiControls_hookScripts(ctx);
 		Wii_hookAm2rScripts(ctx);
+		WiiEnding_hook(ctx);
 		Wii_addCredits(ctx->dataWin);
 		hook_get_text(ctx);
 	}
