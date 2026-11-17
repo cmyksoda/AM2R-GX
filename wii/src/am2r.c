@@ -1092,7 +1092,8 @@ static const char credits[] = "*AM2R GX;;;;;;;;;;;;"
 	"*PlayStation Controller Testing;/Marie99;;"
 	"*Made Possible By;/AM2R Community Developers;/Butterscotch;/Milton 'DoctorM64' Guasti;;"
 	"*Special Thanks;/My sweet girlfriend,;/for always supporting me <3;;/syl, for being the sweetest syl ever;;"
-	"/Bob from RetroRGB,;/for the scanlines idea;;;;"
+	"/Bob from RetroRGB,;/for the scanlines idea;;"
+	"/dnl4211,;/for all the careful bug reports;;;;"
 	"*Another ";
 
 /* AM2R's title card (its name, then 11 blank rows) heads its section the way AM2R heads Metroid II's staff. */
