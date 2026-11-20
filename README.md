@@ -8,7 +8,7 @@
 
 - A Wii (or a Wii U in Wii mode) with the Homebrew Channel, and an SD card or a FAT32 USB drive.
 - A GameCube controller, Wii Remote with Nunchuk, or a Classic Controller. A GameCube controller adapter also works on a Wii U in Wii mode, and a DualShock 3, DualShock 4 or DualSense works on a USB cable; see Controls.
-- The original **AM2R 1.1** release zip (use a search engine to find this!)
+- The original **AM2R 1.1** release zip
 
 ## Install
 
