@@ -43,5 +43,7 @@ int Overscan_scanlines(void); /* 0 = off, else the strength in quarters (4 = 100
 void Overscan_stepScanlines(int dir); /* +1 = the next row value: off, 100, 75, 50, 25%; saved */
 bool Overscan_highlights(void); /* High Contrast, on unless the player turned it off */
 void Overscan_setHighlights(bool on); /* saved */
+bool Overscan_pillarbox(void); /* side bars for a 4:3 game on a 16:9 Wii, on unless the player turned them off */
+void Overscan_setPillarbox(bool on); /* saved */
 
 #endif

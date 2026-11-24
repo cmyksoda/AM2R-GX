@@ -771,6 +771,13 @@ static void aspect_row_frame(Runner *runner, Instance *menu, int32_t at)
 	show_enabled(runner, op_row(runner, menu, at), Overscan_viWidth() != 0);
 }
 
+static void pillarbox_row_frame(Runner *runner, Instance *menu, int32_t at)
+{
+	if (display_row_flipped(runner, menu, at))
+		Overscan_setPillarbox(!Overscan_pillarbox());
+	show_enabled(runner, op_row(runner, menu, at), Overscan_pillarbox());
+}
+
 static void highlight_row_frame(Runner *runner, Instance *menu, int32_t at)
 {
 	if (display_row_flipped(runner, menu, at))
@@ -938,14 +945,14 @@ void WiiControls_frame(Runner *runner)
 {
 	static uint32_t controlMenu, joypadMenu, displayMenu;
 	static bool scanlineRowHidden;
-	static int32_t aspectRow = -1, highlightRow = -1;
+	static int32_t pillarboxRow = -1, aspectRow = -1, highlightRow = -1;
 	Instance *menu, *control;
 
 	if (!runner || !runner->vmContext)
 		return;
 	/* The pause menu's Widescreen toggle reaches oControl's view only at the next door: go by what is drawn. */
 	control = first_instance(runner, "oControl");
-	GxRenderer_setPillarbox(WiiVideo_isWide() && control &&
+	GxRenderer_setPillarbox(WiiVideo_isWide() && Overscan_pillarbox() && control &&
 				var_num(runner, control, "widescreen", INSTANCE_SELF, 1) == 0);
 	if ((menu = first_instance(runner, "oOptionsDisplay")) && menu->instanceId == displayMenu)
 		scanline_value(runner, menu);
@@ -959,13 +966,20 @@ void WiiControls_frame(Runner *runner)
 		if (menu->instanceId != displayMenu) {
 			displayMenu = menu->instanceId;
 			move_scanline_row(runner, menu);
-			aspectRow = insert_display_row(
-				runner, menu, (int32_t)var_num(runner, menu, "opWidescreen", INSTANCE_SELF, -1),
-				"Aspect Correction", "Square pixels, as on PC: fills the full width of the TV");
+			aspectRow = (int32_t)var_num(runner, menu, "opWidescreen", INSTANCE_SELF, -1);
+			/* Only a 16:9 Wii pillarboxes. */
+			pillarboxRow = WiiVideo_isWide() ? insert_display_row(runner, menu, aspectRow, "Pillarbox",
+									      "Off fills the screen, for TVs with a 4:3 mode")
+							 : -1;
+			aspectRow = insert_display_row(runner, menu, pillarboxRow >= 0 ? pillarboxRow : aspectRow,
+						       "Aspect Correction",
+						       "Square pixels, as on PC: fills the full width of the TV");
 			highlightRow = insert_display_row(runner, menu, aspectRow, "High Contrast",
 							  "Changes highlights in menus for better visibility");
 			scanlineRowHidden = false;
 		}
+		if (pillarboxRow >= 0)
+			pillarbox_row_frame(runner, menu, pillarboxRow);
 		if (aspectRow >= 0)
 			aspect_row_frame(runner, menu, aspectRow);
 		if (highlightRow >= 0)
