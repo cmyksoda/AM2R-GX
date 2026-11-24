@@ -968,9 +968,10 @@ void WiiControls_frame(Runner *runner)
 			move_scanline_row(runner, menu);
 			aspectRow = (int32_t)var_num(runner, menu, "opWidescreen", INSTANCE_SELF, -1);
 			/* Only a 16:9 Wii pillarboxes. */
-			pillarboxRow = WiiVideo_isWide() ? insert_display_row(runner, menu, aspectRow, "Pillarbox",
-									      "Off fills the screen, for TVs with a 4:3 mode")
-							 : -1;
+			pillarboxRow = WiiVideo_isWide() ?
+				insert_display_row(runner, menu, aspectRow, "Pillarbox",
+						   "Off fills the screen, for TVs with a 4:3 mode") :
+				-1;
 			aspectRow = insert_display_row(runner, menu, pillarboxRow >= 0 ? pillarboxRow : aspectRow,
 						       "Aspect Correction",
 						       "Square pixels, as on PC: fills the full width of the TV");

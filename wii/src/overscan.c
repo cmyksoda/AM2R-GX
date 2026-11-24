@@ -75,9 +75,9 @@ void Overscan_load(void)
 		fclose(f);
 	}
 	/* Not the file's name: testers share this log, and the name carries the console's device id. */
-	logInfo("Overscan: h=%d v=%d vi=%d y=%d x=%d margins %d/%d scanlines %d%% highlights %s pillarbox %s (%s)\n", g_h,
-		g_v, g_vi, g_y, g_x, g_mh, g_mv, g_scan * 25, g_lit ? "high contrast" : "game's own", g_box ? "on" : "off",
-		from);
+	logInfo("Overscan: h=%d v=%d vi=%d y=%d x=%d margins %d/%d scanlines %d%% highlights %s pillarbox %s (%s)\n",
+		g_h, g_v, g_vi, g_y, g_x, g_mh, g_mv, g_scan * 25, g_lit ? "high contrast" : "game's own",
+		g_box ? "on" : "off", from);
 }
 
 static void Overscan_save(void)
