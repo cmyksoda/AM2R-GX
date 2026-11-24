@@ -67,7 +67,7 @@ static bool screen_key(RValue *args, int32_t argCount, const char *key)
 static RValue wii_ini_read_real(VMContext *ctx, RValue *args, int32_t argCount)
 {
 	double console = WiiVideo_isWide() ? 1.0 : 0.0;
-	double filter, value;
+	double filter;
 
 	/* The screen is the window: Fullscreen off + Scale 2 is the pair whose window_set_size gives the wide compose
 	 * its 426-wide frame. */
@@ -91,25 +91,18 @@ static RValue wii_ini_read_real(VMContext *ctx, RValue *args, int32_t argCount)
 		filter = 1.0;
 	}
 	GxRenderer_setWideFilter(filter != 0.0);
-	if (RValue_toReal(ini_screen(ctx, engineIniReadReal, "WiiAspect", -1.0)) == console) {
-		value = RValue_toReal(engineIniReadReal(ctx, args, argCount));
-		GxRenderer_setPillarbox(value == 0.0 && console != 0.0);
-		return RValue_makeReal(value);
-	}
+	if (RValue_toReal(ini_screen(ctx, engineIniReadReal, "WiiAspect", -1.0)) == console)
+		return engineIniReadReal(ctx, args, argCount);
 	if (engineIniWriteReal) {
 		ini_screen(ctx, engineIniWriteReal, "WiiAspect", console);
 		ini_screen(ctx, engineIniWriteReal, "Widescreen", console);
 	}
-	GxRenderer_setPillarbox(false);
 	logInfo("Wii: console aspect %s -> widescreen %s\n", console ? "16:9" : "4:3", console ? "on" : "off");
 	return RValue_makeReal(console);
 }
 
-/* The in-game toggle writes Widescreen; a 4:3 game on a 16:9 console gets pillarboxed from then on. */
 static RValue wii_ini_write_real(VMContext *ctx, RValue *args, int32_t argCount)
 {
-	if (screen_key(args, argCount, "Widescreen"))
-		GxRenderer_setPillarbox(RValue_toReal(args[2]) == 0.0 && WiiVideo_isWide());
 	if (screen_key(args, argCount, "VSync"))
 		return ini_screen(ctx, engineIniWriteReal, "Wii240p", RValue_toReal(args[2]));
 	return engineIniWriteReal(ctx, args, argCount);

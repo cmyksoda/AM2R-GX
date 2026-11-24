@@ -1599,7 +1599,7 @@ static void gx_picture_rect(int w, int h, int *x, int *y, int *pw, int *ph)
 	int oh = Overscan_h();
 	/* overscan.txt counts 480-line units, so a setting covers the same part of the screen in 240p */
 	int ov = Overscan_v() * h / WII_FB_H, oy = Overscan_y() * h / WII_FB_H;
-	int box = gx_pillarbox && WiiVideo_isWide() ? (w * 3) / 4 : w;
+	int box = gx_pillarbox ? (w * 3) / 4 : w;
 
 	*x = (w - box) / 2 + oh + Overscan_x();
 	*y = ov + oy;

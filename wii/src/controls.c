@@ -3,6 +3,7 @@
 #include "am2r.h"
 #include "assets.h"
 #include "gml_array.h"
+#include "gx_renderer.h"
 #include "input.h"
 #include "instance.h"
 #include "log.h"
@@ -938,10 +939,14 @@ void WiiControls_frame(Runner *runner)
 	static uint32_t controlMenu, joypadMenu, displayMenu;
 	static bool scanlineRowHidden;
 	static int32_t aspectRow = -1, highlightRow = -1;
-	Instance *menu;
+	Instance *menu, *control;
 
 	if (!runner || !runner->vmContext)
 		return;
+	/* The pause menu's Widescreen toggle reaches oControl's view only at the next door: go by what is drawn. */
+	control = first_instance(runner, "oControl");
+	GxRenderer_setPillarbox(WiiVideo_isWide() && control &&
+				var_num(runner, control, "widescreen", INSTANCE_SELF, 1) == 0);
 	if ((menu = first_instance(runner, "oOptionsDisplay")) && menu->instanceId == displayMenu)
 		scanline_value(runner, menu);
 	pin_nintendo_names(runner);
