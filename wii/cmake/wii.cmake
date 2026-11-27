@@ -1,4 +1,4 @@
-# Cross-compile Butterscotch for Nintendo Wii (devkitPPC + libogc 3).
+# Cross-compile Butterscotch for Nintendo Wii (devkitPPC + libogc2).
 set(CMAKE_SYSTEM_NAME Generic)
 set(CMAKE_SYSTEM_VERSION 1)
 set(CMAKE_SYSTEM_PROCESSOR powerpc)
@@ -21,15 +21,15 @@ set(CMAKE_RANLIB       "${DEVKITPPC}/bin/powerpc-eabi-ranlib")
 set(CMAKE_STRIP        "${DEVKITPPC}/bin/powerpc-eabi-strip")
 
 set(WII_MACHDEP "-DGEKKO -mrvl -mcpu=750 -meabi -mhard-float")
-set(WII_INCLUDES "-I${DEVKITPRO}/libogc/include -I${DEVKITPRO}/portlibs/wii/include -I${DEVKITPRO}/portlibs/ppc/include")
-set(WII_LDFLAGS "-mrvl -mcpu=750 -meabi -mhard-float -Wl,--gc-sections -L${DEVKITPRO}/libogc/lib/wii -L${DEVKITPRO}/portlibs/wii/lib -L${DEVKITPRO}/portlibs/ppc/lib")
+set(WII_INCLUDES "-I${DEVKITPRO}/libogc2/wii/include -I${DEVKITPRO}/portlibs/wii/include -I${DEVKITPRO}/portlibs/ppc/include")
+set(WII_LDFLAGS "-mrvl -mcpu=750 -meabi -mhard-float -Wl,--gc-sections -L${DEVKITPRO}/libogc2/wii/lib -L${DEVKITPRO}/portlibs/wii/lib -L${DEVKITPRO}/portlibs/ppc/lib")
 
 set(CMAKE_C_FLAGS_INIT "${WII_MACHDEP} ${WII_INCLUDES} -ffunction-sections -fdata-sections")
 set(CMAKE_CXX_FLAGS_INIT "${CMAKE_C_FLAGS_INIT}")
 set(CMAKE_EXE_LINKER_FLAGS_INIT "${WII_LDFLAGS}")
 set(CMAKE_EXECUTABLE_SUFFIX ".elf")
 
-set(CMAKE_FIND_ROOT_PATH "${DEVKITPPC}" "${DEVKITPRO}/libogc" "${DEVKITPRO}/portlibs/wii" "${DEVKITPRO}/portlibs/ppc")
+set(CMAKE_FIND_ROOT_PATH "${DEVKITPPC}" "${DEVKITPRO}/libogc2/wii" "${DEVKITPRO}/portlibs/wii" "${DEVKITPRO}/portlibs/ppc")
 set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
 set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
 set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
